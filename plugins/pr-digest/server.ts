@@ -117,6 +117,8 @@ const releaseSchema = z.object({
   ),
   aheadBy: z.number().int(),
   fetchedAt: z.number(),
+  /** True when gcloud refused the calls because its login expired. */
+  authRequired: z.boolean(),
   /** Partial failures. The rest of the payload still holds. */
   errors: z.array(z.string()),
 });
@@ -140,7 +142,7 @@ export const rpcContract = defineRpcContract({
 const CACHE_KEY = "digest.v2";
 const CACHE_TTL_MS = 5 * 60_000;
 const GH_LIMIT = 50;
-const RELEASE_CACHE_KEY = "release.v2";
+const RELEASE_CACHE_KEY = "release.v3";
 const RELEASE_CACHE_TTL_MS = 2 * 60_000;
 const RELEASE_COMMIT_LIMIT = 50;
 const RUN_REVISION_LIMIT = 15;
@@ -267,6 +269,24 @@ function resolveBin(name: string): string {
 }
 
 let gcloudBin: string | null = null;
+
+/**
+ * gcloud prints one of these when its credentials expired or no account is
+ * active. The fix is always the same: `gcloud auth login` in a terminal.
+ */
+const GCLOUD_AUTH_PATTERNS = [
+  /reauthentication/i,
+  /gcloud auth login/i,
+  /refreshing your current auth tokens/i,
+  /invalid_grant/i,
+  /do not currently have an active account/i,
+  /could not automatically determine credentials/i,
+  /Token has been expired or revoked/i,
+];
+
+export function isGcloudAuthError(message: string): boolean {
+  return GCLOUD_AUTH_PATTERNS.some((re) => re.test(message));
+}
 
 function gcloud(args: string[]): Promise<string> {
   gcloudBin ??= resolveBin("gcloud");
@@ -538,9 +558,15 @@ export default async function plugin(bb: BbPluginApi) {
     const fetchedAt = Date.now();
     const errors: string[] = [];
 
+    let authRequired = false;
     const note = (what: string, error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       bb.log.warn(`${what} failed: ${message}`);
+      if (what.startsWith("gcloud") && isGcloudAuthError(message)) {
+        // One clear message instead of one per call.
+        authRequired = true;
+        return;
+      }
       errors.push(`${what}: ${message}`);
     };
 
@@ -623,8 +649,14 @@ export default async function plugin(bb: BbPluginApi) {
       unreleased: [],
       aheadBy: 0,
       fetchedAt,
+      authRequired: false,
       errors,
     };
+
+    if (authRequired) {
+      base.authRequired = true;
+      return base;
+    }
 
     const serving = (service?.status?.traffic ?? [])
       .filter(
@@ -793,6 +825,8 @@ export default async function plugin(bb: BbPluginApi) {
         };
       });
 
+    base.authRequired = authRequired;
+
     // Commit messages for the live head and every waiting head, in parallel.
     const describeCommit = async (
       sha: string,
@@ -843,7 +877,7 @@ export default async function plugin(bb: BbPluginApi) {
     if (!releaseInflight) {
       releaseInflight = fetchRelease()
         .then(async (release) => {
-          if (release.errors.length === 0) {
+          if (release.errors.length === 0 && !release.authRequired) {
             await bb.storage.kv.set(RELEASE_CACHE_KEY, release);
           }
           return release;
@@ -887,6 +921,11 @@ export default async function plugin(bb: BbPluginApi) {
           return { exitCode: 0, stdout: JSON.stringify(release, null, 2) };
         }
         const out: string[] = [];
+        if (release.authRequired) {
+          out.push(
+            "gcloud needs you to sign in again. Run `gcloud auth login`, then retry.",
+          );
+        }
         for (const e of release.errors) out.push(`error ${e}`);
         out.push(
           `${release.service} (${release.project} / ${release.region}) from ${release.repo}`,
@@ -927,7 +966,7 @@ export default async function plugin(bb: BbPluginApi) {
           );
         }
         return {
-          exitCode: release.errors.length ? 1 : 0,
+          exitCode: release.errors.length || release.authRequired ? 1 : 0,
           stdout: out.join("\n"),
         };
       }

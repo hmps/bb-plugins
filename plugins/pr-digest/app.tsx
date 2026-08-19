@@ -579,6 +579,30 @@ function buildsUrl(release: Release): string {
   return `https://console.cloud.google.com/cloud-build/builds;region=${release.region}?project=${release.project}`;
 }
 
+/** Short sha that opens the commit on GitHub in a new tab. */
+function ShaLink({ repo, sha, className }: { repo: string; sha: string; className?: string }) {
+  return (
+    <a
+      href={commitUrl(repo, sha)}
+      target="_blank"
+      rel="noreferrer"
+      title={`${sha} on GitHub`}
+      onClick={(event) => event.stopPropagation()}
+      className={cn(
+        "rounded-sm font-mono tabular-nums underline-offset-2 hover:text-foreground hover:underline",
+        PRESS,
+        className,
+      )}
+    >
+      {shortSha(sha)}
+    </a>
+  );
+}
+
+function shortSha(sha: string): string {
+  return sha.slice(0, 7);
+}
+
 function ConsoleLink({ href, children }: { href: string; children: ReactNode }) {
   return (
     <a
@@ -602,6 +626,7 @@ function plural(n: number, word: string): string {
 
 interface PipelineItem {
   key: string;
+  sha: string;
   shortSha: string;
   state: PipelineState;
   at: string;
@@ -617,6 +642,7 @@ function pipelineItems(release: Release): PipelineItem[] {
     if (RUNNING_STATUS.has(b.status)) {
       items.push({
         key: b.id,
+        sha: b.sha,
         shortSha: b.shortSha,
         state: "building",
         at: b.startedAt ?? "",
@@ -625,6 +651,7 @@ function pipelineItems(release: Release): PipelineItem[] {
     } else if (FAILED_STATUS.has(b.status)) {
       items.push({
         key: b.id,
+        sha: b.sha,
         shortSha: b.shortSha,
         state: "failed",
         at: b.finishedAt ?? b.startedAt ?? "",
@@ -652,42 +679,26 @@ function pipelineSummary(release: Release, items: PipelineItem[]): string {
   return parts.join(", ");
 }
 
-function PipelineRow({ item, now }: { item: PipelineItem; now: number }) {
-  const tone =
-    item.state === "ready"
-      ? "accent"
-      : item.state === "failed"
-        ? "danger"
-        : "muted";
-  const body = (
-    <>
-      <span className="font-mono tabular-nums text-foreground">
-        {item.shortSha}
-      </span>
+function PipelineRow({
+  item,
+  repo,
+  now,
+}: {
+  item: PipelineItem;
+  repo: string;
+  now: number;
+}) {
+  const tone = item.state === "failed" ? "danger" : "muted";
+  return (
+    <li className="flex items-center gap-2 py-1 text-xs leading-4 text-muted-foreground">
+      <ShaLink repo={repo} sha={item.sha} className="text-foreground" />
       <Pill tone={tone}>{item.state}</Pill>
       {item.at ? (
         <span className="font-mono tabular-nums">{timeAgo(item.at, now)}</span>
       ) : null}
-    </>
-  );
-  return (
-    <li className="flex items-center gap-2 text-xs leading-4 text-muted-foreground">
       {item.logUrl ? (
-        <a
-          href={item.logUrl}
-          target="_blank"
-          rel="noreferrer"
-          title={item.state === "ready" ? "Open Cloud Run revisions" : "Open the build log"}
-          className={cn(
-            "-mx-2 flex flex-1 items-center gap-2 rounded-md px-2 py-1 hover:bg-muted/60",
-            PRESS,
-          )}
-        >
-          {body}
-        </a>
-      ) : (
-        <span className="flex flex-1 items-center gap-2 px-0 py-1">{body}</span>
-      )}
+        <ConsoleLink href={item.logUrl}>build log</ConsoleLink>
+      ) : null}
     </li>
   );
 }
@@ -707,7 +718,7 @@ function CommitRow({
       ? githubPanelPath(repo, prNumber)
       : commitUrl(repo, commit.sha);
   return (
-    <li>
+    <li className="flex min-w-0 flex-col py-2">
       <a
         href={href}
         {...(prNumber !== null
@@ -716,28 +727,26 @@ function CommitRow({
                 navigateInApp(event, href),
             }
           : { target: "_blank", rel: "noreferrer" })}
-        title={`${commit.shortSha}: ${commit.message}`}
+        title={prNumber !== null ? `Open #${prNumber}` : "Open the commit on GitHub"}
         className={cn(
-          "-mx-2 flex min-w-0 flex-col rounded-md px-2 py-2 hover:bg-muted/60",
+          "truncate rounded-sm text-sm leading-5 text-foreground underline-offset-2 hover:underline",
           PRESS,
         )}
       >
-        <span className="truncate text-sm leading-5 text-foreground">
-          {commit.message}
-        </span>
-        <span className="flex min-w-0 items-center gap-x-2 text-xs leading-4 text-muted-foreground">
-          <span className="font-mono tabular-nums">{commit.shortSha}</span>
-          <span className="truncate">{commit.author}</span>
-          {commit.date ? (
-            <span className="font-mono tabular-nums">
-              {timeAgo(commit.date, now)}
-            </span>
-          ) : null}
-          <span className="ml-auto">
-            <Pill tone={STATE_TONE[commit.state]}>{commit.state}</Pill>
-          </span>
-        </span>
+        {commit.message}
       </a>
+      <span className="flex min-w-0 items-center gap-x-2 text-xs leading-4 text-muted-foreground">
+        <ShaLink repo={repo} sha={commit.sha} />
+        <span className="truncate">{commit.author}</span>
+        {commit.date ? (
+          <span className="font-mono tabular-nums">
+            {timeAgo(commit.date, now)}
+          </span>
+        ) : null}
+        <span className="ml-auto">
+          <Pill tone={STATE_TONE[commit.state]}>{commit.state}</Pill>
+        </span>
+      </span>
     </li>
   );
 }
@@ -751,61 +760,56 @@ function WaitingRow({
   repo: string;
   now: number;
 }) {
+  const title = item.title ?? item.revision;
   const href =
     item.prNumber !== null
       ? githubPanelPath(repo, item.prNumber)
       : item.sha
         ? commitUrl(repo, item.sha)
         : null;
-  const linkProps =
-    href === null
-      ? {}
-      : item.prNumber !== null
-        ? {
-            href,
-            onClick: (event: MouseEvent<HTMLAnchorElement>) =>
-              navigateInApp(event, href),
-          }
-        : { href, target: "_blank", rel: "noreferrer" };
-  const Tag = href === null ? "span" : "a";
   return (
-    <li>
-      <Tag
-        {...linkProps}
-        title={item.title ?? item.revision}
-        className={cn(
-          "-mx-2 flex min-w-0 flex-col rounded-md px-2 py-2",
-          href !== null && "hover:bg-muted/60",
-          PRESS,
-        )}
-      >
-        <span className="truncate text-sm leading-5 text-foreground">
-          {item.title ?? item.revision}
+    <li className="flex min-w-0 flex-col py-2">
+      {href === null ? (
+        <span className="truncate text-sm leading-5 text-foreground">{title}</span>
+      ) : (
+        <a
+          href={href}
+          {...(item.prNumber !== null
+            ? {
+                onClick: (event: MouseEvent<HTMLAnchorElement>) =>
+                  navigateInApp(event, href),
+              }
+            : { target: "_blank", rel: "noreferrer" })}
+          title={item.prNumber !== null ? `Open #${item.prNumber}` : "Open the commit on GitHub"}
+          className={cn(
+            "truncate rounded-sm text-sm leading-5 text-foreground underline-offset-2 hover:underline",
+            PRESS,
+          )}
+        >
+          {title}
+        </a>
+      )}
+      <span className="flex min-w-0 items-center gap-x-2 text-xs leading-4 text-muted-foreground">
+        {item.sha ? <ShaLink repo={repo} sha={item.sha} /> : null}
+        {item.author ? <span className="truncate">{item.author}</span> : null}
+        <span className="font-mono tabular-nums">
+          {timeAgo(item.createdAt, now)}
         </span>
-        <span className="flex min-w-0 items-center gap-x-2 text-xs leading-4 text-muted-foreground">
-          {item.shortSha ? (
-            <span className="font-mono tabular-nums">{item.shortSha}</span>
-          ) : null}
-          {item.author ? <span className="truncate">{item.author}</span> : null}
-          <span className="font-mono tabular-nums">
-            {timeAgo(item.createdAt, now)}
-          </span>
-          {item.commitCount > 1 ? (
-            <span>{plural(item.commitCount, "commit")} since live</span>
-          ) : null}
-          <span className="ml-auto">
-            <Pill tone="accent">ready</Pill>
-          </span>
-        </span>
-        {item.body ? (
-          <span
-            className="mt-1 line-clamp-2 text-xs leading-4 text-muted-foreground"
-            title={item.body}
-          >
-            {item.body}
-          </span>
+        {item.commitCount > 1 ? (
+          <span>{plural(item.commitCount, "commit")} since live</span>
         ) : null}
-      </Tag>
+        <span className="ml-auto">
+          <Pill tone="accent">ready</Pill>
+        </span>
+      </span>
+      {item.body ? (
+        <span
+          className="mt-1 line-clamp-2 text-xs leading-4 text-muted-foreground"
+          title={item.body}
+        >
+          {item.body}
+        </span>
+      ) : null}
     </li>
   );
 }
@@ -914,6 +918,18 @@ function ReleaseSection() {
           Could not load the release state: {failure}
         </p>
       ) : null}
+      {release?.authRequired ? (
+        <p className="flex items-center gap-2 rounded-md border border-dashed border-border px-3 py-2 text-sm text-foreground">
+          <Icon name="AlertCircle" className="size-4 shrink-0 text-destructive" aria-hidden />
+          <span>
+            Google Cloud needs you to sign in again. Run{" "}
+            <code className="rounded-sm bg-muted px-1 font-mono text-xs">
+              gcloud auth login
+            </code>{" "}
+            in a terminal, then refresh.
+          </span>
+        </p>
+      ) : null}
       {release?.errors.map((message) => (
         <p
           key={message}
@@ -926,7 +942,7 @@ function ReleaseSection() {
 
       {initial ? (
         <ReleaseSkeleton />
-      ) : (
+      ) : release?.authRequired ? null : (
         <div className="grid grid-cols-1 gap-x-10 gap-y-4 @min-[1000px]/page:grid-cols-[2fr_3fr]">
           <div className="min-w-0 space-y-4">
           {live ? (
@@ -937,18 +953,7 @@ function ReleaseSection() {
               />
               <span className="shrink-0 text-foreground">Live</span>
               {live.sha ? (
-                <a
-                  href={commitUrl(repo, live.sha)}
-                  target="_blank"
-                  rel="noreferrer"
-                  title={`${live.sha} on GitHub`}
-                  className={cn(
-                    "shrink-0 rounded-sm font-mono tabular-nums text-foreground underline-offset-2 hover:underline",
-                    PRESS,
-                  )}
-                >
-                  {live.shortSha}
-                </a>
+                <ShaLink repo={repo} sha={live.sha} className="shrink-0 text-foreground" />
               ) : (
                 <span className="shrink-0 font-mono text-muted-foreground">
                   unknown commit
@@ -994,7 +999,7 @@ function ReleaseSection() {
               {items.length > 0 ? (
                 <ul className="mt-0.5">
                   {items.map((item) => (
-                    <PipelineRow key={item.key} item={item} now={now} />
+                    <PipelineRow key={item.key} item={item} repo={repo} now={now} />
                   ))}
                 </ul>
               ) : null}
