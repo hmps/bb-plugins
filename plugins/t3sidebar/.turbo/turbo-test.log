@@ -1,0 +1,33 @@
+
+> bb-plugin-t3sidebar@0.1.0 test /Users/hmps/dev/forks/bb/examples/plugins/t3sidebar
+> vitest run --config vitest.config.ts
+
+
+[1m[46m RUN [49m[22m [36mv4.1.1 [39m[90m/Users/hmps/dev/forks/bb/examples/plugins/t3sidebar[39m
+
+ [31m❯[39m [30m[46m bb-plugin-t3sidebar [49m[39m src/lifecycle.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m [30m[46m bb-plugin-t3sidebar [49m[39m src/relative-time.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m [30m[46m bb-plugin-t3sidebar [49m[39m src/inbox.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m [30m[46m bb-plugin-t3sidebar [49m[39m src/ParentChip.test.tsx [2m([22m[2m0 test[22m[2m)[22m
+ [31m❯[39m [30m[46m bb-plugin-t3sidebar [49m[39m src/ThreadInbox.test.tsx [2m([22m[2m0 test[22m[2m)[22m
+
+[31m⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Suites 5 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m [30m[46m bb-plugin-t3sidebar [49m[39m src/ParentChip.test.tsx[2m [ src/ParentChip.test.tsx ][22m
+[41m[1m FAIL [22m[49m [30m[46m bb-plugin-t3sidebar [49m[39m src/ThreadInbox.test.tsx[2m [ src/ThreadInbox.test.tsx ][22m
+[31m[1mError[22m: EPERM: operation not permitted, mkdir '/tmp/1sPpvEU5tXdv4Axbc0zUk/client'[39m
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m [30m[46m bb-plugin-t3sidebar [49m[39m src/inbox.test.ts[2m [ src/inbox.test.ts ][22m
+[41m[1m FAIL [22m[49m [30m[46m bb-plugin-t3sidebar [49m[39m src/lifecycle.test.ts[2m [ src/lifecycle.test.ts ][22m
+[41m[1m FAIL [22m[49m [30m[46m bb-plugin-t3sidebar [49m[39m src/relative-time.test.ts[2m [ src/relative-time.test.ts ][22m
+[31m[1mError[22m: EPERM: operation not permitted, mkdir '/tmp/1sPpvEU5tXdv4Axbc0zUk/ssr'[39m
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m5 failed[39m[22m[90m (5)[39m
+[2m      Tests [22m [2mno tests[22m
+[2m   Start at [22m 13:49:45
+[2m   Duration [22m 1.32s[2m (transform 0ms, setup 0ms, import 0ms, tests 0ms, environment 1.94s)[22m
+
+ ELIFECYCLE  Test failed. See above for more details.

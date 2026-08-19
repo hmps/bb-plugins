@@ -10,8 +10,15 @@
       "displayName": "iOS Composer Touch",
       "description": "First-tap send on iOS and larger composer hit areas (port of get-bb/bb#1673).",
       "icon": "Smartphone",
-      "tags": ["mobile", "composer", "interface"],
-      "author": { "name": "Hampus Persson", "github": "hmps" },
+      "tags": [
+        "mobile",
+        "composer",
+        "interface"
+      ],
+      "author": {
+        "name": "Hampus Persson",
+        "github": "hmps"
+      },
       "source": {
         "git": {
           "url": "https://github.com/hmps/bb-plugins.git",
@@ -26,14 +33,43 @@
       "displayName": "Hide Sidebar Footer Actions",
       "description": "Hides the Remote access and Report a bug buttons in the sidebar footer.",
       "icon": "EyeOff",
-      "tags": ["sidebar", "interface"],
-      "author": { "name": "Hampus Persson", "github": "hmps" },
+      "tags": [
+        "sidebar",
+        "interface"
+      ],
+      "author": {
+        "name": "Hampus Persson",
+        "github": "hmps"
+      },
       "source": {
         "git": {
           "url": "https://github.com/hmps/bb-plugins.git",
           "subdir": "plugins/hide-sidebar-footer-actions",
           "range": "^1.0.0",
           "tagPrefix": "hide-sidebar-footer-actions/"
+        }
+      }
+    },
+    {
+      "id": "t3sidebar",
+      "displayName": "t3sidebar (touch)",
+      "description": "Inbox-style sidebar thread list, forked from the bb example with touch support: Snooze and Settle stay visible on touch screens, and a long-press opens them in the row menu.",
+      "icon": "PanelLeft",
+      "tags": [
+        "sidebar",
+        "mobile",
+        "interface"
+      ],
+      "author": {
+        "name": "Hampus Persson",
+        "github": "hmps"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/hmps/bb-plugins.git",
+          "subdir": "plugins/t3sidebar",
+          "range": "^1.0.0",
+          "tagPrefix": "t3sidebar/"
         }
       }
     }
