@@ -1,0 +1,46 @@
+/* iOS 26 Safari ignores <meta name="theme-color">. To tint the status bar and
+   the toolbar it hit-tests one point per edge (viewport center, 4px from the
+   edge), takes the topmost painted fixed/sticky element there, and uses its
+   background-color (WebKit LocalFrameView::fixedContainerEdges). Without such
+   an element it falls back to the canvas, black in a dark color scheme.
+
+   The rails below are those elements. Rules from the source: fixed, cover the
+   sample point (height >= 16px), width >= 90% of the viewport, opaque resolved
+   background-color, no backdrop-filter, topmost in paint order. Overlays and
+   the sidebar drawer also sit at that point, so the rails use the maximum
+   z-index. They only cover the safe-area zone the system bar already paints,
+   with a 16px floor in a Safari tab so the sample point is always covered.
+   In a Home Screen app iOS reserves an opaque status bar (no top inset), so
+   the top rail collapses to the inset there and never overdraws content. */
+
+html.bb-ios-status-bar {
+  background-color: var(--background);
+}
+
+html.bb-ios-status-bar .bb-ios-status-bar-rail {
+  position: fixed;
+  left: 0;
+  right: 0;
+  background-color: var(--background);
+  z-index: 2147483647;
+  pointer-events: none;
+}
+
+html.bb-ios-status-bar .bb-ios-status-bar-rail-top {
+  top: 0;
+  height: max(16px, env(safe-area-inset-top, 0px));
+}
+
+html.bb-ios-status-bar .bb-ios-status-bar-rail-bottom {
+  bottom: 0;
+  height: max(16px, env(safe-area-inset-bottom, 0px));
+}
+
+@media (display-mode: standalone) {
+  html.bb-ios-status-bar .bb-ios-status-bar-rail-top {
+    height: env(safe-area-inset-top, 0px);
+  }
+  html.bb-ios-status-bar .bb-ios-status-bar-rail-bottom {
+    height: env(safe-area-inset-bottom, 0px);
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "bb-plugin-ios-status-bar",
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "bb": ">=0.38",
+    "bbPluginSdk": ">=0.4.6"
+  },
+  "bb": {
+    "name": "iOS Status Bar",
+    "description": "Paints the iOS Safari status bar area with the app background instead of black.",
+    "branding": {
+      "icon": "Smartphone"
+    },
+    "server": "./server.ts",
+    "app": "./app.ts"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.4.6",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "scripts": {
+    "build": "bb plugin build",
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}

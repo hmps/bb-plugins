@@ -10,6 +10,7 @@ bb plugin install ios-composer-touch@hmps
 bb plugin install hide-sidebar-footer-actions@hmps
 bb plugin install t3sidebar@hmps
 bb plugin install usage-tracker@hmps
+bb plugin install ios-status-bar@hmps
 ```
 
 `bb plugin update` moves installed plugins to newer releases inside the range
@@ -23,6 +24,7 @@ that `marketplace.json` lists.
 | [hide-sidebar-footer-actions](plugins/hide-sidebar-footer-actions) | Hides the Remote access and Report a bug buttons in the sidebar footer. |
 | [t3sidebar](plugins/t3sidebar) | Fork of bb's t3sidebar example with touch support for Snooze and Settle. |
 | [usage-tracker](plugins/usage-tracker) | Fork of MateoCerquetella's usage-tracker (MIT) with model-scoped (Fable) quota rows. |
+| [ios-status-bar](plugins/ios-status-bar) | Paints the iOS Safari status bar area with the app background instead of black. |
 
 ## Layout
 

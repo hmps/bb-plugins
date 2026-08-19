@@ -98,6 +98,28 @@
           "tagPrefix": "usage-tracker/"
         }
       }
+    },
+    {
+      "id": "ios-status-bar",
+      "displayName": "iOS Status Bar",
+      "description": "Paints the iOS Safari status bar area with the app background instead of black.",
+      "icon": "Smartphone",
+      "tags": [
+        "mobile",
+        "interface"
+      ],
+      "author": {
+        "name": "Hampus Persson",
+        "github": "hmps"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/hmps/bb-plugins.git",
+          "subdir": "plugins/ios-status-bar",
+          "range": "^1.0.0",
+          "tagPrefix": "ios-status-bar/"
+        }
+      }
     }
   ]
 }

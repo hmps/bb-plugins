@@ -18,6 +18,10 @@
     {
       "name": "usage-tracker",
       "source": "./plugins/usage-tracker"
+    },
+    {
+      "name": "ios-status-bar",
+      "source": "./plugins/ios-status-bar"
     }
   ]
 }
