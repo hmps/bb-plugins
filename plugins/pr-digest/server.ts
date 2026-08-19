@@ -150,6 +150,7 @@ const CACHE_TTL_MS = 5 * 60_000;
 const GH_LIMIT = 50;
 const RELEASE_CACHE_KEY = "release.v4";
 const RELEASE_CACHE_TTL_MS = 2 * 60_000;
+const REFRESH_SWEEP_MS = 30_000;
 const RELEASE_COMMIT_LIMIT = 50;
 const RUN_REVISION_LIMIT = 15;
 const BUILD_LIMIT = 25;
@@ -541,33 +542,69 @@ export default async function plugin(bb: BbPluginApi) {
     return { day, viewer, repos, merged, open: visibleOpen, errors, fetchedAt };
   }
 
-  let inflight: Promise<Digest> | null = null;
-
-  async function getDigest(force: boolean): Promise<Digest> {
-    if (!force) {
-      const cached = await bb.storage.kv.get<Digest>(CACHE_KEY);
-      if (
-        cached &&
-        cached.day === yesterday() &&
-        Date.now() - cached.fetchedAt < CACHE_TTL_MS
-      ) {
-        return cached;
+  /**
+   * Stale-while-revalidate cache. A call returns the stored payload at once
+   * (even past its TTL) and refreshes in the background when it is stale;
+   * `force` waits for a fresh fetch. Every finished refresh is stored and
+   * announced on the realtime channel so open homepages refetch.
+   */
+  function cached<T extends { fetchedAt: number }>(opts: {
+    key: string;
+    ttlMs: number;
+    channel: string;
+    fetch: () => Promise<T>;
+    /** Extra freshness rule, e.g. "same calendar day". */
+    isCurrent?: (value: T) => boolean;
+  }) {
+    let inflight: Promise<T> | null = null;
+    const refresh = (): Promise<T> => {
+      if (!inflight) {
+        inflight = opts
+          .fetch()
+          .then(async (value) => {
+            await bb.storage.kv.set(opts.key, value);
+            bb.realtime.publish(opts.channel, { fetchedAt: value.fetchedAt });
+            return value;
+          })
+          .finally(() => {
+            inflight = null;
+          });
       }
-    }
-    if (!inflight) {
-      inflight = fetchDigest()
-        .then(async (digest) => {
-          if (digest.errors.length === 0) {
-            await bb.storage.kv.set(CACHE_KEY, digest);
-          }
-          return digest;
-        })
-        .finally(() => {
-          inflight = null;
-        });
-    }
-    return inflight;
+      return inflight;
+    };
+    const isFresh = (value: T) =>
+      Date.now() - value.fetchedAt < opts.ttlMs &&
+      (opts.isCurrent?.(value) ?? true);
+    return {
+      refresh,
+      isFresh,
+      async get(force: boolean): Promise<T> {
+        if (force) return refresh();
+        const stored = await bb.storage.kv.get<T>(opts.key);
+        if (stored && isFresh(stored)) return stored;
+        const pending = refresh();
+        if (stored) {
+          // Serve the stale copy now; the refresh announces itself.
+          pending.catch(() => undefined);
+          return stored;
+        }
+        return pending;
+      },
+      async refreshIfStale(): Promise<void> {
+        const stored = await bb.storage.kv.get<T>(opts.key);
+        if (!stored || !isFresh(stored)) await refresh();
+      },
+    };
   }
+
+  const digestCache = cached<Digest>({
+    key: CACHE_KEY,
+    ttlMs: CACHE_TTL_MS,
+    channel: "digest",
+    fetch: fetchDigest,
+    isCurrent: (d) => d.day === yesterday(),
+  });
+  const getDigest = (force: boolean) => digestCache.get(force);
 
   async function fetchRelease(): Promise<Release> {
     const { gcpProject, runRegion, runService, buildRegion, releaseRepo } =
@@ -910,33 +947,44 @@ export default async function plugin(bb: BbPluginApi) {
     return base;
   }
 
-  let releaseInflight: Promise<Release> | null = null;
+  const releaseCache = cached<Release>({
+    key: RELEASE_CACHE_KEY,
+    ttlMs: RELEASE_CACHE_TTL_MS,
+    channel: "release",
+    fetch: fetchRelease,
+  });
+  const getRelease = (force: boolean) => releaseCache.get(force);
 
-  async function getRelease(force: boolean): Promise<Release> {
-    if (!force) {
-      const cached = await bb.storage.kv.get<Release>(RELEASE_CACHE_KEY);
-      if (cached && Date.now() - cached.fetchedAt < RELEASE_CACHE_TTL_MS) {
-        return cached;
-      }
-    }
-    if (!releaseInflight) {
-      releaseInflight = fetchRelease()
-        .then(async (release) => {
-          if (release.errors.length === 0 && !release.authRequired) {
-            await bb.storage.kv.set(RELEASE_CACHE_KEY, release);
-          }
-          return release;
-        })
-        .finally(() => {
-          releaseInflight = null;
+  // Keep both caches warm so the homepage renders from storage at once.
+  bb.background.service("refresh", {
+    async start(signal) {
+      while (!signal.aborted) {
+        await Promise.all([
+          digestCache.refreshIfStale().catch((error: unknown) => {
+            bb.log.warn(`digest refresh failed: ${String(error)}`);
+          }),
+          releaseCache.refreshIfStale().catch((error: unknown) => {
+            bb.log.warn(`release refresh failed: ${String(error)}`);
+          }),
+        ]);
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, REFRESH_SWEEP_MS);
+          signal.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              resolve();
+            },
+            { once: true },
+          );
         });
-    }
-    return releaseInflight;
-  }
+      }
+    },
+  });
 
   settings.onChange(() => {
-    void bb.storage.kv.delete(CACHE_KEY);
-    void bb.storage.kv.delete(RELEASE_CACHE_KEY);
+    void digestCache.refresh().catch(() => undefined);
+    void releaseCache.refresh().catch(() => undefined);
   });
 
   bb.rpc.register(rpcContract, {

@@ -7,7 +7,7 @@
 //     the commits on main that are not released.
 // Both use the host type scale (text-sm / text-xs) and tokens only.
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { definePluginApp, useRpc } from "@get-bb/plugin-sdk/app";
+import { definePluginApp, useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
 import type { MouseEvent } from "react";
 import type {
   Digest,
@@ -479,6 +479,11 @@ function PrDigestSection() {
     void load(false);
   }, [load]);
 
+  // The server announces every finished refresh; pick it up without polling.
+  useRealtime("digest", () => {
+    void load(false);
+  });
+
   const viewer = digest?.viewer ?? "";
   const repoNames = digest?.repos.map(repoShort).join(", ") ?? "";
   const dayLabel = digest ? formatDay(digest.day) : "";
@@ -883,6 +888,11 @@ function ReleaseSection() {
   useEffect(() => {
     void load(false);
   }, [load]);
+
+  // The server announces every finished refresh; pick it up without polling.
+  useRealtime("release", () => {
+    void load(false);
+  });
 
   const builds = useMemo(
     () => (release ? visibleBuilds(release) : []),
