@@ -87,14 +87,14 @@ function navigateInApp(event: MouseEvent<HTMLAnchorElement>, path: string) {
 /**
  * The host centres homepage sections in a 760px column inside the
  * `@container/page` scroll area. On large screens a section can use more of
- * that area: keep the column's left edge (where the host draws the section
- * title and the composer) and extend to the right, capped, leaving a gutter
- * before the page edge. `50cqw + 50%` is the distance from the column's left
- * edge to the page container's right edge. On narrow screens `max(100%, ...)`
+ * that area: grow to the page container width (minus a gutter, capped) and
+ * stay centred with a negative margin. On narrow screens `max(100%, ...)`
  * keeps the normal column width, so no media query is needed.
  */
+const WIDE_WIDTH = "max(100%, min(1360px, 100cqw - 2rem))";
 const wideStyle = {
-  width: "max(100%, min(1240px, 50cqw + 50% - 2rem))",
+  width: WIDE_WIDTH,
+  marginLeft: `calc(50% - (${WIDE_WIDTH}) / 2)`,
 } as const;
 
 const PRESS =
