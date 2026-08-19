@@ -1,0 +1,41 @@
+{
+  "$schema": "https://getbb.app/schemas/marketplace.schema.json",
+  "schemaVersion": 1,
+  "name": "hmps",
+  "displayName": "Hampus's bb plugins",
+  "description": "Personal bb plugins by Hampus Persson.",
+  "plugins": [
+    {
+      "id": "ios-composer-touch",
+      "displayName": "iOS Composer Touch",
+      "description": "First-tap send on iOS and larger composer hit areas (port of get-bb/bb#1673).",
+      "icon": "Smartphone",
+      "tags": ["mobile", "composer", "interface"],
+      "author": { "name": "Hampus Persson", "github": "hmps" },
+      "source": {
+        "git": {
+          "url": "https://github.com/hmps/bb-plugins.git",
+          "subdir": "plugins/ios-composer-touch",
+          "range": "^1.0.0",
+          "tagPrefix": "ios-composer-touch/"
+        }
+      }
+    },
+    {
+      "id": "hide-sidebar-footer-actions",
+      "displayName": "Hide Sidebar Footer Actions",
+      "description": "Hides the Remote access and Report a bug buttons in the sidebar footer.",
+      "icon": "EyeOff",
+      "tags": ["sidebar", "interface"],
+      "author": { "name": "Hampus Persson", "github": "hmps" },
+      "source": {
+        "git": {
+          "url": "https://github.com/hmps/bb-plugins.git",
+          "subdir": "plugins/hide-sidebar-footer-actions",
+          "range": "^1.0.0",
+          "tagPrefix": "hide-sidebar-footer-actions/"
+        }
+      }
+    }
+  ]
+}

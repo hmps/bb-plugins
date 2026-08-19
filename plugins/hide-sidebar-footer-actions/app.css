@@ -1,0 +1,12 @@
+/* Report a bug: host-rendered button in the sidebar footer. */
+html.bb-hide-sidebar-footer-actions
+  [data-sidebar="footer"]
+  [data-sidebar="menu-item"]:has([aria-label="Report a bug"]),
+/* Remote access: the connect plugin's sidebarFooterAction. */
+html.bb-hide-sidebar-footer-actions
+  [data-sidebar="footer"]
+  [data-sidebar="menu-item"]:has(
+    [data-testid="plugin-sidebar-footer-action-connect-remote-access"]
+  ) {
+  display: none;
+}

@@ -1,0 +1,9 @@
+{
+  "$schema": "https://getbb.app/schemas/plugins.schema.json",
+  "schemaVersion": 1,
+  "name": "hmps",
+  "plugins": [
+    { "name": "ios-composer-touch", "source": "./plugins/ios-composer-touch" },
+    { "name": "hide-sidebar-footer-actions", "source": "./plugins/hide-sidebar-footer-actions" }
+  ]
+}

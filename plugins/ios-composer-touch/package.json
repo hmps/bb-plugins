@@ -1,0 +1,36 @@
+{
+  "name": "bb-plugin-ios-composer-touch",
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "bb": ">=0.38",
+    "bbPluginSdk": ">=0.4.6"
+  },
+  "bb": {
+    "name": "iOS Composer Touch",
+    "description": "First-tap send on iOS and 44px composer touch targets (port of get-bb/bb#1673).",
+    "branding": {
+      "icon": "Smartphone"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.4.6",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "jsdom": "^30.0.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.11"
+  },
+  "scripts": {
+    "build": "bb plugin build",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}
