@@ -14,6 +14,10 @@
     {
       "name": "t3sidebar",
       "source": "./plugins/t3sidebar"
+    },
+    {
+      "name": "usage-tracker",
+      "source": "./plugins/usage-tracker"
     }
   ]
 }

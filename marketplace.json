@@ -72,6 +72,32 @@
           "tagPrefix": "t3sidebar/"
         }
       }
+    },
+    {
+      "id": "usage-tracker",
+      "displayName": "Usage Tracker (Fable rows)",
+      "description": "Compact Codex and Claude usage limits in the sidebar footer. Fork of MateoCerquetella's usage-tracker that also shows model-scoped quotas such as Fable in the expanded card.",
+      "icon": {
+        "url": "./plugins/usage-tracker/assets/icon.svg"
+      },
+      "tags": [
+        "usage",
+        "codex",
+        "claude-code",
+        "sidebar"
+      ],
+      "author": {
+        "name": "Hampus Persson",
+        "github": "hmps"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/hmps/bb-plugins.git",
+          "subdir": "plugins/usage-tracker",
+          "range": "^1.0.0",
+          "tagPrefix": "usage-tracker/"
+        }
+      }
     }
   ]
 }
