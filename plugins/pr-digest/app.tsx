@@ -13,6 +13,7 @@ import type {
   Digest,
   PullRequest,
   Release,
+  ReleaseBuild,
   ReleaseCommit,
   ReleaseWaiting,
   rpcContract,
@@ -555,14 +556,12 @@ function PrDigestSection() {
 const RUNNING_STATUS = new Set(["QUEUED", "WORKING", "PENDING"]);
 const FAILED_STATUS = new Set(["FAILURE", "TIMEOUT", "CANCELLED", "EXPIRED"]);
 
-type PipelineState = "ready" | "building" | "failed";
-
 const STATE_TONE: Record<ReleaseCommit["state"], "accent" | "danger" | "muted"> =
   {
     built: "accent",
     building: "muted",
     failed: "danger",
-    pending: "muted",
+    "not built": "muted",
   };
 
 function commitUrl(repo: string, sha: string): string {
@@ -624,81 +623,99 @@ function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
-interface PipelineItem {
-  key: string;
-  sha: string;
-  shortSha: string;
-  state: PipelineState;
-  at: string;
-  logUrl: string | null;
-}
-
-function pipelineItems(release: Release): PipelineItem[] {
-  const seen = new Set<string>();
-  const items: PipelineItem[] = [];
-  for (const w of release.waiting) if (w.sha) seen.add(w.sha);
-  for (const b of release.builds) {
-    if (seen.has(b.sha)) continue;
-    if (RUNNING_STATUS.has(b.status)) {
-      items.push({
-        key: b.id,
-        sha: b.sha,
-        shortSha: b.shortSha,
-        state: "building",
-        at: b.startedAt ?? "",
-        logUrl: b.logUrl,
-      });
-    } else if (FAILED_STATUS.has(b.status)) {
-      items.push({
-        key: b.id,
-        sha: b.sha,
-        shortSha: b.shortSha,
-        state: "failed",
-        at: b.finishedAt ?? b.startedAt ?? "",
-        logUrl: b.logUrl,
-      });
-    }
+/** Running builds plus the latest build, so a failure stays visible. */
+function visibleBuilds(release: Release): ReleaseBuild[] {
+  const running = release.builds.filter((b) => RUNNING_STATUS.has(b.status));
+  const latest = release.builds[0];
+  if (latest && !running.some((b) => b.id === latest.id)) {
+    return [...running, latest];
   }
-  return items;
+  return running;
 }
 
-function pipelineSummary(release: Release, items: PipelineItem[]): string {
+function buildStatus(build: ReleaseBuild): {
+  label: string;
+  tone: "accent" | "danger" | "muted";
+} {
+  if (RUNNING_STATUS.has(build.status)) return { label: "building", tone: "muted" };
+  if (FAILED_STATUS.has(build.status)) {
+    return { label: build.status.toLowerCase(), tone: "danger" };
+  }
+  if (build.status === "SUCCESS") return { label: "built", tone: "accent" };
+  return { label: build.status.toLowerCase(), tone: "muted" };
+}
+
+function waitingSummary(release: Release): string {
   const ready = release.waiting.length;
-  const building = items.filter((i) => i.state === "building").length;
-  const failed = items.filter((i) => i.state === "failed").length;
+  const building = release.builds.filter((b) => RUNNING_STATUS.has(b.status)).length;
   const parts: string[] = [];
   if (ready > 0) {
     parts.push(
-      building + failed > 0
+      building > 0
         ? `${plural(ready, "build")} ready`
         : `${plural(ready, "build")} ready to go live`,
     );
   }
   if (building > 0) parts.push(`${building} building`);
-  if (failed > 0) parts.push(`${failed} failed`);
   return parts.join(", ");
 }
 
-function PipelineRow({
-  item,
+function BuildRow({
+  build,
   repo,
   now,
 }: {
-  item: PipelineItem;
+  build: ReleaseBuild;
   repo: string;
   now: number;
 }) {
-  const tone = item.state === "failed" ? "danger" : "muted";
+  const status = buildStatus(build);
+  const running = RUNNING_STATUS.has(build.status);
+  const at = running ? build.startedAt : (build.finishedAt ?? build.startedAt);
+  const href =
+    build.prNumber !== null
+      ? githubPanelPath(repo, build.prNumber)
+      : commitUrl(repo, build.sha);
   return (
-    <li className="flex items-center gap-2 py-1 text-xs leading-4 text-muted-foreground">
-      <ShaLink repo={repo} sha={item.sha} className="text-foreground" />
-      <Pill tone={tone}>{item.state}</Pill>
-      {item.at ? (
-        <span className="font-mono tabular-nums">{timeAgo(item.at, now)}</span>
-      ) : null}
-      {item.logUrl ? (
-        <ConsoleLink href={item.logUrl}>build log</ConsoleLink>
-      ) : null}
+    <li className="flex min-w-0 flex-col py-2">
+      <span className="flex min-w-0 items-center gap-2">
+        {running ? (
+          <Icon
+            name="RotateCcw"
+            aria-hidden
+            className="size-3 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
+          />
+        ) : null}
+        <a
+          href={href}
+          {...(build.prNumber !== null
+            ? {
+                onClick: (event: MouseEvent<HTMLAnchorElement>) =>
+                  navigateInApp(event, href),
+              }
+            : { target: "_blank", rel: "noreferrer" })}
+          title={build.prNumber !== null ? `Open #${build.prNumber}` : "Open the commit on GitHub"}
+          className={cn(
+            "min-w-0 truncate rounded-sm text-sm leading-5 text-foreground underline-offset-2 hover:underline",
+            PRESS,
+          )}
+        >
+          {build.title ?? build.shortSha}
+        </a>
+        <span className="ml-auto shrink-0">
+          <Pill tone={status.tone}>{status.label}</Pill>
+        </span>
+      </span>
+      <span className="flex min-w-0 items-center gap-x-2 text-xs leading-4 text-muted-foreground">
+        <ShaLink repo={repo} sha={build.sha} />
+        {at ? (
+          <span className="font-mono tabular-nums">
+            {running ? "started " : ""}
+            {timeAgo(at, now)}
+          </span>
+        ) : null}
+        {build.logUrl ? <ConsoleLink href={build.logUrl}>build log</ConsoleLink> : null}
+      </span>
     </li>
   );
 }
@@ -867,14 +884,13 @@ function ReleaseSection() {
     void load(false);
   }, [load]);
 
-  const items = useMemo(
-    () => (release ? pipelineItems(release) : []),
+  const builds = useMemo(
+    () => (release ? visibleBuilds(release) : []),
     [release],
   );
-  const summary = useMemo(
-    () => (release ? pipelineSummary(release, items) : ""),
-    [release, items],
-  );
+  const summary = release ? waitingSummary(release) : "";
+  const latestBuild = release?.builds[0] ?? null;
+  const latestFailed = latestBuild !== null && FAILED_STATUS.has(latestBuild.status);
   const unreleased = release?.unreleased ?? [];
   const { visible, hidden, expanded, collapsible, toggle } = useCappedList(
     unreleased,
@@ -979,30 +995,41 @@ function ReleaseSection() {
             </p>
           )}
 
-          {release && (release.waiting.length > 0 || items.length > 0) ? (
+          {release && release.waiting.length > 0 ? (
             <div>
               <p className="flex items-center gap-3 text-sm text-foreground">
                 <span>{summary}</span>
-                {release.waiting.length > 0 ? (
-                  <ConsoleLink href={revisionsUrl(release)}>
-                    Deploy in Cloud Run
-                  </ConsoleLink>
-                ) : null}
+                <ConsoleLink href={revisionsUrl(release)}>
+                  Deploy in Cloud Run
+                </ConsoleLink>
               </p>
-              {release.waiting.length > 0 ? (
-                <ul className="mt-1 divide-y divide-border/60">
-                  {release.waiting.map((w) => (
-                    <WaitingRow key={w.revision} item={w} repo={repo} now={now} />
-                  ))}
-                </ul>
-              ) : null}
-              {items.length > 0 ? (
-                <ul className="mt-0.5">
-                  {items.map((item) => (
-                    <PipelineRow key={item.key} item={item} repo={repo} now={now} />
-                  ))}
-                </ul>
-              ) : null}
+              <ul className="mt-1 divide-y divide-border/60">
+                {release.waiting.map((w) => (
+                  <WaitingRow key={w.revision} item={w} repo={repo} now={now} />
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {release && builds.length > 0 ? (
+            <div>
+              <div className="flex items-center gap-2">
+                <h4 className="text-sm font-medium text-foreground">Builds</h4>
+                {latestFailed ? (
+                  <span className="flex items-center gap-1 text-xs text-destructive">
+                    <Icon name="AlertCircle" className="size-3.5" aria-hidden />
+                    latest build failed
+                  </span>
+                ) : null}
+                <span className="ml-auto">
+                  <ConsoleLink href={buildsUrl(release)}>All builds</ConsoleLink>
+                </span>
+              </div>
+              <ul className="mt-0.5 divide-y divide-border/60">
+                {builds.map((b) => (
+                  <BuildRow key={b.id} build={b} repo={repo} now={now} />
+                ))}
+              </ul>
             </div>
           ) : null}
           </div>

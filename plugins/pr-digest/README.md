@@ -15,7 +15,8 @@ A second homepage section shows the release state of one Cloud Run service:
 
 - **Live** — the revision that serves 100% of the traffic, with its commit and the time since deployment.
 - **Built, not live** — revisions that are ready but hold no traffic, plus builds that run or failed.
-- **Not yet released** — commits on `main` that are not live yet, each with a state: built, building, failed, or pending.
+- **Builds** — running deploy builds plus the latest one; a failed latest build is flagged. Deploy builds are the Cloud Build runs that carry a `COMMIT_SHA` and a `gcloud run deploy <service>` step.
+- **Not yet released** — commits on `main` that are not live yet, each with a state: built, building, failed, or not built.
 
 Data comes from the `gcloud` CLI and the `gh` CLI:
 

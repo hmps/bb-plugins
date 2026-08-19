@@ -261,8 +261,15 @@ function RootView({
         </>
       )}
       <CommandGroup heading="Actions">
-        <CommandItem value="new thread" onSelect={() => startThread(null)}>
-          New thread
+        <CommandItem
+          value="home"
+          keywords={["new thread", "compose"]}
+          onSelect={() => startThread(null)}
+        >
+          Home
+          <span className="ml-auto text-xs text-muted-foreground">
+            New thread
+          </span>
         </CommandItem>
         {(data?.projects ?? []).map((project) => (
           <CommandItem

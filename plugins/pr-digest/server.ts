@@ -51,7 +51,7 @@ const digestSchema = z.object({
 
 export type Digest = z.infer<typeof digestSchema>;
 
-const commitStateSchema = z.enum(["built", "building", "failed", "pending"]);
+const commitStateSchema = z.enum(["built", "building", "failed", "not built"]);
 
 export type CommitState = z.infer<typeof commitStateSchema>;
 
@@ -90,7 +90,11 @@ const releaseSchema = z.object({
       commitCount: z.number().int(),
     }),
   ),
-  /** Builds for unreleased commits, newest first. */
+  /**
+   * Latest deploy builds of the service (the trigger that runs
+   * `gcloud run deploy <service>`), newest first, regardless of whether
+   * their commit is released.
+   */
   builds: z.array(
     z.object({
       id: z.string(),
@@ -100,6 +104,8 @@ const releaseSchema = z.object({
       startedAt: z.string().nullable(),
       finishedAt: z.string().nullable(),
       logUrl: z.string().nullable(),
+      title: z.string().nullable(),
+      prNumber: z.number().int().nullable(),
     }),
   ),
   /** Commits on the default branch that are not live yet, newest first. */
@@ -142,11 +148,12 @@ export const rpcContract = defineRpcContract({
 const CACHE_KEY = "digest.v2";
 const CACHE_TTL_MS = 5 * 60_000;
 const GH_LIMIT = 50;
-const RELEASE_CACHE_KEY = "release.v3";
+const RELEASE_CACHE_KEY = "release.v4";
 const RELEASE_CACHE_TTL_MS = 2 * 60_000;
 const RELEASE_COMMIT_LIMIT = 50;
 const RUN_REVISION_LIMIT = 15;
-const BUILD_LIMIT = 15;
+const BUILD_LIMIT = 25;
+const DEPLOY_BUILD_LIMIT = 10;
 
 /** Local calendar date of "yesterday" as YYYY-MM-DD. */
 export function yesterday(now = new Date()): string {
@@ -331,6 +338,7 @@ interface RunRevision {
 interface CloudBuild {
   id?: string;
   status?: string;
+  steps?: Array<{ name?: string; args?: string[] }>;
   substitutions?: Record<string, string>;
   createTime?: string;
   startTime?: string;
@@ -381,6 +389,15 @@ export function splitCommitTitle(message: string): {
   const m = /^(.*?)\s*\(#(\d+)\)$/.exec(first);
   if (!m) return { message: first, prNumber: null };
   return { message: m[1].trim(), prNumber: Number(m[2]) };
+}
+
+/** True for builds of the trigger that deploys `service` to Cloud Run. */
+export function isDeployBuild(build: CloudBuild, service: string): boolean {
+  if (!build.substitutions?.COMMIT_SHA) return false;
+  const needle = `run deploy ${service}`;
+  return (build.steps ?? []).some((step) =>
+    (step.args ?? []).some((arg) => arg.includes(needle)),
+  );
 }
 
 function isReady(revision: RunRevision): boolean {
@@ -626,12 +643,18 @@ export default async function plugin(bb: BbPluginApi) {
         "builds",
         "list",
         ...buildArgs,
+        "--filter",
+        "substitutions.COMMIT_SHA:*",
         "--limit",
         String(BUILD_LIMIT),
         "--format",
         "json",
       ])
-        .then((out) => JSON.parse(out) as CloudBuild[])
+        .then((out) =>
+          (JSON.parse(out) as CloudBuild[]).filter((b) =>
+            isDeployBuild(b, runService),
+          ),
+        )
         .catch((error: unknown) => {
           note("gcloud builds list", error);
           return [] as CloudBuild[];
@@ -790,7 +813,7 @@ export default async function plugin(bb: BbPluginApi) {
       const list = buildsBySha.get(sha) ?? [];
       if (list.some((b) => RUNNING_BUILD.has(b.status ?? ""))) return "building";
       if (list[0] && FAILED_BUILD.has(list[0].status ?? "")) return "failed";
-      return "pending";
+      return "not built";
     };
 
     base.unreleased = commits
@@ -809,11 +832,15 @@ export default async function plugin(bb: BbPluginApi) {
       })
       .reverse();
 
-    base.builds = [...buildsBySha.values()]
-      .flat()
+    const titleBySha = new Map<string, { message: string; prNumber: number | null }>();
+    for (const c of commits) titleBySha.set(c.sha, splitCommitTitle(c.commit.message));
+
+    base.builds = [...buildList]
       .sort((a, b) => (b.createTime ?? "").localeCompare(a.createTime ?? ""))
+      .slice(0, DEPLOY_BUILD_LIMIT)
       .map((b) => {
         const sha = b.substitutions?.COMMIT_SHA ?? "";
+        const title = titleBySha.get(sha);
         return {
           id: b.id ?? "",
           sha,
@@ -822,6 +849,8 @@ export default async function plugin(bb: BbPluginApi) {
           startedAt: b.startTime ?? b.createTime ?? null,
           finishedAt: b.finishTime ?? null,
           logUrl: b.logUrl ?? null,
+          title: title?.message ?? null,
+          prNumber: title?.prNumber ?? null,
         };
       });
 
@@ -842,15 +871,31 @@ export default async function plugin(bb: BbPluginApi) {
     const waitingShas = base.waiting
       .map((w) => w.sha)
       .filter((sha): sha is string => sha !== null);
-    const [liveCommit, ...waitingCommits] = await Promise.all([
+    // Titles for builds the UI names: every running build and the latest one.
+    const buildShas = base.builds
+      .filter((b, i) => b.title === null && b.sha && (i === 0 || RUNNING_BUILD.has(b.status)))
+      .map((b) => b.sha);
+    const extraShas = [...new Set([...waitingShas, ...buildShas])].filter(
+      (sha) => sha !== liveSha,
+    );
+    const [liveCommit, ...extraCommits] = await Promise.all([
       describeCommit(liveSha),
-      ...waitingShas.map((sha) => describeCommit(sha)),
+      ...extraShas.map((sha) => describeCommit(sha)),
     ]);
     if (liveCommit) {
       base.live.message = splitCommitTitle(liveCommit.commit.message).message || null;
     }
     const bySha = new Map<string, CompareCommit>();
-    for (const c of waitingCommits) if (c) bySha.set(c.sha, c);
+    if (liveCommit) bySha.set(liveCommit.sha, liveCommit);
+    for (const c of extraCommits) if (c) bySha.set(c.sha, c);
+    for (const b of base.builds) {
+      if (b.title !== null) continue;
+      const c = bySha.get(b.sha);
+      if (!c) continue;
+      const title = splitCommitTitle(c.commit.message);
+      b.title = title.message || null;
+      b.prNumber = title.prNumber;
+    }
     for (const w of base.waiting) {
       const c = w.sha ? bySha.get(w.sha) : undefined;
       if (!c) continue;
@@ -949,13 +994,20 @@ export default async function plugin(bb: BbPluginApi) {
             `  ${w.shortSha ?? "unknown"} ${w.title ?? w.revision}${pr} by ${w.author ?? "unknown"}, ${w.commitCount} commits since live, built ${w.createdAt}`,
           );
         }
-        const running = release.builds.filter((b) =>
-          RUNNING_BUILD.has(b.status),
-        );
-        if (running.length) {
+        if (release.builds.length) {
           out.push("");
-          out.push(`Building (${running.length})`);
-          for (const b of running) out.push(`  ${b.shortSha} ${b.status}`);
+          const latest = release.builds[0];
+          out.push(
+            FAILED_BUILD.has(latest.status)
+              ? `Builds (latest FAILED)`
+              : "Builds",
+          );
+          for (const b of release.builds.slice(0, 5)) {
+            out.push(
+              `  ${b.shortSha} ${b.status} ${b.title ?? ""}`.trimEnd() +
+                (b.startedAt ? ` (${b.startedAt})` : ""),
+            );
+          }
         }
         out.push("");
         out.push(`Not yet released (${release.unreleased.length})`);
