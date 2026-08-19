@@ -1,9 +1,9 @@
 // bb-plugin-pr-digest — backend entry.
 //
-// Fetches two GitHub lists through the `gh` CLI and serves them to the
-// homepage section over rpc:
+// Resolves the GitHub repos behind the user's bb projects, then fetches two
+// lists per repo through the `gh` CLI and serves them over rpc:
 //   - pull requests merged yesterday
-//   - open pull requests that wait for the user's review
+//   - all open pull requests
 import { execFile } from "node:child_process";
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
@@ -14,18 +14,33 @@ const prSchema = z.object({
   url: z.string(),
   repo: z.string(),
   author: z.string(),
+  /** mergedAt for merged PRs, createdAt for open ones (ISO). */
   at: z.string(),
+  updatedAt: z.string(),
   isDraft: z.boolean(),
+  reviewDecision: z.enum([
+    "APPROVED",
+    "CHANGES_REQUESTED",
+    "REVIEW_REQUIRED",
+    "",
+  ]),
+  reviewRequested: z.boolean(),
+  labels: z.array(z.object({ name: z.string(), color: z.string() })),
+  additions: z.number().int(),
+  deletions: z.number().int(),
+  branch: z.string(),
 });
 
 export type PullRequest = z.infer<typeof prSchema>;
 
 const digestSchema = z.object({
   day: z.string(),
+  viewer: z.string(),
+  repos: z.array(z.string()),
   merged: z.array(prSchema),
-  reviewQueue: z.array(prSchema),
+  open: z.array(prSchema),
+  errors: z.array(z.object({ repo: z.string(), message: z.string() })),
   fetchedAt: z.number(),
-  error: z.string().nullable(),
 });
 
 export type Digest = z.infer<typeof digestSchema>;
@@ -37,7 +52,7 @@ export const rpcContract = defineRpcContract({
   },
 });
 
-const CACHE_KEY = "digest";
+const CACHE_KEY = "digest.v2";
 const CACHE_TTL_MS = 5 * 60_000;
 const GH_LIMIT = 50;
 
@@ -51,31 +66,70 @@ export function yesterday(now = new Date()): string {
   return `${y}-${m}-${day}`;
 }
 
-/** Split a free-text qualifier setting into argv tokens. */
-export function splitQualifiers(value: string): string[] {
-  return value.trim().split(/\s+/).filter(Boolean);
+/** `owner/name` for a GitHub remote URL, or null for anything else. */
+export function parseGitHubRepo(remote: string | null | undefined): string | null {
+  if (!remote) return null;
+  const m =
+    /github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i.exec(remote.trim());
+  return m ? `${m[1]}/${m[2]}` : null;
 }
 
-interface GhSearchRow {
+/** Split a comma/space separated `owner/name` list. */
+export function parseRepoList(value: string): string[] {
+  return value
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter((s) => /^[^/\s]+\/[^/\s]+$/.test(s));
+}
+
+interface GhActor {
+  login: string;
+}
+
+interface GhPrRow {
   number: number;
   title: string;
   url: string;
-  repository: { nameWithOwner: string };
-  author: { login: string } | null;
-  closedAt: string | null;
+  author: GhActor | null;
   createdAt: string;
+  updatedAt: string;
+  mergedAt?: string | null;
   isDraft: boolean;
+  reviewDecision: string;
+  reviewRequests?: Array<{ login?: string; name?: string; slug?: string }>;
+  labels: Array<{ name: string; color: string }>;
+  additions: number;
+  deletions: number;
+  headRefName: string;
 }
 
-function toPullRequest(row: GhSearchRow): PullRequest {
+const DECISIONS = new Set(["APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED"]);
+
+function toPullRequest(
+  row: GhPrRow,
+  repo: string,
+  viewer: string,
+): PullRequest {
+  const decision = DECISIONS.has(row.reviewDecision)
+    ? (row.reviewDecision as PullRequest["reviewDecision"])
+    : "";
   return {
     number: row.number,
     title: row.title,
     url: row.url,
-    repo: row.repository.nameWithOwner,
+    repo,
     author: row.author?.login ?? "unknown",
-    at: row.closedAt ?? row.createdAt,
+    at: row.mergedAt ?? row.createdAt,
+    updatedAt: row.updatedAt,
     isDraft: row.isDraft,
+    reviewDecision: decision,
+    reviewRequested: (row.reviewRequests ?? []).some(
+      (r) => r.login === viewer,
+    ),
+    labels: (row.labels ?? []).map((l) => ({ name: l.name, color: l.color })),
+    additions: row.additions ?? 0,
+    deletions: row.deletions ?? 0,
+    branch: row.headRefName ?? "",
   };
 }
 
@@ -96,71 +150,109 @@ function gh(args: string[]): Promise<string> {
   });
 }
 
-const JSON_FIELDS =
-  "number,title,url,repository,author,closedAt,createdAt,isDraft";
+const OPEN_FIELDS =
+  "number,title,url,author,createdAt,updatedAt,isDraft,reviewDecision,reviewRequests,labels,additions,deletions,headRefName";
+const MERGED_FIELDS =
+  "number,title,url,author,createdAt,updatedAt,mergedAt,isDraft,reviewDecision,labels,additions,deletions,headRefName";
 
-async function searchPrs(args: string[]): Promise<PullRequest[]> {
+async function listPrs(
+  repo: string,
+  args: string[],
+  fields: string,
+): Promise<GhPrRow[]> {
   const out = await gh([
-    "search",
-    "prs",
+    "pr",
+    "list",
+    "--repo",
+    repo,
     ...args,
     "--json",
-    JSON_FIELDS,
+    fields,
     "--limit",
     String(GH_LIMIT),
   ]);
-  const rows = JSON.parse(out) as GhSearchRow[];
-  return rows.map(toPullRequest);
+  return JSON.parse(out) as GhPrRow[];
 }
 
 export default async function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
-    mergedScope: {
+    extraRepos: {
       type: "string",
-      label: "Merged PRs scope",
+      label: "Extra repositories",
       description:
-        "GitHub search qualifiers for yesterday's merged PRs, e.g. `involves:@me` or `org:acme`.",
-      default: "involves:@me",
-    },
-    reviewScope: {
-      type: "string",
-      label: "Review queue extra qualifiers",
-      description:
-        "Optional qualifiers added to `review-requested:@me`, e.g. `org:acme` or `team-review-requested:acme/core`.",
+        "Comma-separated `owner/name` repos to include beside your bb projects' GitHub remotes.",
       default: "",
+    },
+    hideOwnOpen: {
+      type: "boolean",
+      label: "Hide my own open PRs",
+      description: "Show only other people's open pull requests.",
+      default: false,
     },
   });
 
+  let viewerCache: string | null = null;
+  async function viewerLogin(): Promise<string> {
+    if (viewerCache) return viewerCache;
+    try {
+      viewerCache = (await gh(["api", "user", "--jq", ".login"])).trim();
+    } catch {
+      viewerCache = "";
+    }
+    return viewerCache;
+  }
+
+  async function resolveRepos(): Promise<string[]> {
+    const { extraRepos } = await settings.get();
+    const repos = new Set<string>(parseRepoList(extraRepos));
+    try {
+      const projects = await bb.sdk.projects.list();
+      for (const p of projects) {
+        const repo = parseGitHubRepo(p.gitRemoteUrl);
+        if (repo) repos.add(repo);
+      }
+    } catch (error) {
+      bb.log.warn(`projects.list failed: ${String(error)}`);
+    }
+    return [...repos].sort();
+  }
+
   async function fetchDigest(): Promise<Digest> {
-    const { mergedScope, reviewScope } = await settings.get();
+    const { hideOwnOpen } = await settings.get();
     const day = yesterday();
     const fetchedAt = Date.now();
-    try {
-      const [merged, reviewQueue] = await Promise.all([
-        searchPrs([
-          "--merged",
-          "--merged-at",
-          day,
-          "--sort",
-          "updated",
-          ...splitQualifiers(mergedScope),
-        ]),
-        searchPrs([
-          "--state",
-          "open",
-          "--review-requested",
-          "@me",
-          "--sort",
-          "updated",
-          ...splitQualifiers(reviewScope),
-        ]),
-      ]);
-      return { day, merged, reviewQueue, fetchedAt, error: null };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      bb.log.warn(`gh search failed: ${message}`);
-      return { day, merged: [], reviewQueue: [], fetchedAt, error: message };
-    }
+    const [viewer, repos] = await Promise.all([viewerLogin(), resolveRepos()]);
+    const merged: PullRequest[] = [];
+    const open: PullRequest[] = [];
+    const errors: Digest["errors"] = [];
+
+    await Promise.all(
+      repos.map(async (repo) => {
+        try {
+          const [m, o] = await Promise.all([
+            listPrs(
+              repo,
+              ["--state", "merged", "--search", `merged:${day}`],
+              MERGED_FIELDS,
+            ),
+            listPrs(repo, ["--state", "open"], OPEN_FIELDS),
+          ]);
+          merged.push(...m.map((r) => toPullRequest(r, repo, viewer)));
+          open.push(...o.map((r) => toPullRequest(r, repo, viewer)));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          bb.log.warn(`gh pr list failed for ${repo}: ${message}`);
+          errors.push({ repo, message });
+        }
+      }),
+    );
+
+    merged.sort((a, b) => b.at.localeCompare(a.at));
+    open.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const visibleOpen =
+      hideOwnOpen && viewer ? open.filter((pr) => pr.author !== viewer) : open;
+
+    return { day, viewer, repos, merged, open: visibleOpen, errors, fetchedAt };
   }
 
   let inflight: Promise<Digest> | null = null;
@@ -179,7 +271,9 @@ export default async function plugin(bb: BbPluginApi) {
     if (!inflight) {
       inflight = fetchDigest()
         .then(async (digest) => {
-          if (!digest.error) await bb.storage.kv.set(CACHE_KEY, digest);
+          if (digest.errors.length === 0) {
+            await bb.storage.kv.set(CACHE_KEY, digest);
+          }
           return digest;
         })
         .finally(() => {
@@ -199,7 +293,7 @@ export default async function plugin(bb: BbPluginApi) {
 
   bb.cli.register({
     name: "pr-digest",
-    summary: "Yesterday's merged PRs and your GitHub review queue",
+    summary: "Yesterday's merged PRs and open PRs across your bb projects",
     commands: [
       {
         name: "show",
@@ -213,18 +307,31 @@ export default async function plugin(bb: BbPluginApi) {
         return { exitCode: 0, stdout: JSON.stringify(digest, null, 2) };
       }
       const lines: string[] = [];
-      if (digest.error) lines.push(`error: ${digest.error}`);
+      for (const e of digest.errors) lines.push(`error ${e.repo}: ${e.message}`);
+      lines.push(`Repos: ${digest.repos.join(", ") || "(none)"}`);
+      lines.push("");
       lines.push(`Merged on ${digest.day} (${digest.merged.length})`);
       for (const pr of digest.merged) {
         lines.push(`  ${pr.repo}#${pr.number} ${pr.title} — ${pr.author}`);
       }
       lines.push("");
-      lines.push(`Review queue (${digest.reviewQueue.length})`);
-      for (const pr of digest.reviewQueue) {
-        const draft = pr.isDraft ? " (draft)" : "";
-        lines.push(`  ${pr.repo}#${pr.number} ${pr.title} — ${pr.author}${draft}`);
+      lines.push(`Open (${digest.open.length})`);
+      for (const pr of digest.open) {
+        const flags = [
+          pr.isDraft ? "draft" : "",
+          pr.reviewDecision.toLowerCase().replace("_", " "),
+          pr.reviewRequested ? "review requested" : "",
+        ]
+          .filter(Boolean)
+          .join(", ");
+        lines.push(
+          `  ${pr.repo}#${pr.number} ${pr.title} — ${pr.author}${flags ? ` (${flags})` : ""}`,
+        );
       }
-      return { exitCode: digest.error ? 1 : 0, stdout: lines.join("\n") };
+      return {
+        exitCode: digest.errors.length ? 1 : 0,
+        stdout: lines.join("\n"),
+      };
     },
   });
 }
