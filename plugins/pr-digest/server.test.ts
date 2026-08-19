@@ -185,12 +185,22 @@ describe("startBuild", () => {
       "explicit-trigger",
       `--sha=${TARGET_SHA}`,
       "--region",
-      "europe-west1",
+      "global",
       "--project",
       "vaam-286504",
       "--quiet",
       "--format=json",
     ]);
+  });
+
+  it("uses the configured trigger region independently of the build region", async () => {
+    installRunner();
+    const { harness } = await setup({ buildTriggerRegion: "us-central1" });
+
+    await harness.behavior.callRpc("startBuild", { sha: TARGET_SHA });
+
+    expect(triggerCalls()[0]?.[1]).toContain("us-central1");
+    expect(triggerCalls()[0]?.[1]).not.toContain("europe-west1");
   });
 
   it("shares concurrent requests for the same SHA", async () => {

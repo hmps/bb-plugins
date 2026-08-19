@@ -38,6 +38,7 @@ Rows with a pull request number open in the bb GitHub plugin. Other rows open th
 - **Cloud Run region** — region of the Cloud Run service.
 - **Cloud Run service** — name of the Cloud Run service to report on.
 - **Cloud Build region** — region of the Cloud Build builds.
+- **Cloud Build trigger region** — location of the trigger used by **Start build**. It defaults to `global`, which is where legacy Cloud Build triggers live.
 - **Release repository** — `owner/name` repo that the service is built from.
 - **Cloud Build trigger** — optional trigger ID used by **Start build**. Leave it empty to infer the ID from the newest recent deploy build. Set it explicitly when no recent build has a trigger ID or when a specific trigger should always be used.
 

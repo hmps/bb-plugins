@@ -364,6 +364,7 @@ interface ReleaseBuildSettings {
   runRegion: string;
   runService: string;
   buildRegion: string;
+  buildTriggerRegion: string;
   releaseRepo: string;
   buildTrigger: string;
 }
@@ -508,7 +509,11 @@ function releaseTargetKey(settings: ReleaseBuildSettings): string {
 }
 
 function buildStartConfigKey(settings: ReleaseBuildSettings): string {
-  return JSON.stringify([releaseTargetKey(settings), settings.buildTrigger.trim()]);
+  return JSON.stringify([
+    releaseTargetKey(settings),
+    settings.buildTriggerRegion,
+    settings.buildTrigger.trim(),
+  ]);
 }
 
 function isReady(revision: RunRevision): boolean {
@@ -579,6 +584,13 @@ export default async function plugin(bb: BbPluginApi) {
       label: "Cloud Build region",
       description: "Region of the Cloud Build builds.",
       default: "europe-west1",
+    },
+    buildTriggerRegion: {
+      type: "string",
+      label: "Cloud Build trigger region",
+      description:
+        "Location of the Cloud Build trigger used by Start build. Legacy triggers are usually global.",
+      default: "global",
     },
     releaseRepo: {
       type: "string",
@@ -1145,7 +1157,7 @@ export default async function plugin(bb: BbPluginApi) {
       triggerId,
       `--sha=${sha}`,
       "--region",
-      snapshot.buildRegion,
+      snapshot.buildTriggerRegion,
       "--project",
       snapshot.gcpProject,
       "--quiet",
