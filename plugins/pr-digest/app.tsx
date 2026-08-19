@@ -1,13 +1,15 @@
 // bb-plugin-pr-digest — frontend entry.
 //
-// Homepage section: a stat strip, then two asymmetric columns — PRs merged
-// yesterday and every open PR across the user's bb project repos. Rows are
-// grouped by repo and separated by hairlines instead of nested cards.
+// Homepage section with two lists side by side: PRs merged yesterday and
+// every open PR across the user's bb project repos. Rows group by repo and
+// use the host type scale (text-sm / text-xs) and tokens only.
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { definePluginApp, useRpc } from "@get-bb/plugin-sdk/app";
 import type { Digest, PullRequest, rpcContract } from "./server";
 import { Icon, type IconName } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
+
+type Kind = "merged" | "open";
 
 // ---------------------------------------------------------------- helpers
 
@@ -45,35 +47,10 @@ function groupByRepo(items: PullRequest[]): Array<[string, PullRequest[]]> {
   return [...map.entries()];
 }
 
-// ------------------------------------------------------------ primitives
+const PRESS =
+  "transition-[background-color,color,transform] duration-150 ease-out motion-reduce:transition-none active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
-function Stat({
-  value,
-  label,
-  hint,
-  loading,
-}: {
-  value: number;
-  label: string;
-  hint?: string;
-  loading: boolean;
-}) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      {loading ? (
-        <div className="h-7 w-10 animate-pulse rounded bg-muted" />
-      ) : (
-        <span className="font-mono text-2xl font-medium tabular-nums leading-7 tracking-tight text-foreground">
-          {value}
-        </span>
-      )}
-      <span className="text-xs text-muted-foreground">
-        {label}
-        {hint ? <span className="text-muted-foreground/60"> · {hint}</span> : null}
-      </span>
-    </div>
-  );
-}
+// ------------------------------------------------------------ primitives
 
 function Pill({
   tone,
@@ -87,7 +64,7 @@ function Pill({
   return (
     <span
       className={cn(
-        "inline-flex h-5 shrink-0 items-center gap-1 rounded-full px-1.5 text-[11px] font-medium leading-none",
+        "inline-flex h-5 shrink-0 items-center gap-1 rounded-full px-1.5 text-xs font-medium leading-none",
         tone === "accent" && "bg-primary/10 text-primary",
         tone === "danger" && "bg-destructive/10 text-destructive",
         tone === "muted" && "border border-border text-muted-foreground",
@@ -99,130 +76,91 @@ function Pill({
   );
 }
 
-function DiffStat({ additions, deletions }: PullRequest) {
-  return (
-    <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
-      <span className="text-foreground/80">+{additions}</span>
-      <span className="mx-0.5 text-muted-foreground/50">/</span>
-      <span>−{deletions}</span>
-    </span>
-  );
+function statePill(pr: PullRequest, kind: Kind): ReactNode {
+  if (kind !== "open") return null;
+  if (pr.reviewRequested) {
+    return (
+      <Pill tone="accent" icon="UserRound">
+        review requested
+      </Pill>
+    );
+  }
+  if (pr.reviewDecision === "APPROVED") {
+    return (
+      <Pill tone="accent" icon="Check">
+        approved
+      </Pill>
+    );
+  }
+  if (pr.reviewDecision === "CHANGES_REQUESTED") {
+    return (
+      <Pill tone="danger" icon="AlertCircle">
+        changes requested
+      </Pill>
+    );
+  }
+  if (pr.isDraft) return <Pill tone="muted">draft</Pill>;
+  return null;
 }
 
-function Labels({ labels }: { labels: PullRequest["labels"] }) {
-  if (labels.length === 0) return null;
-  const shown = labels.slice(0, 3);
-  return (
-    <span className="inline-flex shrink-0 items-center gap-1">
-      {shown.map((l) => (
-        <span
-          key={l.name}
-          title={l.name}
-          className="size-2 rounded-full ring-1 ring-border"
-          style={{ backgroundColor: `#${l.color}` }}
-        />
-      ))}
-      {labels.length > shown.length ? (
-        <span className="text-[10px] text-muted-foreground">
-          +{labels.length - shown.length}
-        </span>
-      ) : null}
-    </span>
-  );
+function statusIcon(pr: PullRequest, kind: Kind): IconName {
+  if (kind === "merged") return "GitMerge";
+  return pr.isDraft ? "GitPullRequestDraft" : "GitPullRequest";
 }
 
 // --------------------------------------------------------------- rows
-
-function statusIcon(pr: PullRequest, kind: "merged" | "open"): IconName {
-  if (kind === "merged") return "GitMerge";
-  if (pr.isDraft) return "GitPullRequestDraft";
-  return "GitPullRequest";
-}
 
 function PrRow({
   pr,
   kind,
   viewer,
   now,
-  index,
 }: {
   pr: PullRequest;
-  kind: "merged" | "open";
+  kind: Kind;
   viewer: string;
   now: number;
-  index: number;
 }) {
-  const mine = viewer !== "" && pr.author === viewer;
-  const pill =
-    kind !== "open" ? null : pr.reviewRequested ? (
-      <Pill tone="accent" icon="UserRound">
-        review requested
-      </Pill>
-    ) : pr.reviewDecision === "APPROVED" ? (
-      <Pill tone="accent" icon="Check">
-        approved
-      </Pill>
-    ) : pr.reviewDecision === "CHANGES_REQUESTED" ? (
-      <Pill tone="danger" icon="AlertCircle">
-        changes requested
-      </Pill>
-    ) : pr.isDraft ? (
-      <Pill tone="muted">draft</Pill>
-    ) : null;
+  const pill = statePill(pr, kind);
+  const showAuthor = viewer === "" || pr.author !== viewer;
   return (
-    <li
-      className="animate-in fade-in-0 slide-in-from-bottom-1 fill-mode-both duration-300"
-      style={{ animationDelay: `${Math.min(index, 12) * 28}ms` }}
-    >
+    <li>
       <a
         href={pr.url}
         target="_blank"
         rel="noreferrer"
-        title={`${pr.repo}#${pr.number} — ${pr.title}`}
+        title={`${pr.repo}#${pr.number}: ${pr.title}`}
         className={cn(
-          "group -mx-2 grid grid-cols-[auto_1fr] items-start gap-x-2.5 rounded-md px-2 py-2",
-          "transition-[background-color,transform] duration-200 ease-out",
-          "hover:bg-muted/60 active:scale-[0.995]",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          "-mx-2 flex items-start gap-2.5 rounded-md px-2 py-2 hover:bg-muted/60",
+          PRESS,
         )}
       >
         <Icon
           name={statusIcon(pr, kind)}
           aria-hidden
           className={cn(
-            "mt-[3px] size-3.5",
-            kind === "merged"
-              ? "text-primary"
-              : pr.isDraft
-                ? "text-muted-foreground/60"
-                : "text-muted-foreground",
+            "mt-1 size-3.5 shrink-0",
+            kind === "merged" ? "text-primary" : "text-muted-foreground",
+            pr.isDraft && "text-muted-foreground/70",
           )}
         />
-        <span className="flex min-w-0 flex-col gap-0.5">
-          <span className="flex min-w-0 items-baseline gap-1.5">
-            <span
-              className={cn(
-                "truncate text-[13px] leading-5 text-foreground",
-                pr.isDraft && "text-muted-foreground",
-              )}
-            >
-              {pr.title}
-            </span>
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span
+            className={cn(
+              "truncate text-sm leading-5 text-foreground",
+              pr.isDraft && "text-muted-foreground",
+            )}
+          >
+            {pr.title}
           </span>
-          <span className="flex min-w-0 items-center gap-x-2 text-[11px] leading-4 text-muted-foreground">
-            <span className="shrink-0 font-mono tabular-nums">#{pr.number}</span>
-            <span className="shrink-0 truncate">
-              <span className={cn(mine && "text-foreground/80")}>
-                {mine ? "you" : pr.author}
-              </span>
-              <span className="text-muted-foreground/50"> · </span>
-              <span className="font-mono tabular-nums">
-                {timeAgo(pr.at, now)}
-              </span>
+          <span className="flex min-w-0 items-center gap-x-2 text-xs leading-4 text-muted-foreground">
+            <span className="font-mono tabular-nums">#{pr.number}</span>
+            {showAuthor ? <span className="truncate">{pr.author}</span> : null}
+            <span className="font-mono tabular-nums">{timeAgo(pr.at, now)}</span>
+            <span className="font-mono tabular-nums">
+              +{pr.additions} −{pr.deletions}
             </span>
-            <DiffStat {...pr} />
-            <Labels labels={pr.labels} />
-            {pill ? <span className="ml-auto shrink-0">{pill}</span> : null}
+            {pill ? <span className="ml-auto">{pill}</span> : null}
           </span>
         </span>
       </a>
@@ -236,36 +174,21 @@ function RepoGroup({
   kind,
   viewer,
   now,
-  offset,
 }: {
   repo: string;
   items: PullRequest[];
-  kind: "merged" | "open";
+  kind: Kind;
   viewer: string;
   now: number;
-  offset: number;
 }) {
   return (
     <section>
-      <div className="mb-1 flex items-center gap-2 px-0.5">
-        <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-          {repoShort(repo)}
-        </span>
-        <span className="font-mono text-[11px] tabular-nums text-muted-foreground/60">
-          {items.length}
-        </span>
-        <span className="h-px flex-1 bg-border" />
-      </div>
+      <h4 className="mb-0.5 text-xs font-medium text-muted-foreground">
+        {repoShort(repo)}
+      </h4>
       <ul className="divide-y divide-border/60">
-        {items.map((pr, i) => (
-          <PrRow
-            key={pr.url}
-            pr={pr}
-            kind={kind}
-            viewer={viewer}
-            now={now}
-            index={offset + i}
-          />
+        {items.map((pr) => (
+          <PrRow key={pr.url} pr={pr} kind={kind} viewer={viewer} now={now} />
         ))}
       </ul>
     </section>
@@ -275,42 +198,40 @@ function RepoGroup({
 // ------------------------------------------------------------- states
 
 function SkeletonList({ rows }: { rows: number }) {
-  const widths = ["w-3/5", "w-4/5", "w-1/2", "w-2/3", "w-3/4", "w-1/3"];
+  const widths = ["w-3/5", "w-4/5", "w-1/2", "w-2/3", "w-3/4"];
   return (
-    <div className="space-y-2 pt-1" aria-hidden>
-      <div className="h-3 w-16 animate-pulse rounded bg-muted" />
+    <div aria-hidden>
+      <div className="mb-0.5 h-4 w-14 animate-pulse rounded bg-muted motion-reduce:animate-none" />
       {Array.from({ length: rows }, (_, i) => (
-        <div key={i} className="flex items-center gap-2.5 py-1.5">
-          <div className="size-3.5 animate-pulse rounded-full bg-muted" />
-          <div
-            className={cn(
-              "h-3.5 animate-pulse rounded bg-muted",
-              widths[i % widths.length],
-            )}
-          />
-          <div className="ml-auto h-3 w-14 animate-pulse rounded bg-muted" />
+        <div key={i} className="flex items-start gap-2.5 py-2">
+          <div className="mt-1 size-3.5 animate-pulse rounded-full bg-muted motion-reduce:animate-none" />
+          <div className="flex flex-1 flex-col gap-1.5 py-0.5">
+            <div
+              className={cn(
+                "h-3.5 animate-pulse rounded bg-muted motion-reduce:animate-none",
+                widths[i % widths.length],
+              )}
+            />
+            <div className="h-3 w-28 animate-pulse rounded bg-muted motion-reduce:animate-none" />
+          </div>
         </div>
       ))}
     </div>
   );
 }
 
-function Empty({ icon, title, detail }: { icon: IconName; title: string; detail: string }) {
+function Empty({ icon, children }: { icon: IconName; children: ReactNode }) {
   return (
-    <div className="flex items-start gap-3 rounded-md border border-dashed border-border px-3 py-3">
-      <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-        <Icon name={icon} className="size-3.5" aria-hidden />
-      </span>
-      <div className="min-w-0">
-        <p className="text-[13px] text-foreground">{title}</p>
-        <p className="text-xs text-muted-foreground">{detail}</p>
-      </div>
-    </div>
+    <p className="flex items-center gap-2.5 rounded-md border border-dashed border-border px-3 py-3 text-sm text-muted-foreground">
+      <Icon name={icon} className="size-4 shrink-0" aria-hidden />
+      <span>{children}</span>
+    </p>
   );
 }
 
 function Column({
   heading,
+  hint,
   kind,
   items,
   viewer,
@@ -318,60 +239,64 @@ function Column({
   loading,
   empty,
   limit,
+  action,
 }: {
   heading: string;
-  kind: "merged" | "open";
+  hint?: string;
+  kind: Kind;
   items: PullRequest[];
   viewer: string;
   now: number;
   loading: boolean;
-  empty: { title: string; detail: string };
+  empty: ReactNode;
   limit?: number;
+  action?: ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
   const hidden = limit && !expanded ? Math.max(0, items.length - limit) : 0;
   const visible = hidden > 0 ? items.slice(0, limit) : items;
   const groups = useMemo(() => groupByRepo(visible), [visible]);
-  let offset = 0;
+  const collapsible = limit !== undefined && items.length > limit;
+
   return (
     <div className="min-w-0">
-      <h3 className="mb-2 text-sm font-medium tracking-tight text-foreground">
-        {heading}
-      </h3>
+      <div className="mb-3 flex h-8 items-center gap-2 border-b border-border">
+        <h3 className="text-sm font-medium text-foreground">{heading}</h3>
+        {!loading ? (
+          <span className="font-mono text-xs tabular-nums text-muted-foreground">
+            {items.length}
+          </span>
+        ) : null}
+        {hint ? (
+          <span className="truncate text-xs text-muted-foreground">{hint}</span>
+        ) : null}
+        {action ? <span className="ml-auto">{action}</span> : null}
+      </div>
       {loading ? (
-        <SkeletonList rows={kind === "open" ? 5 : 3} />
+        <SkeletonList rows={kind === "open" ? 4 : 2} />
       ) : items.length === 0 ? (
-        <Empty
-          icon={kind === "merged" ? "GitMerge" : "GitPullRequest"}
-          title={empty.title}
-          detail={empty.detail}
-        />
+        <Empty icon={kind === "merged" ? "GitMerge" : "GitPullRequest"}>
+          {empty}
+        </Empty>
       ) : (
-        <div className="space-y-4">
-          {groups.map(([repo, list]) => {
-            const node = (
-              <RepoGroup
-                key={repo}
-                repo={repo}
-                items={list}
-                kind={kind}
-                viewer={viewer}
-                now={now}
-                offset={offset}
-              />
-            );
-            offset += list.length;
-            return node;
-          })}
-          {hidden > 0 || (limit && expanded && items.length > limit) ? (
+        <div className="space-y-3">
+          {groups.map(([repo, list]) => (
+            <RepoGroup
+              key={repo}
+              repo={repo}
+              items={list}
+              kind={kind}
+              viewer={viewer}
+              now={now}
+            />
+          ))}
+          {collapsible ? (
             <button
               type="button"
               onClick={() => setExpanded((v) => !v)}
               className={cn(
-                "-mx-2 flex w-[calc(100%+1rem)] items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground",
-                "transition-[background-color,color,transform] duration-200 ease-out",
-                "hover:bg-muted/60 hover:text-foreground active:scale-[0.995]",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "-mx-2 flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                PRESS,
               )}
             >
               <Icon
@@ -424,58 +349,45 @@ function PrDigestSection() {
   const dayLabel = digest ? formatDay(digest.day) : "";
   const initial = loading && !digest;
 
-  return (
-    <div className="space-y-5">
-      {/* Stat strip */}
-      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3 border-b border-border pb-4">
-        <div className="flex items-end gap-6">
-          <Stat
-            value={digest?.merged.length ?? 0}
-            label="merged"
-            hint={dayLabel || undefined}
-            loading={initial}
-          />
-          <span className="mb-1 h-8 w-px bg-border" aria-hidden />
-          <Stat
-            value={digest?.open.length ?? 0}
-            label="open"
-            hint={repoNames || undefined}
-            loading={initial}
-          />
-        </div>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          {digest ? (
-            <span className="font-mono tabular-nums">
-              updated {timeAgo(new Date(digest.fetchedAt).toISOString(), now)} ago
-            </span>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => void load(true)}
-            disabled={loading}
-            aria-label="Refresh pull requests"
-            className={cn(
-              "inline-flex size-7 items-center justify-center rounded-md text-muted-foreground",
-              "transition-[background-color,color,transform] duration-200 ease-out",
-              "hover:bg-muted hover:text-foreground active:scale-[0.96]",
-              "disabled:pointer-events-none",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            )}
-          >
-            <Icon
-              name="RotateCcw"
-              aria-hidden
-              className={cn("size-3.5", loading && "animate-spin")}
-            />
-          </button>
-        </div>
-      </div>
+  const refresh = (
+    <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      {digest ? (
+        <span>
+          updated{" "}
+          <span className="font-mono tabular-nums">
+            {timeAgo(new Date(digest.fetchedAt).toISOString(), now)}
+          </span>
+        </span>
+      ) : null}
+      <button
+        type="button"
+        onClick={() => void load(true)}
+        disabled={loading}
+        aria-label="Refresh pull requests"
+        title="Refresh"
+        className={cn(
+          "inline-flex size-7 items-center justify-center rounded-md max-md:pointer-coarse:size-11 hover:bg-muted hover:text-foreground disabled:pointer-events-none",
+          PRESS,
+        )}
+      >
+        <Icon
+          name="RotateCcw"
+          aria-hidden
+          className={cn(
+            "size-3.5",
+            loading && "animate-spin motion-reduce:animate-none",
+          )}
+        />
+      </button>
+    </span>
+  );
 
-      {/* Errors */}
+  return (
+    <div className="space-y-4">
       {failure ? (
         <p className="flex items-center gap-2 text-xs text-destructive">
-          <Icon name="AlertCircle" className="size-3.5" aria-hidden />
-          Could not load: {failure}
+          <Icon name="AlertCircle" className="size-3.5 shrink-0" aria-hidden />
+          Could not load pull requests: {failure}
         </p>
       ) : null}
       {digest?.errors.map((e) => (
@@ -483,51 +395,46 @@ function PrDigestSection() {
           key={e.repo}
           className="flex items-center gap-2 text-xs text-destructive"
         >
-          <Icon name="AlertCircle" className="size-3.5" aria-hidden />
+          <Icon name="AlertCircle" className="size-3.5 shrink-0" aria-hidden />
           <span className="font-mono">{e.repo}</span>
           <span className="truncate">{e.message}</span>
         </p>
       ))}
-      {digest && digest.repos.length === 0 ? (
-        <Empty
-          icon="Github"
-          title="No GitHub repositories found"
-          detail="Add a bb project with a GitHub remote, or set “Extra repositories” in the plugin settings."
-        />
-      ) : null}
 
-      {/* Columns: 2fr / 3fr, single column on narrow viewports */}
-      <div className="grid grid-cols-1 gap-x-10 gap-y-6 md:grid-cols-5">
-        <div className="md:col-span-2">
+      {digest && digest.repos.length === 0 ? (
+        <Empty icon="Github">
+          No GitHub repositories found. Add a bb project with a GitHub remote,
+          or set Extra repositories in the plugin settings.
+        </Empty>
+      ) : (
+        <div className="grid grid-cols-1 gap-x-10 gap-y-6 md:grid-cols-[2fr_3fr]">
           <Column
             heading="Merged yesterday"
+            hint={dayLabel || undefined}
             kind="merged"
             items={digest?.merged ?? []}
             viewer={viewer}
             now={now}
             loading={initial}
-            empty={{
-              title: `Nothing merged on ${dayLabel || "that day"}`,
-              detail: repoNames ? `Across ${repoNames}.` : "No repositories to check.",
-            }}
+            empty={`Nothing merged on ${dayLabel || "that day"}.`}
           />
-        </div>
-        <div className="md:col-span-3">
           <Column
-            heading="Open pull requests"
+            heading="Open"
             kind="open"
             items={digest?.open ?? []}
             viewer={viewer}
             now={now}
             loading={initial}
             limit={8}
-            empty={{
-              title: "No open pull requests",
-              detail: repoNames ? `Clean slate in ${repoNames}.` : "No repositories to check.",
-            }}
+            empty={
+              repoNames
+                ? `No open pull requests in ${repoNames}.`
+                : "No open pull requests."
+            }
+            action={refresh}
           />
         </div>
-      </div>
+      )}
     </div>
   );
 }

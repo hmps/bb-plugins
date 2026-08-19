@@ -1,132 +1,77 @@
-// Spike: mount a React root from a content script and probe SDK hooks.
-import { Component, useEffect, useState, type ReactNode } from "react";
-import { createRoot } from "react-dom/client";
-import {
-  definePluginApp,
-  useBbContext,
-  useBbNavigate,
-  useRpc,
-  useSettings,
-  useRealtimeConnectionState,
-  experimental_useSidebarThreads,
-  experimental_useSidebarThreadActions,
-} from "@get-bb/plugin-sdk/app";
-import type { rpcContract } from "./server";
+// Spike 2: can a content-script root navigate the app?
+import { definePluginApp } from "@get-bb/plugin-sdk/app";
 
-type Probe = { name: string; run: () => unknown };
-
-function summarize(v: unknown): string {
-  if (v === null || v === undefined) return String(v);
-  if (typeof v === "function") return "fn";
-  if (typeof v !== "object") return JSON.stringify(v);
-  const o = v as Record<string, unknown>;
-  return `{${Object.keys(o)
-    .map((k) => {
-      const x = o[k];
-      if (Array.isArray(x)) return `${k}:[${x.length}]`;
-      if (typeof x === "function") return `${k}:fn`;
-      if (typeof x === "object" && x !== null) return `${k}:{…}`;
-      return `${k}:${JSON.stringify(x)}`;
-    })
-    .join(",")}}`;
+const base = "/api/v1/plugins/hook-spike/rpc";
+async function rpc<T>(method: string, input: unknown): Promise<T> {
+  const r = await fetch(`${base}/${method}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const j = (await r.json()) as { ok: boolean; result?: T; error?: unknown };
+  if (!j.ok) throw new Error(JSON.stringify(j.error));
+  return j.result as T;
 }
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Each hook runs in its own component so one failure does not stop the rest.
-function HookProbe({ name, run, onResult }: Probe & { onResult: (s: string) => void }) {
-  // Hooks must run unconditionally at top level: call run() directly.
-  const value = run();
-  const line = `${name}: OK ${summarize(value)}`;
-  useEffect(() => onResult(line), [line, onResult]);
-  return null;
-}
-
-class Boundary extends Component<
-  { name: string; onResult: (s: string) => void; children: ReactNode },
-  { failed: boolean }
-> {
-  state = { failed: false };
-  static getDerivedStateFromError() {
-    return { failed: true };
-  }
-  componentDidCatch(e: Error) {
-    this.props.onResult(`${this.props.name}: FAIL ${e.message}`);
-  }
-  render() {
-    return this.state.failed ? null : this.props.children;
-  }
-}
-
-const probes: Probe[] = [
-  { name: "useRpc", run: () => useRpc<typeof rpcContract>() },
-  { name: "useBbContext", run: () => useBbContext() },
-  { name: "useBbNavigate", run: () => useBbNavigate() },
-  { name: "useSettings", run: () => useSettings() },
-  { name: "useRealtimeConnectionState", run: () => useRealtimeConnectionState() },
-  { name: "experimental_useSidebarThreads", run: () => experimental_useSidebarThreads() },
-  { name: "experimental_useSidebarThreadActions", run: () => experimental_useSidebarThreadActions() },
-];
-
-function Spike() {
-  const [lines, setLines] = useState<string[]>([]);
-  const [done, setDone] = useState(false);
-  const onResult = (s: string) =>
-    setLines((prev) => {
-      const name = s.split(":")[0];
-      if (prev.some((p) => p.startsWith(`${name}:`))) return prev;
-      return [...prev, s];
-    });
-
-  // Report once all probes have a line, or after 3s.
-  useEffect(() => {
-    if (done) return;
-    if (lines.length >= probes.length) {
-      setDone(true);
-      return;
-    }
-    const t = setTimeout(() => setDone(true), 3000);
-    return () => clearTimeout(t);
-  }, [lines, done]);
-
-  useEffect(() => {
-    if (!done) return;
-    const out = [...lines, `location: ${window.location.pathname}`];
-    // Raw fetch so the report does not depend on useRpc working.
-    void fetch("/api/v1/plugins/hook-spike/rpc/report", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ lines: out }),
-    }).then(
-      (r) => console.log("[hook-spike] reported", r.status, out),
-      (e) => console.error("[hook-spike] report failed", e, out),
-    );
-  }, [done]);
-
-  return (
-    <>
-      {probes.map((p) => (
-        <Boundary key={p.name} name={p.name} onResult={onResult}>
-          <HookProbe {...p} onResult={onResult} />
-        </Boundary>
-      ))}
-    </>
+function activeRowId(): string | null {
+  const el = document.querySelector(
+    '[data-sidebar-thread-id][aria-current], [data-sidebar-thread-id][data-active="true"], [data-sidebar-thread-id].active',
   );
+  return el?.getAttribute("data-sidebar-thread-id") ?? null;
+}
+
+async function run(signal: AbortSignal) {
+  const lines: string[] = [];
+  const log = (s: string) => lines.push(s);
+  try {
+    const start = location.pathname;
+    log(`start: ${start} title="${document.title}"`);
+    const t = await rpc<{ threadId: string | null; projectId: string | null; title: string | null }>(
+      "newestThread",
+      null,
+    );
+    log(`newest: ${JSON.stringify(t)}`);
+    if (!t.threadId) return;
+    if (start.includes(t.threadId)) log("already on newest thread; results may be weak");
+
+    // Option 2: pushState + popstate
+    const target = t.projectId
+      ? `/projects/${t.projectId}/threads/${t.threadId}`
+      : `/threads/${t.threadId}`;
+    history.pushState({}, "", target);
+    dispatchEvent(new PopStateEvent("popstate", { state: {} }));
+    await sleep(1500);
+    log(
+      `opt2 pushState+popstate: path=${location.pathname} title="${document.title}" activeRow=${activeRowId()} hasThreadChat=${!!document.querySelector('[data-thread-id="' + t.threadId + '"]')}`,
+    );
+
+    // Go back home before option 3
+    history.pushState({}, "", "/");
+    dispatchEvent(new PopStateEvent("popstate", { state: {} }));
+    await sleep(1000);
+    log(`back: path=${location.pathname}`);
+
+    // Option 3: server-side bb.sdk.threads.open
+    const r = await rpc<{ result: string }>("openThread", { threadId: t.threadId });
+    await sleep(1500);
+    log(`opt3 sdk.threads.open: result=${r.result} path=${location.pathname} title="${document.title}"`);
+
+    // Restore
+    history.pushState({}, "", start);
+    dispatchEvent(new PopStateEvent("popstate", { state: {} }));
+  } catch (e) {
+    log(`error: ${(e as Error).message}`);
+  } finally {
+    if (!signal.aborted) await rpc("report", { lines }).catch(() => {});
+  }
 }
 
 export default definePluginApp((app) => {
   app.contentScripts.register({
     id: "hook-spike",
     mount({ signal }) {
-      const host = document.createElement("div");
-      host.id = "hook-spike-root";
-      document.body.appendChild(host);
-      const root = createRoot(host);
-      root.render(<Spike />);
-      const dispose = () => {
-        root.unmount();
-        host.remove();
-      };
-      signal.addEventListener("abort", dispose, { once: true });
-      return dispose;
+      void run(signal);
     },
   });
 });

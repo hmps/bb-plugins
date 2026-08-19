@@ -312,7 +312,7 @@ export default async function plugin(bb: BbPluginApi) {
       lines.push("");
       lines.push(`Merged on ${digest.day} (${digest.merged.length})`);
       for (const pr of digest.merged) {
-        lines.push(`  ${pr.repo}#${pr.number} ${pr.title} — ${pr.author}`);
+        lines.push(`  ${pr.repo}#${pr.number} ${pr.title} by ${pr.author}`);
       }
       lines.push("");
       lines.push(`Open (${digest.open.length})`);
@@ -325,7 +325,7 @@ export default async function plugin(bb: BbPluginApi) {
           .filter(Boolean)
           .join(", ");
         lines.push(
-          `  ${pr.repo}#${pr.number} ${pr.title} — ${pr.author}${flags ? ` (${flags})` : ""}`,
+          `  ${pr.repo}#${pr.number} ${pr.title} by ${pr.author}${flags ? ` (${flags})` : ""}`,
         );
       }
       return {
