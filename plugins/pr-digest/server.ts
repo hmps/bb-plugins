@@ -143,6 +143,16 @@ export const rpcContract = defineRpcContract({
     input: z.object({ force: z.boolean().optional() }).strict(),
     output: releaseSchema,
   },
+  startBuild: {
+    input: z
+      .object({
+        sha: z
+          .string()
+          .regex(/^[a-fA-F0-9]{40}$/, "SHA must be a full 40-character Git SHA"),
+      })
+      .strict(),
+    output: z.object({ sha: z.string(), triggerId: z.string() }),
+  },
 });
 
 const CACHE_KEY = "digest.v2";
@@ -150,6 +160,7 @@ const CACHE_TTL_MS = 5 * 60_000;
 const GH_LIMIT = 50;
 const RELEASE_CACHE_KEY = "release.v4";
 const RELEASE_CACHE_TTL_MS = 2 * 60_000;
+const START_BUILD_COOLDOWN_MS = RELEASE_CACHE_TTL_MS;
 const REFRESH_SWEEP_MS = 30_000;
 const RELEASE_COMMIT_LIMIT = 50;
 const RUN_REVISION_LIMIT = 15;
@@ -338,6 +349,7 @@ interface RunRevision {
 
 interface CloudBuild {
   id?: string;
+  buildTriggerId?: string;
   status?: string;
   steps?: Array<{ name?: string; args?: string[] }>;
   substitutions?: Record<string, string>;
@@ -345,6 +357,15 @@ interface CloudBuild {
   startTime?: string;
   finishTime?: string;
   logUrl?: string;
+}
+
+interface ReleaseBuildSettings {
+  gcpProject: string;
+  runRegion: string;
+  runService: string;
+  buildRegion: string;
+  releaseRepo: string;
+  buildTrigger: string;
 }
 
 interface CompareCommit {
@@ -393,12 +414,101 @@ export function splitCommitTitle(message: string): {
 }
 
 /** True for builds of the trigger that deploys `service` to Cloud Run. */
-export function isDeployBuild(build: CloudBuild, service: string): boolean {
-  if (!build.substitutions?.COMMIT_SHA) return false;
-  const needle = `run deploy ${service}`;
-  return (build.steps ?? []).some((step) =>
-    (step.args ?? []).some((arg) => arg.includes(needle)),
+function repoName(repo: string): string {
+  return repo.split("/").at(-1) ?? repo;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Whether this is an exact deploy of `service`, optionally with region proof. */
+function deploysServiceInRegion(
+  args: string[],
+  service: string,
+  runRegion: string,
+  requireRegion: boolean,
+): boolean {
+  const command = args.join(" ");
+  const exactService = new RegExp(
+    `(?:^|\\s)run\\s+deploy\\s+${escapeRegExp(service)}(?=\\s|$)`,
   );
+  if (!exactService.test(command)) return false;
+  const regions = [...command.matchAll(/(?:^|\s)--region(?:=|\s+)([^\s]+)/g)].map(
+    (match) => match[1] ?? "",
+  );
+  if (regions.some((region) => region !== runRegion)) return false;
+  if (requireRegion && !regions.includes(runRegion)) return false;
+  return true;
+}
+
+/** True for builds of the trigger that deploys `service` to this Cloud Run target. */
+export function isDeployBuild(
+  build: CloudBuild,
+  service: string,
+  runRegion: string,
+  releaseRepo: string,
+): boolean {
+  if (!build.substitutions?.COMMIT_SHA) return false;
+  const sourceRepo = build.substitutions.REPO_NAME;
+  if (sourceRepo && sourceRepo.toLowerCase() !== repoName(releaseRepo).toLowerCase()) {
+    return false;
+  }
+  return (build.steps ?? []).some((step) =>
+    deploysServiceInRegion(step.args ?? [], service, runRegion, false),
+  );
+}
+
+/** A stricter deploy candidate used only for automatic trigger inference. */
+function isSafeTriggerInferenceCandidate(
+  build: CloudBuild,
+  service: string,
+  runRegion: string,
+  releaseRepo: string,
+): boolean {
+  if (!build.substitutions?.COMMIT_SHA) return false;
+  const sourceRepo = build.substitutions.REPO_NAME;
+  if (sourceRepo && sourceRepo.toLowerCase() !== repoName(releaseRepo).toLowerCase()) {
+    return false;
+  }
+  return (build.steps ?? []).some((step) =>
+    deploysServiceInRegion(step.args ?? [], service, runRegion, true),
+  );
+}
+
+/**
+ * A setting-free trigger is safe only when all suitable recent deploy builds
+ * agree. Ambiguity must be resolved explicitly in settings.
+ */
+export function inferBuildTriggerId(
+  builds: CloudBuild[],
+  service: string,
+  runRegion: string,
+  releaseRepo: string,
+): string | null {
+  const ids = new Set(
+    builds
+      .filter((build) =>
+        isSafeTriggerInferenceCandidate(build, service, runRegion, releaseRepo),
+      )
+      .map((build) => build.buildTriggerId)
+      .filter((id): id is string => Boolean(id)),
+  );
+  return ids.size === 1 ? [...ids][0] ?? null : null;
+}
+
+function releaseTargetKey(settings: ReleaseBuildSettings): string {
+  return JSON.stringify([
+    settings.gcpProject,
+    settings.buildRegion,
+    settings.runService,
+    settings.runRegion,
+    settings.releaseRepo,
+  ]);
+}
+
+function buildStartConfigKey(settings: ReleaseBuildSettings): string {
+  return JSON.stringify([releaseTargetKey(settings), settings.buildTrigger.trim()]);
 }
 
 function isReady(revision: RunRevision): boolean {
@@ -476,7 +586,26 @@ export default async function plugin(bb: BbPluginApi) {
       description: "`owner/name` repo that the service is built from.",
       default: "vaam-io/vaam",
     },
+    buildTrigger: {
+      type: "string",
+      label: "Cloud Build trigger",
+      description:
+        "Trigger ID to run for an unreleased commit. Leave blank to use the newest deploy build's trigger.",
+      default: "",
+    },
   });
+
+  // The inferred value only survives until the next release lookup. A fresh
+  // list must prove that it is still safe to use.
+  let inferredBuildTrigger: {
+    id: string;
+    targetKey: string;
+  } | null = null;
+  const startingBuilds = new Map<string, Promise<{ sha: string; triggerId: string }>>();
+  const recentBuildStarts = new Map<
+    string,
+    { result: { sha: string; triggerId: string }; expiresAt: number }
+  >();
 
   let viewerCache: string | null = null;
   async function viewerLogin(): Promise<string> {
@@ -606,11 +735,14 @@ export default async function plugin(bb: BbPluginApi) {
   });
   const getDigest = (force: boolean) => digestCache.get(force);
 
-  async function fetchRelease(): Promise<Release> {
+  async function fetchReleaseForSettings(
+    releaseSettings: ReleaseBuildSettings,
+  ): Promise<{ release: Release; inferredTriggerId: string | null }> {
     const { gcpProject, runRegion, runService, buildRegion, releaseRepo } =
-      await settings.get();
+      releaseSettings;
     const fetchedAt = Date.now();
     const errors: string[] = [];
+    let buildListSucceeded = false;
 
     let authRequired = false;
     const note = (what: string, error: unknown) => {
@@ -687,16 +819,26 @@ export default async function plugin(bb: BbPluginApi) {
         "--format",
         "json",
       ])
-        .then((out) =>
-          (JSON.parse(out) as CloudBuild[]).filter((b) =>
-            isDeployBuild(b, runService),
-          ),
-        )
+        .then((out) => {
+          const builds = JSON.parse(out) as CloudBuild[];
+          const deployBuilds = builds.filter((b) =>
+            isDeployBuild(b, runService, runRegion, releaseRepo),
+          );
+          buildListSucceeded = true;
+          return deployBuilds;
+        })
         .catch((error: unknown) => {
           note("gcloud builds list", error);
           return [] as CloudBuild[];
         }),
     ]);
+
+    // `builds list` supplies the recent deploy candidates. Only infer a
+    // trigger when every candidate that identifies one agrees; an explicit
+    // setting always wins at dispatch time.
+    const inferredTriggerId = buildListSucceeded
+      ? inferBuildTriggerId(buildList, runService, runRegion, releaseRepo)
+      : null;
 
     const base: Release = {
       service: runService,
@@ -715,7 +857,7 @@ export default async function plugin(bb: BbPluginApi) {
 
     if (authRequired) {
       base.authRequired = true;
-      return base;
+      return { release: base, inferredTriggerId };
     }
 
     const serving = (service?.status?.traffic ?? [])
@@ -724,7 +866,7 @@ export default async function plugin(bb: BbPluginApi) {
       )
       .sort((a, b) => (b.percent ?? 0) - (a.percent ?? 0));
     const liveName = serving[0]?.revisionName ?? null;
-    if (!liveName) return base;
+    if (!liveName) return { release: base, inferredTriggerId };
 
     const livePercent = serving
       .filter((t) => t.revisionName === liveName)
@@ -806,7 +948,7 @@ export default async function plugin(bb: BbPluginApi) {
       };
     });
 
-    if (!liveSha) return base;
+    if (!liveSha) return { release: base, inferredTriggerId };
 
     let compare: CompareResult | null = null;
     try {
@@ -944,7 +1086,24 @@ export default async function plugin(bb: BbPluginApi) {
       w.author = c.author?.login ?? c.commit.author?.name ?? null;
     }
 
-    return base;
+    return { release: base, inferredTriggerId };
+  }
+
+  async function fetchRelease(): Promise<Release> {
+    inferredBuildTrigger = null;
+    const snapshot = (await settings.get()) as ReleaseBuildSettings;
+    const { release, inferredTriggerId } = await fetchReleaseForSettings(snapshot);
+    const currentSettings = (await settings.get()) as ReleaseBuildSettings;
+    if (
+      inferredTriggerId &&
+      releaseTargetKey(currentSettings) === releaseTargetKey(snapshot)
+    ) {
+      inferredBuildTrigger = {
+        id: inferredTriggerId,
+        targetKey: releaseTargetKey(snapshot),
+      };
+    }
+    return release;
   }
 
   const releaseCache = cached<Release>({
@@ -954,6 +1113,78 @@ export default async function plugin(bb: BbPluginApi) {
     fetch: fetchRelease,
   });
   const getRelease = (force: boolean) => releaseCache.get(force);
+
+  async function dispatchBuild(
+    sha: string,
+    snapshot: ReleaseBuildSettings,
+  ): Promise<{ sha: string; triggerId: string }> {
+    // This independent lookup deliberately bypasses the release cache: build
+    // authorization must not join an unrelated display refresh in flight.
+    const { release, inferredTriggerId } =
+      await fetchReleaseForSettings(snapshot);
+    if (!release.unreleased.some((commit) => commit.sha === sha)) {
+      throw new Error("That commit is no longer in the current unreleased list.");
+    }
+
+    const currentSettings = (await settings.get()) as ReleaseBuildSettings;
+    if (buildStartConfigKey(currentSettings) !== buildStartConfigKey(snapshot)) {
+      throw new Error("Release build settings changed while preparing the build. Retry.");
+    }
+    const configuredTrigger = snapshot.buildTrigger.trim();
+    const triggerId = configuredTrigger || inferredTriggerId || "";
+    if (!triggerId) {
+      throw new Error(
+        "Cloud Build trigger could not be determined. Configure Cloud Build trigger in the PR Digest plugin settings.",
+      );
+    }
+
+    await gcloud([
+      "builds",
+      "triggers",
+      "run",
+      triggerId,
+      `--sha=${sha}`,
+      "--region",
+      snapshot.buildRegion,
+      "--project",
+      snapshot.gcpProject,
+      "--quiet",
+      "--format=json",
+    ]);
+
+    // Do not wait for Cloud Build to finish. The next completed cache refresh
+    // announces the new build to all open release sections.
+    void releaseCache.refresh().catch((error: unknown) => {
+      bb.log.warn(`release refresh after starting ${shortSha(sha)} failed: ${String(error)}`);
+    });
+
+    return { sha, triggerId };
+  }
+
+  async function startBuild(sha: string): Promise<{ sha: string; triggerId: string }> {
+    const snapshot = (await settings.get()) as ReleaseBuildSettings;
+    const key = `${buildStartConfigKey(snapshot)}:${sha.toLowerCase()}`;
+    const recent = recentBuildStarts.get(key);
+    if (recent && recent.expiresAt > Date.now()) return recent.result;
+    if (recent) recentBuildStarts.delete(key);
+
+    const active = startingBuilds.get(key);
+    if (active) return active;
+
+    const pending = dispatchBuild(sha, snapshot)
+      .then((result) => {
+        recentBuildStarts.set(key, {
+          result,
+          expiresAt: Date.now() + START_BUILD_COOLDOWN_MS,
+        });
+        return result;
+      })
+      .finally(() => {
+        startingBuilds.delete(key);
+      });
+    startingBuilds.set(key, pending);
+    return pending;
+  }
 
   // Keep both caches warm so the homepage renders from storage at once.
   bb.background.service("refresh", {
@@ -982,7 +1213,13 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
 
-  settings.onChange(() => {
+  settings.onChange((next, previous) => {
+    if (
+      buildStartConfigKey(next as ReleaseBuildSettings) !==
+      buildStartConfigKey(previous as ReleaseBuildSettings)
+    ) {
+      inferredBuildTrigger = null;
+    }
     void digestCache.refresh().catch(() => undefined);
     void releaseCache.refresh().catch(() => undefined);
   });
@@ -990,6 +1227,7 @@ export default async function plugin(bb: BbPluginApi) {
   bb.rpc.register(rpcContract, {
     digest: ({ force }) => getDigest(force === true),
     release: ({ force }) => getRelease(force === true),
+    startBuild: ({ sha }) => startBuild(sha),
   });
 
   bb.cli.register({

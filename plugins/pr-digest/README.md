@@ -17,6 +17,7 @@ A second homepage section shows the release state of one Cloud Run service:
 - **Built, not live** — revisions that are ready but hold no traffic, plus builds that run or failed.
 - **Builds** — running deploy builds plus the latest one; a failed latest build is flagged. Deploy builds are the Cloud Build runs that carry a `COMMIT_SHA` and a `gcloud run deploy <service>` step.
 - **Not yet released** — commits on `main` that are not live yet, each with a state: built, building, failed, or not built.
+  Every row has a **Start build** action that runs the selected commit through the release trigger; it starts the build and refreshes the section without waiting for completion.
 
 Data comes from the `gcloud` CLI and the `gh` CLI:
 
@@ -38,6 +39,7 @@ Rows with a pull request number open in the bb GitHub plugin. Other rows open th
 - **Cloud Run service** — name of the Cloud Run service to report on.
 - **Cloud Build region** — region of the Cloud Build builds.
 - **Release repository** — `owner/name` repo that the service is built from.
+- **Cloud Build trigger** — optional trigger ID used by **Start build**. Leave it empty to infer the ID from the newest recent deploy build. Set it explicitly when no recent build has a trigger ID or when a specific trigger should always be used.
 
 Digest results cache for 5 minutes, release results for 2 minutes. The refresh button forces a new fetch.
 

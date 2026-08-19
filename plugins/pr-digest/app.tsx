@@ -6,9 +6,10 @@
 //   - Release: the commit that is live on Cloud Run, the builds that wait, and
 //     the commits on main that are not released.
 // Both use the host type scale (text-sm / text-xs) and tokens only.
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { definePluginApp, useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
 import type { MouseEvent } from "react";
+import { toast } from "sonner";
 import type {
   Digest,
   PullRequest,
@@ -560,6 +561,8 @@ function PrDigestSection() {
 
 const RUNNING_STATUS = new Set(["QUEUED", "WORKING", "PENDING"]);
 const FAILED_STATUS = new Set(["FAILURE", "TIMEOUT", "CANCELLED", "EXPIRED"]);
+const OPTIMISTIC_BUILD_COOLDOWN_MS = 2 * 60_000;
+const OPTIMISTIC_REFRESH_DELAY_MS = 5_000;
 
 const STATE_TONE: Record<ReleaseCommit["state"], "accent" | "danger" | "muted"> =
   {
@@ -729,11 +732,18 @@ function CommitRow({
   commit,
   repo,
   now,
+  starting,
+  optimisticBuilding,
+  onStartBuild,
 }: {
   commit: ReleaseCommit;
   repo: string;
   now: number;
+  starting: boolean;
+  optimisticBuilding: boolean;
+  onStartBuild: (sha: string) => void;
 }) {
+  const state = optimisticBuilding ? "building" : commit.state;
   const prNumber = commit.prNumber;
   const href =
     prNumber !== null
@@ -766,8 +776,20 @@ function CommitRow({
           </span>
         ) : null}
         <span className="ml-auto">
-          <Pill tone={STATE_TONE[commit.state]}>{commit.state}</Pill>
+          <Pill tone={STATE_TONE[state]}>{state}</Pill>
         </span>
+        <button
+          type="button"
+          onClick={() => onStartBuild(commit.sha)}
+          disabled={starting || optimisticBuilding}
+          aria-label={`Start build for ${commit.shortSha}`}
+          className={cn(
+            "inline-flex min-h-8 shrink-0 items-center rounded-sm px-1.5 text-xs text-primary underline-offset-2 hover:text-foreground hover:underline disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50 max-md:pointer-coarse:min-h-11 max-md:pointer-coarse:px-2",
+            PRESS,
+          )}
+        >
+          {starting || optimisticBuilding ? "Starting…" : "Start build"}
+        </button>
       </span>
     </li>
   );
@@ -868,18 +890,39 @@ function ReleaseSection() {
   const [loading, setLoading] = useState(true);
   const [failure, setFailure] = useState<string | null>(null);
   const [now, setNow] = useNow();
+  const [startingShas, setStartingShas] = useState<Set<string>>(() => new Set());
+  const [optimisticBuilds, setOptimisticBuilds] = useState<Map<string, number>>(
+    () => new Map(),
+  );
+  const startingShasRef = useRef(new Set<string>());
+  const delayedRefreshes = useRef(new Set<ReturnType<typeof setTimeout>>());
+  const mountedRef = useRef(true);
 
   const load = useCallback(
     async (force: boolean) => {
+      if (!mountedRef.current) return;
       setLoading(true);
       try {
-        setRelease(await rpc.call("release", { force }));
+        const nextRelease = await rpc.call("release", { force });
+        if (!mountedRef.current) return;
+        setRelease(nextRelease);
+        setOptimisticBuilds((current) => {
+          const currentShas = new Set(
+            nextRelease.unreleased.map((commit) => commit.sha),
+          );
+          const next = new Map(current);
+          for (const sha of next.keys()) {
+            if (!currentShas.has(sha)) next.delete(sha);
+          }
+          return next;
+        });
         setFailure(null);
         setNow(Date.now());
       } catch (error) {
+        if (!mountedRef.current) return;
         setFailure(error instanceof Error ? error.message : String(error));
       } finally {
-        setLoading(false);
+        if (mountedRef.current) setLoading(false);
       }
     },
     [rpc, setNow],
@@ -893,6 +936,87 @@ function ReleaseSection() {
   useRealtime("release", () => {
     void load(false);
   });
+
+  useEffect(
+    () => {
+      mountedRef.current = true;
+      return () => {
+        mountedRef.current = false;
+        for (const timer of delayedRefreshes.current) clearTimeout(timer);
+        delayedRefreshes.current.clear();
+      };
+    },
+    [],
+  );
+
+  const scheduleRefresh = useCallback(
+    (delay: number, clearOptimisticSha?: string) => {
+      if (!mountedRef.current) return;
+      const timer = setTimeout(() => {
+        delayedRefreshes.current.delete(timer);
+        if (!mountedRef.current) return;
+        if (clearOptimisticSha) {
+          setOptimisticBuilds((current) => {
+            const next = new Map(current);
+            next.delete(clearOptimisticSha);
+            return next;
+          });
+        }
+        void load(true);
+      }, delay);
+      delayedRefreshes.current.add(timer);
+    },
+    [load],
+  );
+
+  const startBuild = useCallback(
+    async (sha: string) => {
+      // The ref covers a double click before React has rendered the disabled
+      // state; the state drives the visual feedback for this row.
+      if (startingShasRef.current.has(sha)) return;
+      startingShasRef.current.add(sha);
+      setStartingShas((current) => new Set(current).add(sha));
+      try {
+        const result = await rpc.call("startBuild", { sha });
+        if (!mountedRef.current) return;
+        setRelease((current) =>
+          current
+            ? {
+                ...current,
+                unreleased: current.unreleased.map((commit) =>
+                  commit.sha === sha ? { ...commit, state: "building" } : commit,
+                ),
+              }
+            : current,
+        );
+        setOptimisticBuilds((current) => {
+          const next = new Map(current);
+          next.set(sha, Date.now() + OPTIMISTIC_BUILD_COOLDOWN_MS);
+          return next;
+        });
+        toast.success(`Build started for ${shortSha(result.sha)}.`);
+        // Cloud Build can take a few seconds to appear in `builds list`.
+        // Keep the local building state through realtime refreshes until then.
+        scheduleRefresh(OPTIMISTIC_REFRESH_DELAY_MS);
+        scheduleRefresh(OPTIMISTIC_BUILD_COOLDOWN_MS, sha);
+      } catch (error) {
+        if (!mountedRef.current) return;
+        toast.error(
+          `Could not start build: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      } finally {
+        startingShasRef.current.delete(sha);
+        if (mountedRef.current) {
+          setStartingShas((current) => {
+            const next = new Set(current);
+            next.delete(sha);
+            return next;
+          });
+        }
+      }
+    },
+    [rpc, scheduleRefresh],
+  );
 
   const builds = useMemo(
     () => (release ? visibleBuilds(release) : []),
@@ -1064,6 +1188,9 @@ function ReleaseSection() {
                       commit={commit}
                       repo={repo}
                       now={now}
+                      starting={startingShas.has(commit.sha)}
+                      optimisticBuilding={optimisticBuilds.has(commit.sha)}
+                      onStartBuild={startBuild}
                     />
                   ))}
                 </ul>
