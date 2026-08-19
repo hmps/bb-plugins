@@ -84,6 +84,19 @@ function navigateInApp(event: MouseEvent<HTMLAnchorElement>, path: string) {
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
+/**
+ * The host centres homepage sections in a 760px column inside the
+ * `@container/page` scroll area. On large screens a section can use more of
+ * that area: keep the column's left edge (where the host draws the section
+ * title and the composer) and extend to the right, capped, leaving a gutter
+ * before the page edge. `50cqw + 50%` is the distance from the column's left
+ * edge to the page container's right edge. On narrow screens `max(100%, ...)`
+ * keeps the normal column width, so no media query is needed.
+ */
+const wideStyle = {
+  width: "max(100%, min(1240px, 50cqw + 50% - 2rem))",
+} as const;
+
 const PRESS =
   "transition-[background-color,color,transform] duration-150 ease-out motion-reduce:transition-none active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
@@ -480,7 +493,7 @@ function PrDigestSection() {
   );
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" style={wideStyle}>
       {failure ? (
         <p className="flex items-center gap-2 text-xs text-destructive">
           <Icon name="AlertCircle" className="size-3.5 shrink-0" aria-hidden />
@@ -781,7 +794,7 @@ function ReleaseSection() {
   const live = release?.live ?? null;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" style={wideStyle}>
       <div className="flex h-8 items-center gap-2 border-b border-border">
         <h3 className="text-sm font-medium text-foreground">
           {release?.service ?? "Release"}
@@ -821,7 +834,8 @@ function ReleaseSection() {
       {initial ? (
         <ReleaseSkeleton />
       ) : (
-        <>
+        <div className="grid grid-cols-1 gap-x-10 gap-y-4 @min-[1000px]/page:grid-cols-[2fr_3fr]">
+          <div className="min-w-0 space-y-4">
           {live ? (
             <p className="flex min-w-0 items-center gap-2 text-sm leading-5">
               <span
@@ -877,8 +891,9 @@ function ReleaseSection() {
               </ul>
             </div>
           ) : null}
+          </div>
 
-          <div>
+          <div className="min-w-0">
             <div className="mb-0.5 flex items-center gap-2">
               <h4 className="text-sm font-medium text-foreground">
                 Not yet released
@@ -911,7 +926,7 @@ function ReleaseSection() {
               </div>
             )}
           </div>
-        </>
+        </div>
       )}
     </div>
   );
