@@ -4,9 +4,29 @@ import {
   type UsageWindow,
 } from "./usage.ts";
 
+import {
+  FIVE_HOUR_MS,
+  WEEK_MS,
+  windowPace,
+  worstPaceStatus,
+  type PaceStatus,
+  type WindowPace,
+} from "./pace.ts";
+
 export interface SidebarUsageWindows {
   fiveHour: UsageWindow | null;
   weekly: UsageWindow | null;
+}
+
+export interface SidebarWindowPace {
+  window: UsageWindow;
+  pace: WindowPace;
+}
+
+export interface SidebarWindowPaces {
+  fiveHour: SidebarWindowPace | null;
+  weekly: SidebarWindowPace | null;
+  extras: SidebarWindowPace[];
 }
 
 function isFiveHourLabel(label: string): boolean {
@@ -48,6 +68,48 @@ export function extraSidebarWindows(provider: ProviderUsage): UsageWindow[] {
   const { fiveHour, weekly } = sidebarUsageWindows(provider);
   return provider.windows.filter(
     (window) => window !== fiveHour && window !== weekly,
+  );
+}
+
+function pacedWindow(
+  window: UsageWindow | null,
+  durationMs: number,
+  now: Date,
+): SidebarWindowPace | null {
+  return window === null
+    ? null
+    : { window, pace: windowPace(window, durationMs, now) };
+}
+
+/**
+ * Pace for every sidebar window. Model-scoped quotas (for example Fable) are
+ * weekly windows, like the weekly limit.
+ */
+export function sidebarWindowPaces(
+  provider: ProviderUsage,
+  now: Date,
+): SidebarWindowPaces {
+  const { fiveHour, weekly } = sidebarUsageWindows(provider);
+  return {
+    fiveHour: pacedWindow(fiveHour, FIVE_HOUR_MS, now),
+    weekly: pacedWindow(weekly, WEEK_MS, now),
+    extras: extraSidebarWindows(provider).map((window) => ({
+      window,
+      pace: windowPace(window, WEEK_MS, now),
+    })),
+  };
+}
+
+/** The most severe window pace of a provider, for the collapsed strip. */
+export function providerPaceStatus(
+  provider: ProviderUsage,
+  now: Date,
+): PaceStatus {
+  const paces = sidebarWindowPaces(provider, now);
+  return worstPaceStatus(
+    [paces.fiveHour, paces.weekly, ...paces.extras]
+      .filter((entry): entry is SidebarWindowPace => entry !== null)
+      .map((entry) => entry.pace),
   );
 }
 

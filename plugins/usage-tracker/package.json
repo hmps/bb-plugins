@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-usage-tracker",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Compact Codex and Claude usage limits in bb's sidebar footer, with model-scoped (Fable) quota rows.",
   "license": "MIT",
   "author": "Mateo Cerquetella",

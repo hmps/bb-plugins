@@ -183,18 +183,27 @@ export function formatUsedPercent(value: number, locale?: string): string {
   }).format(value);
 }
 
+/** Short weekday and time, or null when the timestamp is missing or invalid. */
+export function formatWeekdayTime(
+  value: string | null,
+  locale?: string,
+): string | null {
+  if (value === null) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat(locale, {
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
 export function formatResetTime(
   value: string | null,
   locale?: string,
 ): string {
-  if (value === null) return "Reset unavailable";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Reset unavailable";
-  return `Resets ${new Intl.DateTimeFormat(locale, {
-    weekday: "short",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(date)}`;
+  const label = formatWeekdayTime(value, locale);
+  return label === null ? "Reset unavailable" : `Resets ${label}`;
 }
 
 export function formatFetchedAt(value: string, locale?: string): string {

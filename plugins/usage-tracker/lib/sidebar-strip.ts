@@ -12,12 +12,14 @@ import {
 } from "./preferences.ts";
 import { providerMark } from "./provider-marks.ts";
 import {
-  extraSidebarWindows,
   mergeLastKnownWindows,
+  providerPaceStatus,
   sidebarUsagePrimarySummary,
   sidebarUsageSummary,
-  sidebarUsageWindows,
+  sidebarWindowPaces,
+  type SidebarWindowPace,
 } from "./sidebar-usage.ts";
+import { formatPace, type PaceStatus, type WindowPace } from "./pace.ts";
 
 const ROOT_ATTRIBUTE = "data-usage-tracker-sidebar";
 const CACHE_KEY = "bb:usage-tracker:sidebar:last-known";
@@ -175,20 +177,39 @@ function mergeSnapshot(
   };
 }
 
-function progressRail(window: UsageWindow | null): HTMLSpanElement {
+function progressRail(
+  window: UsageWindow | null,
+  pace: WindowPace | null = null,
+): HTMLSpanElement {
   const rail = element("span", "usage-tracker-sidebar__rail");
   const fill = element("span", "usage-tracker-sidebar__fill");
   fill.style.width = `${window?.barPercent ?? 0}%`;
   if (window === null) rail.dataset.empty = "true";
   rail.append(fill);
+  // The tick marks the share of the window that has already elapsed.
+  if (pace !== null && pace.status !== "unknown") {
+    const tick = element("span", "usage-tracker-sidebar__tick");
+    tick.style.left = `${pace.elapsedPercent}%`;
+    rail.append(tick);
+  }
   return rail;
+}
+
+/** Suffix for titles and labels when a pace needs attention. */
+function paceSuffix(status: PaceStatus): string {
+  if (status === "at_risk") return " · At risk";
+  if (status === "watch") return " · Watch";
+  return "";
 }
 
 function detailWindowRow(
   label: string,
-  window: UsageWindow | null,
+  entry: SidebarWindowPace | null,
 ): HTMLDivElement {
+  const window = entry?.window ?? null;
+  const pace = entry?.pace ?? null;
   const row = element("div", "usage-tracker-sidebar__window");
+  if (pace !== null) row.dataset.pace = pace.status;
   const heading = element("div", "usage-tracker-sidebar__window-heading");
   heading.append(
     element("span", undefined, label),
@@ -198,7 +219,7 @@ function detailWindowRow(
       window === null ? "—" : `${formatUsedPercent(window.usedPercent)}%`,
     ),
   );
-  row.append(heading, progressRail(window));
+  row.append(heading, progressRail(window, pace));
   row.append(
     element(
       "span",
@@ -206,14 +227,20 @@ function detailWindowRow(
       window === null ? "No limit reported" : formatResetTime(window.resetsAt),
     ),
   );
+  if (pace !== null) {
+    row.append(
+      element("span", "usage-tracker-sidebar__pace", formatPace(pace)),
+    );
+  }
   return row;
 }
 
 function detailsCard(
   provider: ProviderUsage,
+  now: Date,
   onClose: () => void,
 ): HTMLDivElement {
-  const pair = sidebarUsageWindows(provider);
+  const paces = sidebarWindowPaces(provider, now);
   const card = element("div", "usage-tracker-sidebar__details");
   card.setAttribute("role", "dialog");
   card.setAttribute("aria-label", `${provider.name} usage limits`);
@@ -230,7 +257,7 @@ function detailsCard(
       "span",
       undefined,
       provider.status === "ok"
-        ? "Subscription usage"
+        ? `Subscription usage${paceSuffix(providerPaceStatus(provider, now))}`
         : providerStatusLabel(provider.status),
     ),
   );
@@ -245,12 +272,12 @@ function detailsCard(
 
   const windows = element("div", "usage-tracker-sidebar__windows");
   windows.append(
-    detailWindowRow("5-hour limit", pair.fiveHour),
-    detailWindowRow("Weekly limit", pair.weekly),
+    detailWindowRow("5-hour limit", paces.fiveHour),
+    detailWindowRow("Weekly limit", paces.weekly),
   );
   // Model-scoped quotas (for example Fable) arrive as extra windows.
-  for (const window of extraSidebarWindows(provider)) {
-    windows.append(detailWindowRow(`${window.label} limit`, window));
+  for (const entry of paces.extras) {
+    windows.append(detailWindowRow(`${entry.window.label} limit`, entry));
   }
   card.append(header, windows);
 
@@ -305,10 +332,11 @@ export function mountSidebarUsageStrip(signal: AbortSignal): () => void {
       return;
     }
     const content: Node[] = [];
+    const now = new Date();
 
     if (selectedProviderId !== null) {
       content.push(
-        detailsCard(providerFor(selectedProviderId), () => {
+        detailsCard(providerFor(selectedProviderId), now, () => {
           selectedProviderId = null;
           render();
         }),
@@ -322,21 +350,27 @@ export function mountSidebarUsageStrip(signal: AbortSignal): () => void {
 
     for (const providerId of enabledProviderIds) {
       const provider = providerFor(providerId);
-      const pair = sidebarUsageWindows(provider);
+      const paces = sidebarWindowPaces(provider, now);
+      const paceStatus = providerPaceStatus(provider, now);
+      const suffix = paceSuffix(paceStatus);
       const button = element("button", "usage-tracker-sidebar__provider");
       button.type = "button";
       button.dataset.provider = providerId;
       button.dataset.status = provider.status;
+      button.dataset.pace = paceStatus;
       button.setAttribute(
         "aria-expanded",
         String(selectedProviderId === providerId),
       );
-      button.setAttribute("aria-label", `${provider.name}: ${sidebarUsageSummary(provider)}`);
-      button.title = `${provider.name} · ${sidebarUsageSummary(provider)} · Click for usage details`;
+      button.setAttribute(
+        "aria-label",
+        `${provider.name}: ${sidebarUsageSummary(provider)}${suffix}`,
+      );
+      button.title = `${provider.name} · ${sidebarUsageSummary(provider)}${suffix} · Click for usage details`;
 
       const mark = element("span", "usage-tracker-sidebar__mark");
       mark.append(providerGlyph(providerId));
-      const primaryWindow = pair.fiveHour ?? pair.weekly;
+      const primaryWindow = paces.fiveHour?.window ?? paces.weekly?.window ?? null;
       const reading = element(
         "span",
         "usage-tracker-sidebar__reading",

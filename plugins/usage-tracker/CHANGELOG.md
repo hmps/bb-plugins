@@ -2,6 +2,19 @@
 
 All notable changes to Usage Tracker are documented here.
 
+## 1.1.0 - 2026-08-19
+
+### Added
+
+- A pace signal for every usage window. Usage Tracker projects the current
+  burn rate forward to the reset time and reports on track, watch, or at
+  risk.
+- A pace line and an elapsed-time tick in each row of the expanded details
+  card. The line shows the projected percent at reset, and the time the
+  window runs out when it is at risk.
+- Amber and red colors on the collapsed strip when a provider has a window
+  to watch or at risk.
+
 ## 1.0.0 (hmps fork) - 2026-08-19
 
 ### Added

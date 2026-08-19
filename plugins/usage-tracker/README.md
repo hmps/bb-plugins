@@ -24,6 +24,8 @@ usage reading, without adding a navigation item or a separate plugin page.
 - Lets you show or hide Codex and Claude Code independently; the strip
   compacts for one provider and disappears when both are disabled.
 - Expands either provider to show its five-hour and weekly percentages.
+- Projects each window forward to its reset time and marks it on track,
+  watch, or at risk, in the strip and in the expanded view.
 - Includes reset timing and provider session status in the expanded view.
 - Refreshes automatically every five minutes and whenever a stale BB window
   becomes active again.
@@ -62,6 +64,10 @@ The collapsed strip is designed for quick scanning:
 
 - Select the Claude Code or Codex reading to open its details in place.
 - Review the full **5-hour limit**, **weekly limit**, and their reset times.
+- Read the pace line under each window, for example
+  `At risk · ~130% at reset · runs out Thu 14:00`. The tick in the bar shows
+  how much of the window has already elapsed. A provider reading turns amber
+  or red when one of its windows needs attention.
 - Select the same provider again, use the close button, press <kbd>Esc</kbd>,
   or click outside the details to collapse it.
 - Select the refresh icon to fetch both providers immediately.
