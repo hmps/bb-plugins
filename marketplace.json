@@ -120,6 +120,29 @@
           "tagPrefix": "ios-status-bar/"
         }
       }
+    },
+    {
+      "id": "mobile-large-editor",
+      "displayName": "Mobile Large Editor",
+      "description": "Adds the 'Make prompt box larger' toggle to thread composers on mobile.",
+      "icon": "Maximize2",
+      "tags": [
+        "mobile",
+        "composer",
+        "interface"
+      ],
+      "author": {
+        "name": "Hampus Persson",
+        "github": "hmps"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/hmps/bb-plugins.git",
+          "subdir": "plugins/mobile-large-editor",
+          "range": "^1.0.0",
+          "tagPrefix": "mobile-large-editor/"
+        }
+      }
     }
   ]
 }

@@ -1,0 +1,29 @@
+{
+  "name": "bb-plugin-mobile-large-editor",
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "bb": ">=0.38",
+    "bbPluginSdk": ">=0.4.6"
+  },
+  "bb": {
+    "name": "Mobile Large Editor",
+    "description": "Adds the 'Make prompt box larger' toggle to thread composers on mobile.",
+    "branding": {
+      "icon": "Maximize2"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.4.6",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "react": "^19.2.8",
+    "typescript": "^5.7.0"
+  },
+  "scripts": {
+    "build": "bb plugin build",
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}

@@ -22,6 +22,10 @@
     {
       "name": "ios-status-bar",
       "source": "./plugins/ios-status-bar"
+    },
+    {
+      "name": "mobile-large-editor",
+      "source": "./plugins/mobile-large-editor"
     }
   ]
 }

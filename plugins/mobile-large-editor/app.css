@@ -1,0 +1,54 @@
+/* Only active while the content script has put .bb-mobile-large-editor on
+   <html>, so reload, disable, and removal restore stock behavior at once. */
+
+/* Toggle button: a ghost icon button that matches the stock composer actions
+   (h-8 on fine pointers, h-10 on coarse pointers under 768px). */
+html.bb-mobile-large-editor .bb-mobile-large-editor-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 2rem;
+  width: 2rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0.375rem;
+  background: transparent;
+  color: var(--subtle-foreground);
+  cursor: pointer;
+  transition: background-color 150ms, color 150ms;
+}
+html.bb-mobile-large-editor .bb-mobile-large-editor-toggle svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+html.bb-mobile-large-editor .bb-mobile-large-editor-toggle:hover {
+  background: var(--state-hover);
+  color: var(--foreground);
+}
+html.bb-mobile-large-editor .bb-mobile-large-editor-toggle[aria-pressed="true"] {
+  background: var(--state-active);
+  color: var(--foreground);
+}
+@media (max-width: 767px) and (pointer: coarse) {
+  html.bb-mobile-large-editor .bb-mobile-large-editor-toggle {
+    height: 2.5rem;
+    width: 2.5rem;
+  }
+}
+
+/* Large mode. The stock thread zen mode sizes the card to 50dvh; on mobile the
+   keyboard can cover most of that, so size against the visible shell height
+   bb publishes (--bb-shell-height follows the visual viewport while the
+   keyboard is open). Compact (one-line, unfocused) and real zen layouts are
+   left alone. The editor's stock sizes are inline styles, hence !important. */
+@media (max-width: 767px) {
+  html.bb-mobile-large-editor-active
+    [data-follow-up-composer]
+    [data-promptbox]:not([data-promptbox-compact]):not([data-promptbox-zen])
+    [data-promptbox-editor-scroll] {
+    --bb-mobile-large-editor-height: calc(var(--bb-shell-height, 100dvh) * 0.5);
+    height: var(--bb-mobile-large-editor-height) !important;
+    min-height: var(--bb-mobile-large-editor-height) !important;
+    max-height: var(--bb-mobile-large-editor-height) !important;
+  }
+}

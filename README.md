@@ -11,6 +11,7 @@ bb plugin install hide-sidebar-footer-actions@hmps
 bb plugin install t3sidebar@hmps
 bb plugin install usage-tracker@hmps
 bb plugin install ios-status-bar@hmps
+bb plugin install mobile-large-editor@hmps
 ```
 
 `bb plugin update` moves installed plugins to newer releases inside the range
@@ -25,6 +26,7 @@ that `marketplace.json` lists.
 | [t3sidebar](plugins/t3sidebar) | Fork of bb's t3sidebar example with touch support for Snooze and Settle. |
 | [usage-tracker](plugins/usage-tracker) | Fork of MateoCerquetella's usage-tracker (MIT) with model-scoped (Fable) quota rows. |
 | [ios-status-bar](plugins/ios-status-bar) | Paints the iOS Safari status bar area with the app background instead of black. |
+| [mobile-large-editor](plugins/mobile-large-editor) | Adds the "Make prompt box larger" toggle to thread composers on mobile. |
 
 ## Layout
 
