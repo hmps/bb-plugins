@@ -5,6 +5,7 @@
 // use the host type scale (text-sm / text-xs) and tokens only.
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { definePluginApp, useRpc } from "@get-bb/plugin-sdk/app";
+import type { MouseEvent } from "react";
 import type { Digest, PullRequest, rpcContract } from "./server";
 import { Icon, type IconName } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
@@ -45,6 +46,33 @@ function groupByRepo(items: PullRequest[]): Array<[string, PullRequest[]]> {
     else map.set(pr.repo, [pr]);
   }
   return [...map.entries()];
+}
+
+/**
+ * In-app route of the GitHub plugin's pull request view
+ * (`/plugins/github/github/pulls/<owner>/<repo>/<n>`). bb's router owns the
+ * history stack; a plain left click pushes the route and notifies the router
+ * through `popstate`, so navigation stays inside the SPA. Modified clicks and
+ * middle clicks keep native anchor behaviour and open the route in a new tab.
+ */
+export function githubPanelPath(repo: string, number: number): string {
+  return `/plugins/github/github/pulls/${repo}/${number}`;
+}
+
+function navigateInApp(event: MouseEvent<HTMLAnchorElement>, path: string) {
+  if (
+    event.defaultPrevented ||
+    event.button !== 0 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    event.altKey
+  ) {
+    return;
+  }
+  event.preventDefault();
+  window.history.pushState(null, "", path);
+  window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
 const PRESS =
@@ -126,9 +154,8 @@ function PrRow({
   return (
     <li>
       <a
-        href={pr.url}
-        target="_blank"
-        rel="noreferrer"
+        href={githubPanelPath(pr.repo, pr.number)}
+        onClick={(event) => navigateInApp(event, githubPanelPath(pr.repo, pr.number))}
         title={`${pr.repo}#${pr.number}: ${pr.title}`}
         className={cn(
           "-mx-2 flex items-start gap-2.5 rounded-md px-2 py-2 hover:bg-muted/60",

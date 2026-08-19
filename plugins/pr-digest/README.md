@@ -7,6 +7,8 @@ A bb plugin that adds a **Pull requests** homepage section:
 
 Repositories come from the GitHub remotes of your bb projects. Data comes from the `gh` CLI (`gh pr list`). Log in with `gh auth login` first.
 
+Each row opens the pull request in the bb GitHub plugin (`/plugins/github/github/pulls/<owner>/<repo>/<n>`). Cmd-click or middle-click opens it in a new tab.
+
 ## Settings
 
 - **Extra repositories** — comma-separated `owner/name` repos to include beside your bb projects.
