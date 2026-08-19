@@ -568,6 +568,33 @@ function commitUrl(repo: string, sha: string): string {
   return `https://github.com/${repo}/commit/${sha}`;
 }
 
+/** Cloud Run revisions page: where traffic is moved to a new revision. */
+function revisionsUrl(release: Release): string {
+  return `https://console.cloud.google.com/run/detail/${release.region}/${release.service}/revisions?project=${release.project}`;
+}
+
+/** Cloud Build history for the project and region. */
+function buildsUrl(release: Release): string {
+  return `https://console.cloud.google.com/cloud-build/builds;region=${release.region}?project=${release.project}`;
+}
+
+function ConsoleLink({ href, children }: { href: string; children: ReactNode }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className={cn(
+        "inline-flex items-center gap-1 rounded-sm text-xs text-muted-foreground hover:text-foreground",
+        PRESS,
+      )}
+    >
+      {children}
+      <Icon name="ArrowUpRight" className="size-3" aria-hidden />
+    </a>
+  );
+}
+
 function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
@@ -590,7 +617,7 @@ function pipelineItems(release: Release): PipelineItem[] {
       shortSha: w.shortSha ?? "unknown",
       state: "ready",
       at: w.createdAt,
-      logUrl: null,
+      logUrl: revisionsUrl(release),
     });
   }
   for (const b of release.builds) {
@@ -658,7 +685,7 @@ function PipelineRow({ item, now }: { item: PipelineItem; now: number }) {
           href={item.logUrl}
           target="_blank"
           rel="noreferrer"
-          title="Open the build log"
+          title={item.state === "ready" ? "Open Cloud Run revisions" : "Open the build log"}
           className={cn(
             "-mx-2 flex flex-1 items-center gap-2 rounded-md px-2 py-1 hover:bg-muted/60",
             PRESS,
@@ -804,7 +831,13 @@ function ReleaseSection() {
             {release.project} · {release.region}
           </span>
         ) : null}
-        <span className="ml-auto">
+        <span className="ml-auto flex items-center gap-3">
+          {release ? (
+            <>
+              <ConsoleLink href={revisionsUrl(release)}>Cloud Run</ConsoleLink>
+              <ConsoleLink href={buildsUrl(release)}>Builds</ConsoleLink>
+            </>
+          ) : null}
           <RefreshControl
             updatedAt={release ? release.fetchedAt : null}
             now={now}
@@ -881,9 +914,16 @@ function ReleaseSection() {
             </p>
           )}
 
-          {items.length > 0 ? (
+          {items.length > 0 && release ? (
             <div>
-              <p className="text-sm text-foreground">{summary}</p>
+              <p className="flex items-center gap-3 text-sm text-foreground">
+                <span>{summary}</span>
+                {release.waiting.length > 0 ? (
+                  <ConsoleLink href={revisionsUrl(release)}>
+                    Deploy in Cloud Run
+                  </ConsoleLink>
+                ) : null}
+              </p>
               <ul className="mt-0.5">
                 {items.map((item) => (
                   <PipelineRow key={item.key} item={item} now={now} />
