@@ -14,6 +14,7 @@ import type {
   PullRequest,
   Release,
   ReleaseCommit,
+  ReleaseWaiting,
   rpcContract,
 } from "./server";
 import { Icon, type IconName } from "@/components/ui/icon";
@@ -610,16 +611,7 @@ interface PipelineItem {
 function pipelineItems(release: Release): PipelineItem[] {
   const seen = new Set<string>();
   const items: PipelineItem[] = [];
-  for (const w of release.waiting) {
-    if (w.sha) seen.add(w.sha);
-    items.push({
-      key: w.revision,
-      shortSha: w.shortSha ?? "unknown",
-      state: "ready",
-      at: w.createdAt,
-      logUrl: revisionsUrl(release),
-    });
-  }
+  for (const w of release.waiting) if (w.sha) seen.add(w.sha);
   for (const b of release.builds) {
     if (seen.has(b.sha)) continue;
     if (RUNNING_STATUS.has(b.status)) {
@@ -746,6 +738,74 @@ function CommitRow({
           </span>
         </span>
       </a>
+    </li>
+  );
+}
+
+function WaitingRow({
+  item,
+  repo,
+  now,
+}: {
+  item: ReleaseWaiting;
+  repo: string;
+  now: number;
+}) {
+  const href =
+    item.prNumber !== null
+      ? githubPanelPath(repo, item.prNumber)
+      : item.sha
+        ? commitUrl(repo, item.sha)
+        : null;
+  const linkProps =
+    href === null
+      ? {}
+      : item.prNumber !== null
+        ? {
+            href,
+            onClick: (event: MouseEvent<HTMLAnchorElement>) =>
+              navigateInApp(event, href),
+          }
+        : { href, target: "_blank", rel: "noreferrer" };
+  const Tag = href === null ? "span" : "a";
+  return (
+    <li>
+      <Tag
+        {...linkProps}
+        title={item.title ?? item.revision}
+        className={cn(
+          "-mx-2 flex min-w-0 flex-col rounded-md px-2 py-2",
+          href !== null && "hover:bg-muted/60",
+          PRESS,
+        )}
+      >
+        <span className="truncate text-sm leading-5 text-foreground">
+          {item.title ?? item.revision}
+        </span>
+        <span className="flex min-w-0 items-center gap-x-2 text-xs leading-4 text-muted-foreground">
+          {item.shortSha ? (
+            <span className="font-mono tabular-nums">{item.shortSha}</span>
+          ) : null}
+          {item.author ? <span className="truncate">{item.author}</span> : null}
+          <span className="font-mono tabular-nums">
+            {timeAgo(item.createdAt, now)}
+          </span>
+          {item.commitCount > 1 ? (
+            <span>{plural(item.commitCount, "commit")} since live</span>
+          ) : null}
+          <span className="ml-auto">
+            <Pill tone="accent">ready</Pill>
+          </span>
+        </span>
+        {item.body ? (
+          <span
+            className="mt-1 line-clamp-2 text-xs leading-4 text-muted-foreground"
+            title={item.body}
+          >
+            {item.body}
+          </span>
+        ) : null}
+      </Tag>
     </li>
   );
 }
@@ -914,7 +974,7 @@ function ReleaseSection() {
             </p>
           )}
 
-          {items.length > 0 && release ? (
+          {release && (release.waiting.length > 0 || items.length > 0) ? (
             <div>
               <p className="flex items-center gap-3 text-sm text-foreground">
                 <span>{summary}</span>
@@ -924,11 +984,20 @@ function ReleaseSection() {
                   </ConsoleLink>
                 ) : null}
               </p>
-              <ul className="mt-0.5">
-                {items.map((item) => (
-                  <PipelineRow key={item.key} item={item} now={now} />
-                ))}
-              </ul>
+              {release.waiting.length > 0 ? (
+                <ul className="mt-1 divide-y divide-border/60">
+                  {release.waiting.map((w) => (
+                    <WaitingRow key={w.revision} item={w} repo={repo} now={now} />
+                  ))}
+                </ul>
+              ) : null}
+              {items.length > 0 ? (
+                <ul className="mt-0.5">
+                  {items.map((item) => (
+                    <PipelineRow key={item.key} item={item} now={now} />
+                  ))}
+                </ul>
+              ) : null}
             </div>
           ) : null}
           </div>

@@ -80,6 +80,14 @@ const releaseSchema = z.object({
       shortSha: z.string().nullable(),
       createdAt: z.string(),
       ready: z.boolean(),
+      /** First line of the head commit message, without a trailing (#N). */
+      title: z.string().nullable(),
+      /** Rest of the commit message, trimmed; null when empty. */
+      body: z.string().nullable(),
+      prNumber: z.number().int().nullable(),
+      author: z.string().nullable(),
+      /** Unreleased commits this revision carries (from live up to its head). */
+      commitCount: z.number().int(),
     }),
   ),
   /** Builds for unreleased commits, newest first. */
@@ -132,7 +140,7 @@ export const rpcContract = defineRpcContract({
 const CACHE_KEY = "digest.v2";
 const CACHE_TTL_MS = 5 * 60_000;
 const GH_LIMIT = 50;
-const RELEASE_CACHE_KEY = "release.v1";
+const RELEASE_CACHE_KEY = "release.v2";
 const RELEASE_CACHE_TTL_MS = 2 * 60_000;
 const RELEASE_COMMIT_LIMIT = 50;
 const RUN_REVISION_LIMIT = 15;
@@ -698,6 +706,11 @@ export default async function plugin(bb: BbPluginApi) {
         shortSha: sha ? shortSha(sha) : null,
         createdAt: r.metadata?.creationTimestamp ?? "",
         ready: true,
+        title: null,
+        body: null,
+        prNumber: null,
+        author: null,
+        commitCount: 0,
       };
     });
 
@@ -725,6 +738,7 @@ export default async function plugin(bb: BbPluginApi) {
     for (const w of base.waiting) {
       const i = w.sha ? (order.get(w.sha) ?? -1) : -1;
       if (i > builtUpTo) builtUpTo = i;
+      w.commitCount = i + 1;
     }
 
     const buildsBySha = new Map<string, CloudBuild[]>();
@@ -779,16 +793,39 @@ export default async function plugin(bb: BbPluginApi) {
         };
       });
 
-    try {
-      const out = await gh([
-        "api",
-        `repos/${releaseRepo}/commits/${liveSha}`,
-        "--jq",
-        ".commit.message",
-      ]);
-      base.live.message = splitCommitTitle(out).message || null;
-    } catch (error) {
-      bb.log.warn(`gh api live commit failed: ${String(error)}`);
+    // Commit messages for the live head and every waiting head, in parallel.
+    const describeCommit = async (
+      sha: string,
+    ): Promise<CompareCommit | null> => {
+      try {
+        const out = await gh(["api", `repos/${releaseRepo}/commits/${sha}`]);
+        return JSON.parse(out) as CompareCommit;
+      } catch (error) {
+        bb.log.warn(`gh api commit ${shortSha(sha)} failed: ${String(error)}`);
+        return null;
+      }
+    };
+    const waitingShas = base.waiting
+      .map((w) => w.sha)
+      .filter((sha): sha is string => sha !== null);
+    const [liveCommit, ...waitingCommits] = await Promise.all([
+      describeCommit(liveSha),
+      ...waitingShas.map((sha) => describeCommit(sha)),
+    ]);
+    if (liveCommit) {
+      base.live.message = splitCommitTitle(liveCommit.commit.message).message || null;
+    }
+    const bySha = new Map<string, CompareCommit>();
+    for (const c of waitingCommits) if (c) bySha.set(c.sha, c);
+    for (const w of base.waiting) {
+      const c = w.sha ? bySha.get(w.sha) : undefined;
+      if (!c) continue;
+      const title = splitCommitTitle(c.commit.message);
+      const body = c.commit.message.split("\n").slice(1).join("\n").trim();
+      w.title = title.message || null;
+      w.body = body || null;
+      w.prNumber = title.prNumber;
+      w.author = c.author?.login ?? c.commit.author?.name ?? null;
     }
 
     return base;
@@ -868,7 +905,10 @@ export default async function plugin(bb: BbPluginApi) {
         out.push("");
         out.push(`Built, not live (${release.waiting.length})`);
         for (const w of release.waiting) {
-          out.push(`  ${w.shortSha ?? "unknown"} ${w.revision} ${w.createdAt}`);
+          const pr = w.prNumber ? ` (#${w.prNumber})` : "";
+          out.push(
+            `  ${w.shortSha ?? "unknown"} ${w.title ?? w.revision}${pr} by ${w.author ?? "unknown"}, ${w.commitCount} commits since live, built ${w.createdAt}`,
+          );
         }
         const running = release.builds.filter((b) =>
           RUNNING_BUILD.has(b.status),
