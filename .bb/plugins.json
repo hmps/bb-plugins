@@ -26,6 +26,10 @@
     {
       "name": "mobile-large-editor",
       "source": "./plugins/mobile-large-editor"
+    },
+    {
+      "name": "pr-digest",
+      "source": "./plugins/pr-digest"
     }
   ]
 }
