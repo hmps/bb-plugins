@@ -17,6 +17,49 @@ export function sortByCreatedAtDescending<
   );
 }
 
+/** Setting key, defined in server.ts and read with `useSettings`. */
+export const ATTENTION_FIRST_SETTING = "attentionFirst";
+
+/** Any live work at all, which blocks parking and wakes a parked thread. */
+export function isWorking(thread: PluginSidebarThread): boolean {
+  const { activity } = thread;
+  return (
+    activity.workflows > 0 ||
+    activity.backgroundAgents > 0 ||
+    activity.backgroundCommands > 0 ||
+    activity.planMode > 0 ||
+    activity.goals > 0 ||
+    thread.indicator === "runtime" ||
+    thread.indicator === "working-draft"
+  );
+}
+
+/**
+ * Urgency tiers for the "needs attention first" setting. Lower comes first:
+ * a raised hand, then a finished result you have not read, then live work,
+ * then everything you have already read.
+ */
+export function attentionRank(thread: PluginSidebarThread): number {
+  if (thread.hasPendingInteraction) return 0;
+  if (thread.isUnread) return 1;
+  if (isWorking(thread)) return 2;
+  return 3;
+}
+
+/**
+ * The one opt-in exception to the static order: sort by urgency tier and keep
+ * the incoming order inside each tier. With the static sort applied first
+ * this is newest-first inside every tier.
+ */
+export function attentionFirst(
+  threads: readonly PluginSidebarThread[],
+): PluginSidebarThread[] {
+  return threads
+    .map((thread, index) => ({ thread, index, rank: attentionRank(thread) }))
+    .sort((left, right) => left.rank - right.rank || left.index - right.index)
+    .map((entry) => entry.thread);
+}
+
 export function threadDisplayTitle(thread: PluginSidebarThread): string {
   const title = thread.title?.trim();
   if (title) return title;

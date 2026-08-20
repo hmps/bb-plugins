@@ -6,6 +6,7 @@
 // understands. Here, uninstalling the plugin removes its state with it.
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import { ATTENTION_FIRST_SETTING } from "./inbox";
 
 const migrations = [
   `CREATE TABLE IF NOT EXISTS thread_lifecycle (
@@ -63,6 +64,19 @@ export const t3sidebarRpcContract = defineRpcContract({
 export const LIFECYCLE_CHANNEL = "lifecycle";
 
 export default function plugin(bb: BbPluginApi) {
+  // The one exception to the static order, and off by default: with it on,
+  // each shelf sorts by urgency — a raised hand, then an unread result, then
+  // live work, then the rest. The frontend reads the value through `useSettings`.
+  bb.settings.define({
+    [ATTENTION_FIRST_SETTING]: {
+      type: "boolean",
+      label: "Needs attention first",
+      description:
+        "Sort each shelf by urgency: waiting for input, then unread, then working, then the rest.",
+      default: false,
+    },
+  });
+
   const db = bb.storage.database();
   bb.storage.migrate(db, migrations);
 

@@ -63,8 +63,10 @@ const listProps = {
 function render(
   threads: PluginSidebarThread[],
   projects = [{ id: "proj_1", name: "bb", isPersonal: false }],
+  settings: Record<string, string | boolean> = {},
 ) {
   return renderSlot(inbox, listProps, {
+    settings,
     sidebarThreads: { status: "ready", threads, projects },
     // The lifecycle store is the plugin's own backend; an empty one means
     // every thread is active, which is what these list tests are about.
@@ -78,6 +80,34 @@ describe("t3sidebar registration", () => {
   it("registers exactly one thread list", () => {
     expect(app.threadLists).toHaveLength(1);
     expect(inbox.id).toBe("inbox");
+  });
+});
+
+describe("attention first setting", () => {
+  const threads = () => [
+    thread({
+      id: "old",
+      title: "Old waiting",
+      createdAt: 1,
+      hasPendingInteraction: true,
+    }),
+    thread({ id: "new", title: "New quiet", createdAt: 2 }),
+  ];
+  const titles = () =>
+    screen
+      .getAllByRole("listitem")
+      .map(
+        (item) => within(item).getAllByText(/waiting|quiet/i)[0]!.textContent,
+      );
+
+  it("keeps the static order when off", () => {
+    render(threads());
+    expect(titles()).toEqual(["New quiet", "Old waiting"]);
+  });
+
+  it("lifts the waiting thread when on", () => {
+    render(threads(), undefined, { attentionFirst: true });
+    expect(titles()).toEqual(["Old waiting", "New quiet"]);
   });
 });
 

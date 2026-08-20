@@ -4,6 +4,7 @@ import {
   experimental_useSidebarThreads as useSidebarThreads,
   type PluginSidebarThread,
   type PluginThreadListProps,
+  useSettings,
 } from "@get-bb/plugin-sdk/app";
 import { Icon } from "./components/Icon";
 import { cn } from "./lib/utils";
@@ -19,6 +20,8 @@ import { SlimRow } from "./SlimRow";
 import { useLifecycle } from "./useLifecycle";
 import { TRAILING_GLYPH_BOX_CLASS } from "./StatusSlot";
 import {
+  ATTENTION_FIRST_SETTING,
+  attentionFirst,
   filterByProject,
   hideChildrenOfVisibleParents,
   partitionPinned,
@@ -44,6 +47,8 @@ export function ThreadInbox({
   const { status, threads, projects } = useSidebarThreads();
   const actions = useSidebarThreadActions();
   const lifecycle = useLifecycle(threads);
+  const settings = useSettings();
+  const attentionOnTop = settings.values?.[ATTENTION_FIRST_SETTING] === true;
   const [scope, setScope] = useState<string>(ALL_PROJECTS);
   // One clock for every card in a render, quantized to the minute so the
   // labels do not disagree and do not churn on unrelated re-renders.
@@ -87,9 +92,15 @@ export function ThreadInbox({
       else active.push(thread);
     }
     const split = partitionPinned(active);
+    // Static order by default; the setting sorts each shelf by urgency tier,
+    // newest first inside every tier.
+    const order = (list: typeof matched) =>
+      attentionOnTop
+        ? attentionFirst(sortByCreatedAtDescending(list))
+        : sortByCreatedAtDescending(list);
     return {
-      pinned: sortByCreatedAtDescending(split.pinned),
-      inbox: sortByCreatedAtDescending(split.inbox),
+      pinned: order(split.pinned),
+      inbox: order(split.inbox),
       // Soonest wake first: "what comes back next" is the shelf's question.
       snoozed: [...onSnoozeShelf].sort(
         (left, right) =>
@@ -97,7 +108,7 @@ export function ThreadInbox({
       ),
       settled: sortByCreatedAtDescending(onSettledShelf),
     };
-  }, [lifecycle, scope, searchQuery, threads]);
+  }, [attentionOnTop, lifecycle, scope, searchQuery, threads]);
 
   const scopeLabel =
     scope === ALL_PROJECTS

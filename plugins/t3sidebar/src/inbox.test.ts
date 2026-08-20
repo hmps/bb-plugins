@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PluginSidebarThread } from "@get-bb/plugin-sdk";
 import {
+  attentionFirst,
   childrenOf,
   filterByProject,
   hideChildrenOfVisibleParents,
@@ -86,6 +87,33 @@ describe("sortByCreatedAtDescending", () => {
     ];
     sortByCreatedAtDescending(input);
     expect(input.map((t) => t.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("attentionFirst", () => {
+  it("orders by tier: asked, unread, working, read", () => {
+    const read = thread({ id: "read" });
+    const working = thread({ id: "working", indicator: "runtime" });
+    const unread = thread({ id: "unread", isUnread: true });
+    const asked = thread({ id: "asked", hasPendingInteraction: true });
+    expect(
+      attentionFirst([read, working, unread, asked]).map((t) => t.id),
+    ).toEqual(["asked", "unread", "working", "read"]);
+  });
+
+  it("keeps the incoming order inside a tier", () => {
+    const list = [
+      thread({ id: "a", isUnread: true }),
+      thread({ id: "b" }),
+      thread({ id: "c", isUnread: true }),
+      thread({ id: "d" }),
+    ];
+    expect(attentionFirst(list).map((t) => t.id)).toEqual(["a", "c", "b", "d"]);
+  });
+
+  it("leaves a list with one tier untouched", () => {
+    const list = [thread({ id: "a" }), thread({ id: "b" })];
+    expect(attentionFirst(list)).toEqual(list);
   });
 });
 

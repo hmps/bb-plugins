@@ -29,6 +29,11 @@ and hold that place until you park them. Status lives inside each card instead
 of in its position, so the sidebar only moves when you act — no row slides
 away under your cursor because an agent finished something.
 
+One setting, off by default, bends that rule: **Needs attention first**
+(Tools → t3sidebar) sorts each shelf by urgency: threads that wait for your
+input, then unread results, then live work, then everything you have read.
+Inside each tier the order stays newest first.
+
 Three shelves:
 
 - **Inbox** — three-line cards: project and one fixed-width status slot on the
