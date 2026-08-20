@@ -5,7 +5,7 @@ const { execFileMock } = vi.hoisted(() => ({ execFileMock: vi.fn() }));
 
 vi.mock("node:child_process", () => ({ execFile: execFileMock }));
 
-import plugin, { inferBuildTriggerId } from "./server";
+import plugin, { ciSummary, inferBuildTriggerId, mergeStateOf } from "./server";
 
 const LIVE_SHA = "a".repeat(40);
 const TARGET_SHA = "b".repeat(40);
@@ -275,6 +275,92 @@ describe("startBuild", () => {
     await expect(displayRefresh).resolves.toMatchObject({
       unreleased: [{ sha: TARGET_SHA }],
     });
+  });
+});
+
+describe("ciSummary", () => {
+  it("returns none without checks", () => {
+    expect(ciSummary(undefined)).toBe("none");
+    expect(ciSummary(null)).toBe("none");
+    expect(ciSummary([])).toBe("none");
+  });
+
+  it("lets a failure win over everything else", () => {
+    expect(
+      ciSummary([
+        { status: "COMPLETED", conclusion: "SUCCESS" },
+        { status: "IN_PROGRESS", conclusion: "" },
+        { status: "COMPLETED", conclusion: "FAILURE" },
+      ]),
+    ).toBe("failing");
+    expect(ciSummary([{ state: "ERROR" }])).toBe("failing");
+  });
+
+  it("reports pending while any check still runs", () => {
+    expect(
+      ciSummary([
+        { status: "COMPLETED", conclusion: "SUCCESS" },
+        { status: "IN_PROGRESS", conclusion: "" },
+      ]),
+    ).toBe("pending");
+    expect(ciSummary([{ state: "PENDING" }])).toBe("pending");
+  });
+
+  it("ignores a failed run that a newer run of the same check supersedes", () => {
+    expect(
+      ciSummary([
+        {
+          status: "COMPLETED",
+          conclusion: "FAILURE",
+          name: "verify",
+          workflowName: "CI",
+          startedAt: "2026-08-20T05:00:00Z",
+        },
+        {
+          status: "COMPLETED",
+          conclusion: "SUCCESS",
+          name: "verify",
+          workflowName: "CI",
+          startedAt: "2026-08-20T06:00:00Z",
+        },
+      ]),
+    ).toBe("passing");
+  });
+
+  it("keeps unnamed checks distinct", () => {
+    expect(
+      ciSummary([
+        { status: "COMPLETED", conclusion: "SUCCESS" },
+        { status: "COMPLETED", conclusion: "FAILURE" },
+      ]),
+    ).toBe("failing");
+  });
+
+  it("counts skipped and neutral checks as passing", () => {
+    expect(
+      ciSummary([
+        { status: "COMPLETED", conclusion: "SUCCESS" },
+        { status: "COMPLETED", conclusion: "SKIPPED" },
+        { status: "COMPLETED", conclusion: "NEUTRAL" },
+        { state: "SUCCESS" },
+      ]),
+    ).toBe("passing");
+  });
+});
+
+describe("mergeStateOf", () => {
+  it("maps conflicts from either field", () => {
+    expect(mergeStateOf("CONFLICTING", undefined)).toBe("conflicts");
+    expect(mergeStateOf("MERGEABLE", "DIRTY")).toBe("conflicts");
+  });
+
+  it("maps the GitHub merge states", () => {
+    expect(mergeStateOf("MERGEABLE", "CLEAN")).toBe("clean");
+    expect(mergeStateOf("MERGEABLE", "BLOCKED")).toBe("blocked");
+    expect(mergeStateOf("MERGEABLE", "BEHIND")).toBe("behind");
+    expect(mergeStateOf("MERGEABLE", "UNSTABLE")).toBe("unstable");
+    expect(mergeStateOf("UNKNOWN", "UNKNOWN")).toBe("unknown");
+    expect(mergeStateOf(undefined, undefined)).toBe("unknown");
   });
 });
 

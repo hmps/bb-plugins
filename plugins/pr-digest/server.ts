@@ -14,6 +14,26 @@ import { join } from "node:path";
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 
+const ciStateSchema = z.enum(["passing", "failing", "pending", "none"]);
+
+export type CiState = z.infer<typeof ciStateSchema>;
+
+/**
+ * Merge readiness from GitHub's point of view. `clean` means GitHub lets the
+ * PR merge right now; `blocked` means a required rule (review, check) is not
+ * met; `unstable` means mergeable while a non-required check fails or runs.
+ */
+const mergeStateSchema = z.enum([
+  "clean",
+  "conflicts",
+  "blocked",
+  "behind",
+  "unstable",
+  "unknown",
+]);
+
+export type MergeState = z.infer<typeof mergeStateSchema>;
+
 const prSchema = z.object({
   number: z.number().int(),
   title: z.string(),
@@ -35,6 +55,9 @@ const prSchema = z.object({
   additions: z.number().int(),
   deletions: z.number().int(),
   branch: z.string(),
+  /** Summary of the head commit's checks; `none` when no checks report. */
+  ci: ciStateSchema,
+  mergeState: mergeStateSchema,
 });
 
 export type PullRequest = z.infer<typeof prSchema>;
@@ -155,7 +178,8 @@ export const rpcContract = defineRpcContract({
   },
 });
 
-const CACHE_KEY = "digest.v2";
+// v3: rows gained `ci` and `mergeState`; older payloads fail the contract.
+const CACHE_KEY = "digest.v3";
 const CACHE_TTL_MS = 5 * 60_000;
 const GH_LIMIT = 50;
 const RELEASE_CACHE_KEY = "release.v4";
@@ -197,6 +221,39 @@ interface GhActor {
   login: string;
 }
 
+/**
+ * One entry of `statusCheckRollup`. Check runs carry `status`/`conclusion`
+ * and `workflowName`/`name`; legacy commit statuses carry `state`/`context`.
+ */
+interface GhCheck {
+  status?: string;
+  conclusion?: string;
+  state?: string;
+  name?: string;
+  workflowName?: string;
+  context?: string;
+  startedAt?: string;
+}
+
+/**
+ * The rollup keeps superseded runs: a re-run adds a second entry with the
+ * same workflow and job name. Keep only the newest entry per check, like the
+ * GitHub UI does.
+ */
+function latestChecks(checks: GhCheck[]): GhCheck[] {
+  const byKey = new Map<string, GhCheck>();
+  checks.forEach((check, index) => {
+    const key =
+      check.context ??
+      `${check.workflowName ?? ""}/${check.name ?? String(index)}`;
+    const previous = byKey.get(key);
+    if (!previous || (check.startedAt ?? "") >= (previous.startedAt ?? "")) {
+      byKey.set(key, check);
+    }
+  });
+  return [...byKey.values()];
+}
+
 interface GhPrRow {
   number: number;
   title: string;
@@ -212,9 +269,58 @@ interface GhPrRow {
   additions: number;
   deletions: number;
   headRefName: string;
+  mergeable?: string;
+  mergeStateStatus?: string;
+  statusCheckRollup?: GhCheck[] | null;
 }
 
 const DECISIONS = new Set(["APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED"]);
+
+const FAILED_CHECK = new Set([
+  "FAILURE",
+  "ERROR",
+  "TIMED_OUT",
+  "CANCELLED",
+  "ACTION_REQUIRED",
+  "STARTUP_FAILURE",
+]);
+
+/** One state for the whole rollup: any failure wins, then any pending. */
+export function ciSummary(checks: GhCheck[] | null | undefined): CiState {
+  if (!checks || checks.length === 0) return "none";
+  let pending = false;
+  for (const check of latestChecks(checks)) {
+    const outcome = (check.conclusion || check.state || "").toUpperCase();
+    if (FAILED_CHECK.has(outcome)) return "failing";
+    // A check run without a conclusion still runs; a commit status can be
+    // PENDING or EXPECTED. SKIPPED and NEUTRAL count as passing.
+    if (!outcome || outcome === "PENDING" || outcome === "EXPECTED") {
+      pending = true;
+    }
+  }
+  return pending ? "pending" : "passing";
+}
+
+export function mergeStateOf(
+  mergeable: string | undefined,
+  mergeStateStatus: string | undefined,
+): MergeState {
+  if (mergeable === "CONFLICTING" || mergeStateStatus === "DIRTY") {
+    return "conflicts";
+  }
+  switch (mergeStateStatus) {
+    case "CLEAN":
+      return "clean";
+    case "BLOCKED":
+      return "blocked";
+    case "BEHIND":
+      return "behind";
+    case "UNSTABLE":
+      return "unstable";
+    default:
+      return "unknown";
+  }
+}
 
 function toPullRequest(
   row: GhPrRow,
@@ -241,6 +347,8 @@ function toPullRequest(
     additions: row.additions ?? 0,
     deletions: row.deletions ?? 0,
     branch: row.headRefName ?? "",
+    ci: ciSummary(row.statusCheckRollup),
+    mergeState: mergeStateOf(row.mergeable, row.mergeStateStatus),
   };
 }
 
@@ -523,7 +631,7 @@ function isReady(revision: RunRevision): boolean {
 }
 
 const OPEN_FIELDS =
-  "number,title,url,author,createdAt,updatedAt,isDraft,reviewDecision,reviewRequests,labels,additions,deletions,headRefName";
+  "number,title,url,author,createdAt,updatedAt,isDraft,reviewDecision,reviewRequests,labels,additions,deletions,headRefName,mergeable,mergeStateStatus,statusCheckRollup";
 const MERGED_FIELDS =
   "number,title,url,author,createdAt,updatedAt,mergedAt,isDraft,reviewDecision,labels,additions,deletions,headRefName";
 
@@ -1339,6 +1447,12 @@ export default async function plugin(bb: BbPluginApi) {
           pr.isDraft ? "draft" : "",
           pr.reviewDecision.toLowerCase().replace("_", " "),
           pr.reviewRequested ? "review requested" : "",
+          pr.ci !== "none" ? `ci ${pr.ci}` : "",
+          pr.mergeState === "conflicts"
+            ? "conflicts"
+            : pr.mergeState === "clean" && !pr.isDraft
+              ? "ready to merge"
+              : "",
         ]
           .filter(Boolean)
           .join(", ");

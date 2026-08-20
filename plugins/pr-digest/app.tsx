@@ -229,8 +229,7 @@ function RefreshControl({
   );
 }
 
-function statePill(pr: PullRequest, kind: Kind): ReactNode {
-  if (kind !== "open") return null;
+function statePill(pr: PullRequest): ReactNode {
   if (pr.reviewRequested) {
     return (
       <Pill tone="accent" icon="UserRound">
@@ -256,6 +255,55 @@ function statePill(pr: PullRequest, kind: Kind): ReactNode {
   return null;
 }
 
+function ciPill(pr: PullRequest): ReactNode {
+  if (pr.ci === "failing") {
+    return (
+      <Pill tone="danger" icon="CircleX">
+        CI failing
+      </Pill>
+    );
+  }
+  if (pr.ci === "pending") {
+    return (
+      <Pill tone="muted" icon="Clock">
+        CI running
+      </Pill>
+    );
+  }
+  if (pr.ci === "passing") {
+    return (
+      <Pill tone="accent" icon="CircleCheck">
+        CI green
+      </Pill>
+    );
+  }
+  return null;
+}
+
+/**
+ * The pills of one open PR row. `ready to merge` (GitHub's CLEAN state)
+ * already implies green CI, so it replaces the CI pill; a conflict is shown
+ * next to the CI state because both facts matter.
+ */
+function openPrPills(pr: PullRequest): ReactNode {
+  const ready = pr.mergeState === "clean" && !pr.isDraft;
+  return (
+    <>
+      {pr.mergeState === "conflicts" ? (
+        <Pill tone="danger" icon="AlertCircle">
+          conflicts
+        </Pill>
+      ) : ready ? (
+        <Pill tone="accent" icon="GitMerge">
+          ready to merge
+        </Pill>
+      ) : null}
+      {ready ? null : ciPill(pr)}
+      {statePill(pr)}
+    </>
+  );
+}
+
 function statusIcon(pr: PullRequest, kind: Kind): IconName {
   if (kind === "merged") return "GitMerge";
   return pr.isDraft ? "GitPullRequestDraft" : "GitPullRequest";
@@ -274,7 +322,7 @@ function PrRow({
   viewer: string;
   now: number;
 }) {
-  const pill = statePill(pr, kind);
+  const pills = kind === "open" ? openPrPills(pr) : null;
   const showAuthor = viewer === "" || pr.author !== viewer;
   return (
     <li>
@@ -312,7 +360,11 @@ function PrRow({
             <span className="font-mono tabular-nums">
               +{pr.additions} −{pr.deletions}
             </span>
-            {pill ? <span className="ml-auto">{pill}</span> : null}
+            {pills ? (
+              <span className="ml-auto flex shrink-0 items-center gap-1">
+                {pills}
+              </span>
+            ) : null}
           </span>
         </span>
       </a>
