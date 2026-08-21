@@ -30,6 +30,10 @@
     {
       "name": "pr-digest",
       "source": "./plugins/pr-digest"
+    },
+    {
+      "name": "github-plus",
+      "source": "./plugins/github-plus"
     }
   ]
 }

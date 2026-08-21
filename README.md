@@ -12,6 +12,7 @@ bb plugin install t3sidebar@hmps
 bb plugin install usage-tracker@hmps
 bb plugin install ios-status-bar@hmps
 bb plugin install mobile-large-editor@hmps
+bb plugin install github-plus@hmps
 ```
 
 `bb plugin update` moves installed plugins to newer releases inside the range
@@ -27,6 +28,7 @@ that `marketplace.json` lists.
 | [usage-tracker](plugins/usage-tracker) | Fork of MateoCerquetella's usage-tracker (MIT) with model-scoped (Fable) quota rows. |
 | [ios-status-bar](plugins/ios-status-bar) | Paints the iOS Safari status bar area with the app background instead of black. |
 | [mobile-large-editor](plugins/mobile-large-editor) | Adds the "Make prompt box larger" toggle to thread composers on mobile. |
+| [github-plus](plugins/github-plus) | Fork of bb's builtin github plugin with an editable review prompt and provider/model picker before an agent review starts. |
 
 ## Layout
 

@@ -143,6 +143,30 @@
           "tagPrefix": "mobile-large-editor/"
         }
       }
+    },
+    {
+      "id": "github-plus",
+      "displayName": "GitHub+",
+      "description": "Fork of bb's builtin github plugin. \"Review with agent\" on a PR opens a dialog with the editable review prompt and a provider/model picker before the thread spawns.",
+      "icon": "Github",
+      "tags": [
+        "github",
+        "code-review",
+        "agents",
+        "interface"
+      ],
+      "author": {
+        "name": "Hampus Persson",
+        "github": "hmps"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/hmps/bb-plugins.git",
+          "subdir": "plugins/github-plus",
+          "range": "^0.1.0",
+          "tagPrefix": "github-plus/"
+        }
+      }
     }
   ]
 }
