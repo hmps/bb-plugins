@@ -67,11 +67,13 @@ export function StatusGlyph({
         />
       );
     case "waiting-for-input":
+      // A raised hand is the one state that blocks on the user, so it gets a
+      // warm accent instead of the muted grey the rest of the row wears.
       return (
         <Icon
           name="CircleQuestion"
           aria-label={aria}
-          className={cn(shared, "text-muted-foreground/75")}
+          className={cn(shared, "text-[oklch(0.78_0.17_75)]")}
         />
       );
     case "runtime":
@@ -105,12 +107,16 @@ export function StatusGlyph({
       // The notification dot, in a box the size of every other glyph, the way
       // bb centers its own trailing indicators. Right-aligned on its own, a
       // 5px dot would sit ~4px off the column the icons share.
+      //
+      // Vivid on purpose: this is the one glyph that says "come back here",
+      // and bb's muted timeline blue did not pull the eye across a long list.
+      // A soft halo doubles its footprint without moving the column.
       return (
         <span
           aria-label={aria}
           className={cn("flex items-center justify-center", shared)}
         >
-          <span className="size-[5px] rounded-full bg-timeline-accent" />
+          <span className="size-1.5 rounded-full bg-[oklch(0.68_0.2_262)] shadow-[0_0_0_3px_oklch(0.68_0.2_262/0.28)]" />
         </span>
       );
     case "none":

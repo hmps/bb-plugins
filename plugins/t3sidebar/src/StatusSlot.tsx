@@ -26,19 +26,41 @@ export const TRAILING_GLYPH_BOX_CLASS =
 /**
  * Status OR age, never both: the glyph already implies the row is current, and
  * the age only earns its place once the thread has nothing to say.
+ *
+ * A thread with nothing of its own to say borrows its children's state. The
+ * flat list hides those children, so this slot is where their work surfaces —
+ * otherwise a parent that only waits on a child reads as idle. The thread's
+ * own indicator always wins: it is the row the user clicked on.
  */
 export function StatusOrTime({
   thread,
   now,
+  workingChildren = 0,
+  childrenNeedYou = 0,
 }: {
   thread: PluginSidebarThread;
   /** Quantized clock, shared by every row in one render. */
   now: number;
+  /** Descendants doing live work; zero borrows nothing. */
+  workingChildren?: number;
+  /** Descendants with a raised hand; outranks their work. */
+  childrenNeedYou?: number;
 }) {
   if (hasStatusGlyph(thread.indicator)) {
     return (
       <StatusGlyph indicator={thread.indicator} label={thread.indicatorLabel} />
     );
+  }
+  if (childrenNeedYou > 0) {
+    return (
+      <StatusGlyph
+        indicator="waiting-for-input"
+        label="Child thread needs input"
+      />
+    );
+  }
+  if (workingChildren > 0) {
+    return <StatusGlyph indicator="runtime" label="Child thread working" />;
   }
   return (
     <span className="tabular-nums text-2xs text-muted-foreground">

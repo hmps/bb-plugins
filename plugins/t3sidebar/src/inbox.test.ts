@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { PluginSidebarThread } from "@get-bb/plugin-sdk";
 import {
   attentionFirst,
+  attentionRank,
   childrenOf,
+  descendantSignals,
   filterByProject,
   hideChildrenOfVisibleParents,
+  isOnWorkingShelf,
   parentOf,
   partitionPinned,
   searchThreadsByTitle,
@@ -48,6 +51,14 @@ function thread(
     ...overrides,
   };
 }
+
+const BUSY_ACTIVITY = {
+  workflows: 0,
+  backgroundAgents: 1,
+  backgroundCommands: 0,
+  planMode: 0,
+  goals: 0,
+};
 
 describe("sortByCreatedAtDescending", () => {
   it("puts the newest thread first", () => {
@@ -236,5 +247,145 @@ describe("parentOf", () => {
   it("returns null when the parent row is gone", () => {
     const threads = [thread({ id: "child", parentThreadId: "deleted" })];
     expect(parentOf(threads, "child")).toBeNull();
+  });
+});
+
+describe("isOnWorkingShelf", () => {
+  it("is true for live work that does not need the user", () => {
+    expect(isOnWorkingShelf(thread({ indicator: "runtime" }))).toBe(true);
+    expect(
+      isOnWorkingShelf(
+        thread({
+          activity: {
+            workflows: 0,
+            backgroundAgents: 1,
+            backgroundCommands: 0,
+            planMode: 0,
+            goals: 0,
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("is false for a thread at rest", () => {
+    expect(isOnWorkingShelf(thread())).toBe(false);
+    expect(isOnWorkingShelf(thread({ indicator: "unread-success" }))).toBe(
+      false,
+    );
+  });
+
+  it("is false while the work is blocked on the user", () => {
+    expect(
+      isOnWorkingShelf(
+        thread({ indicator: "runtime", hasPendingInteraction: true }),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("descendantSignals", () => {
+  it("counts a working child for its parent", () => {
+    const signals = descendantSignals([
+      thread({ id: "parent" }),
+      thread({ id: "child", parentThreadId: "parent", indicator: "runtime" }),
+    ]);
+    expect(signals.get("parent")).toEqual({ working: 1, needsYou: 0 });
+    expect(signals.get("child")).toBeUndefined();
+  });
+
+  // The parent is hidden behind the grandparent in the flat list, so the
+  // grandparent is the only row that can speak for the work.
+  it("rolls a grandchild up to every ancestor", () => {
+    const signals = descendantSignals([
+      thread({ id: "grandparent" }),
+      thread({ id: "parent", parentThreadId: "grandparent" }),
+      thread({
+        id: "child",
+        parentThreadId: "parent",
+        hasPendingInteraction: true,
+      }),
+    ]);
+    expect(signals.get("parent")).toEqual({ working: 0, needsYou: 1 });
+    expect(signals.get("grandparent")).toEqual({ working: 0, needsYou: 1 });
+  });
+
+  it("ignores an archived child", () => {
+    const signals = descendantSignals([
+      thread({ id: "parent" }),
+      thread({
+        id: "child",
+        parentThreadId: "parent",
+        indicator: "runtime",
+        isArchived: true,
+      }),
+    ]);
+    expect(signals.get("parent")).toBeUndefined();
+  });
+
+  // The project picker scopes the list, never the rollup: a child spawned
+  // into another project is still work the parent waits for.
+  it("counts a child in another project", () => {
+    const signals = descendantSignals([
+      thread({ id: "parent", projectId: "p1" }),
+      thread({
+        id: "child",
+        projectId: "p2",
+        parentThreadId: "parent",
+        activity: BUSY_ACTIVITY,
+      }),
+    ]);
+    expect(signals.get("parent")).toEqual({ working: 1, needsYou: 0 });
+  });
+
+  it("adds up siblings", () => {
+    const signals = descendantSignals([
+      thread({ id: "parent" }),
+      thread({ id: "a", parentThreadId: "parent", indicator: "runtime" }),
+      thread({ id: "b", parentThreadId: "parent", indicator: "runtime" }),
+    ]);
+    expect(signals.get("parent")).toEqual({ working: 2, needsYou: 0 });
+  });
+
+  it("terminates on a cyclic parent chain", () => {
+    const signals = descendantSignals([
+      thread({ id: "a", parentThreadId: "b", indicator: "runtime" }),
+      thread({ id: "b", parentThreadId: "a" }),
+    ]);
+    expect(signals.get("b")).toEqual({ working: 1, needsYou: 0 });
+  });
+});
+
+describe("rolled-up child activity", () => {
+  const tree = (child: Partial<PluginSidebarThread>) => [
+    thread({ id: "parent" }),
+    thread({ id: "child", parentThreadId: "parent", ...child }),
+  ];
+
+  it("puts a parent with a working child on the Working shelf", () => {
+    const threads = tree({ indicator: "runtime" });
+    const signals = descendantSignals(threads);
+    expect(isOnWorkingShelf(threads[0]!, signals)).toBe(true);
+  });
+
+  // A raised hand below still blocks on the user, so the parent stays in the
+  // inbox where the user will see it.
+  it("keeps a parent whose child asks a question in the inbox", () => {
+    const threads = tree({ hasPendingInteraction: true });
+    const signals = descendantSignals(threads);
+    expect(isOnWorkingShelf(threads[0]!, signals)).toBe(false);
+    expect(attentionRank(threads[0]!, signals)).toBe(0);
+  });
+
+  it("ranks a parent with a working child as working", () => {
+    const threads = tree({ indicator: "runtime" });
+    expect(attentionRank(threads[0]!, descendantSignals(threads))).toBe(2);
+  });
+
+  // Every existing caller passes no signals; they must read the thread alone.
+  it("reads the thread alone without signals", () => {
+    const threads = tree({ indicator: "runtime" });
+    expect(isOnWorkingShelf(threads[0]!)).toBe(false);
+    expect(attentionRank(threads[0]!)).toBe(3);
   });
 });

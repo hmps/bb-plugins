@@ -30,6 +30,9 @@ export function ThreadCard({
   onSettle,
   onSnooze,
   now,
+  queuedMessages = 0,
+  workingChildren = 0,
+  childrenNeedYou = 0,
 }: {
   thread: PluginSidebarThread;
   projectName: string | null;
@@ -41,6 +44,14 @@ export function ThreadCard({
   onSnooze: (snoozedUntil: number) => void;
   /** Quantized clock, so every card in one render agrees on "now". */
   now: number;
+  /** Messages waiting in the thread's queue; zero draws nothing. */
+  queuedMessages?: number;
+  /** Descendants doing live work. The flat list hides them, so this row
+      speaks for them: their count is a chip and their spinner fills an empty
+      status slot. */
+  workingChildren?: number;
+  /** Descendants with a raised hand; they outrank their own work. */
+  childrenNeedYou?: number;
 }) {
   const actions = useSidebarThreadActions();
   const { splitProps, layout } = useSidebarThreadSplit(thread.id);
@@ -116,7 +127,12 @@ export function ThreadCard({
                 canPark && "pointer-fine:group-hover/card:hidden",
               )}
             >
-              <StatusOrTime thread={thread} now={now} />
+              <StatusOrTime
+                thread={thread}
+                now={now}
+                workingChildren={workingChildren}
+                childrenNeedYou={childrenNeedYou}
+              />
             </span>
           </div>
           <div
@@ -155,6 +171,20 @@ export function ThreadCard({
               <ActivityCount
                 label="background agents"
                 count={thread.activity.backgroundAgents}
+              />
+            ) : null}
+            {workingChildren > 0 ? (
+              <ActivityCount
+                label="child threads working"
+                count={workingChildren}
+                icon="Branch"
+              />
+            ) : null}
+            {queuedMessages > 0 ? (
+              <ActivityCount
+                label="queued messages"
+                count={queuedMessages}
+                icon="Queue"
               />
             ) : null}
             {pullRequest ? (
@@ -213,12 +243,22 @@ function ParkButton({
   );
 }
 
-function ActivityCount({ label, count }: { label: string; count: number }) {
+function ActivityCount({
+  label,
+  count,
+  icon,
+}: {
+  label: string;
+  count: number;
+  /** A glyph in front of the number, so two counts on one line read apart. */
+  icon?: Extract<IconName, "Queue" | "Branch">;
+}) {
   return (
     <span
       aria-label={`${count} ${label}`}
-      className="shrink-0 rounded bg-muted px-1 font-mono text-2xs text-muted-foreground"
+      className="flex shrink-0 items-center gap-0.5 rounded bg-muted px-1 font-mono text-2xs text-muted-foreground"
     >
+      {icon ? <Icon name={icon} className="size-2.5" aria-hidden /> : null}
       {count}
     </span>
   );

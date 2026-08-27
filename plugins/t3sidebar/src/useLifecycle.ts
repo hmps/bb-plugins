@@ -9,7 +9,12 @@ import {
   type ThreadLifecycleRow,
   type ThreadShelf,
 } from "./lifecycle";
-import { isWorking } from "./inbox";
+import {
+  descendantSignals,
+  isWorking,
+  isWorkingTree,
+  needsYouTree,
+} from "./inbox";
 
 export { isWorking };
 
@@ -38,6 +43,9 @@ export function useLifecycle(
     () => new Map(),
   );
   const [now, setNow] = useState(() => Date.now());
+  // A parent is only as idle as its children: the flat list hides them, so
+  // parking one would hide live work behind a row that looks finished.
+  const descendants = useMemo(() => descendantSignals(threads), [threads]);
 
   // Responses can land out of order (a mutation's refresh racing a realtime
   // one), and an older list would silently restore state the user just
@@ -78,8 +86,8 @@ export function useLifecycle(
 
   return useMemo<LifecycleApi>(() => {
     const signalsFor = (thread: PluginSidebarThread) => ({
-      hasPendingInteraction: thread.hasPendingInteraction,
-      isWorking: isWorking(thread),
+      hasPendingInteraction: needsYouTree(thread, descendants),
+      isWorking: isWorkingTree(thread, descendants),
       isUnread: thread.isUnread,
       latestAttentionAt: thread.latestAttentionAt,
     });
@@ -103,5 +111,5 @@ export function useLifecycle(
         void rpc.call("snooze", { threadId, snoozedUntil });
       },
     };
-  }, [now, refresh, rows, rpc]);
+  }, [descendants, now, refresh, rows, rpc]);
 }

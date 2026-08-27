@@ -9,8 +9,10 @@ import {
   Clock01Icon,
   ComputerTerminal01Icon,
   Edit02Icon,
+  GitBranchIcon,
   HelpCircleIcon,
   Loading03Icon,
+  ChatDelay01Icon,
   Target02Icon,
   Tick02Icon,
   UserAdd01Icon,
@@ -20,6 +22,7 @@ import { cn } from "../lib/utils";
 
 const ICON_MAP = {
   ArrowTurnBackward: ArrowTurnBackwardIcon,
+  Branch: GitBranchIcon,
   Check: Tick02Icon,
   ChevronDown: ArrowDown01Icon,
   ChevronLeft: ArrowLeft01Icon,
@@ -30,6 +33,7 @@ const ICON_MAP = {
   Edit: Edit02Icon,
   ListTodo: CheckListIcon,
   Loading: Loading03Icon,
+  Queue: ChatDelay01Icon,
   Target: Target02Icon,
   Terminal: ComputerTerminal01Icon,
   UserRoundPlus: UserAdd01Icon,

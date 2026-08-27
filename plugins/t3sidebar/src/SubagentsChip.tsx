@@ -8,7 +8,7 @@ import {
 import { cn } from "./lib/utils";
 import { Disc } from "./Disc";
 import { StatusGlyph } from "./StatusGlyph";
-import { childrenOf, threadDisplayTitle } from "./inbox";
+import { childrenOf, isWorking, threadDisplayTitle } from "./inbox";
 
 const MAX_DISCS = 3;
 
@@ -31,8 +31,15 @@ export function SubagentsChip({
   const children = childrenOf(threads, threadId);
   if (children.length === 0) return null;
 
+  // What the user must act on first, then what is still running, then the
+  // plain count. A raised hand outranks the work behind it.
   const needsYou = children.some((child) => child.hasPendingInteraction);
-  const label = needsYou ? "Needs you" : `${children.length} children`;
+  const working = children.filter((child) => isWorking(child)).length;
+  const label = needsYou
+    ? "Needs you"
+    : working > 0
+      ? `${working} working`
+      : `${children.length} children`;
 
   return (
     <span className="relative">

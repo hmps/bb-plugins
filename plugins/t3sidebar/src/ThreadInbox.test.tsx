@@ -58,6 +58,8 @@ const listProps = {
   isCompactViewport: false,
   onNavigate: () => {},
   searchQuery: "",
+  // The host list, for a plugin that delegates; this one never renders it.
+  Original: () => null,
 };
 
 function render(
@@ -302,8 +304,11 @@ describe("parking threads", () => {
         }),
       },
     });
-    expect(await screen.findByText("Still running")).toBeDefined();
+    // Live work wins over the settle: the row lands on Working, never Settled.
+    const shelf = await screen.findByRole("region", { name: "Working" });
     expect(screen.queryByRole("region", { name: "Settled" })).toBeNull();
+    fireEvent.click(within(shelf).getByRole("button"));
+    expect(within(shelf).getByText("Still running")).toBeDefined();
     expect(screen.queryByLabelText("Settle thread")).toBeNull();
   });
 
@@ -360,6 +365,169 @@ describe("parking threads", () => {
     fireEvent.click(within(shelf).getByRole("button"));
     expect(within(shelf).getByText("2h")).toBeDefined();
     expect(within(shelf).getByLabelText("Wake thread now")).toBeDefined();
+  });
+});
+
+describe("working shelf", () => {
+  const busy = (overrides: Partial<PluginSidebarThread> = {}) =>
+    thread({
+      id: "thr_busy",
+      title: "Still running",
+      indicator: "runtime",
+      indicatorLabel: "Thread working",
+      ...overrides,
+    });
+
+  it("collapses a working thread onto the Working shelf", async () => {
+    render([busy(), thread({ id: "thr_quiet", title: "Quiet" })]);
+    const shelf = await screen.findByRole("region", { name: "Working" });
+    expect(within(shelf).getByText(/Working \(1\)/)).toBeDefined();
+    expect(screen.queryByText("Still running")).toBeNull();
+    expect(screen.getByText("Quiet")).toBeDefined();
+    fireEvent.click(within(shelf).getByRole("button"));
+    expect(within(shelf).getByText("Still running")).toBeDefined();
+    // The spinner speaks for the row, and there is nothing to restore: bb
+    // moves it back on its own.
+    expect(within(shelf).getByLabelText("Thread working")).toBeDefined();
+    expect(
+      within(shelf).queryByRole("button", { name: /wake|un-settle/i }),
+    ).toBeNull();
+  });
+
+  it("keeps a working thread that is waiting on the user in the inbox", async () => {
+    render([busy({ hasPendingInteraction: true })]);
+    expect(await screen.findByText("Still running")).toBeDefined();
+    expect(screen.queryByRole("region", { name: "Working" })).toBeNull();
+  });
+
+  it("keeps a pinned working thread on the Pinned shelf", async () => {
+    render([busy({ isPinned: true })]);
+    const pinned = await screen.findByRole("region", { name: "Pinned" });
+    expect(within(pinned).getByText("Still running")).toBeDefined();
+    expect(screen.queryByRole("region", { name: "Working" })).toBeNull();
+  });
+
+  it("leaves working threads in the inbox when the setting is off", async () => {
+    render([busy()], undefined, { workingShelf: false });
+    expect(await screen.findByText("Still running")).toBeDefined();
+    expect(screen.queryByRole("region", { name: "Working" })).toBeNull();
+  });
+});
+
+describe("child thread rollup", () => {
+  // The flat list hides a child whose parent is on screen, so the parent card
+  // is the only place its work can show. Without the rollup the parent reads
+  // as idle while the child runs.
+  const withChild = (child: Partial<PluginSidebarThread>) => [
+    thread({ id: "thr_parent", title: "Parent thread" }),
+    thread({
+      id: "thr_child",
+      title: "Child thread",
+      parentThreadId: "thr_parent",
+      ...child,
+    }),
+  ];
+
+  it("moves a parent with a working child onto the Working shelf", async () => {
+    render(withChild({ indicator: "runtime", indicatorLabel: "Child works" }));
+    const shelf = await screen.findByRole("region", { name: "Working" });
+    fireEvent.click(within(shelf).getByRole("button"));
+    expect(within(shelf).getByText("Parent thread")).toBeDefined();
+    // The child never gets a row of its own; the parent counts it instead.
+    expect(screen.queryByText("Child thread")).toBeNull();
+    expect(
+      within(shelf).getByLabelText("1 child threads working"),
+    ).toBeDefined();
+    // The parent has no indicator of its own, so it borrows the spinner.
+    expect(within(shelf).getByLabelText("Child thread working")).toBeDefined();
+  });
+
+  it("keeps a parent whose child asks a question in the inbox", async () => {
+    render(withChild({ hasPendingInteraction: true }));
+    expect(await screen.findByText("Parent thread")).toBeDefined();
+    expect(screen.queryByRole("region", { name: "Working" })).toBeNull();
+    expect(screen.getByLabelText("Child thread needs input")).toBeDefined();
+  });
+
+  it("cannot park a parent while its child works", async () => {
+    render(withChild({ indicator: "runtime" }));
+    expect(await screen.findByRole("region", { name: "Working" }));
+    expect(screen.queryByLabelText("Settle thread")).toBeNull();
+    expect(screen.queryByLabelText("Snooze until tomorrow")).toBeNull();
+  });
+
+  // A grandchild is two rows down and hidden twice over; the visible root has
+  // to speak for it.
+  it("counts a grandchild on the visible root", async () => {
+    render([
+      thread({ id: "thr_root", title: "Root thread" }),
+      thread({ id: "thr_mid", parentThreadId: "thr_root", title: "Middle" }),
+      thread({
+        id: "thr_leaf",
+        parentThreadId: "thr_mid",
+        title: "Leaf",
+        indicator: "runtime",
+      }),
+    ]);
+    const shelf = await screen.findByRole("region", { name: "Working" });
+    fireEvent.click(within(shelf).getByRole("button"));
+    expect(
+      within(shelf).getByLabelText("1 child threads working"),
+    ).toBeDefined();
+  });
+
+  it("draws nothing for a parent whose children are at rest", async () => {
+    render(withChild({}));
+    expect(await screen.findByText("Parent thread")).toBeDefined();
+    expect(screen.queryByLabelText(/child threads working/)).toBeNull();
+    expect(screen.getByLabelText("Settle thread")).toBeDefined();
+  });
+});
+
+describe("queued messages", () => {
+  const withQueue = (counts: Record<string, number>) =>
+    renderSlot(inbox, listProps, {
+      sidebarThreads: {
+        status: "ready",
+        threads: [thread({ id: "thr_q", title: "Queued work" })],
+        projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
+      },
+      rpc: {
+        listLifecycle: () => ({ rows: [] }),
+        queueCounts: (input: unknown) => {
+          const { threadIds } = input as { threadIds: string[] };
+          return {
+            counts: threadIds.map((threadId) => ({
+              threadId,
+              count: counts[threadId] ?? 0,
+            })),
+          };
+        },
+      },
+    });
+
+  it("shows the count once the backend answers", async () => {
+    withQueue({ thr_q: 2 });
+    expect(await screen.findByLabelText("2 queued messages")).toBeDefined();
+  });
+
+  it("draws nothing for an empty queue", async () => {
+    withQueue({});
+    expect(await screen.findByText("Queued work")).toBeDefined();
+    await waitFor(() =>
+      expect(screen.queryByLabelText(/queued messages/)).toBeNull(),
+    );
+  });
+
+  it("follows the realtime signal when the queue changes", async () => {
+    const harness = withQueue({ thr_q: 1 });
+    expect(await screen.findByLabelText("1 queued messages")).toBeDefined();
+    await harness.emitRealtime("queue", { threadId: "thr_q", count: 3 });
+    expect(await screen.findByLabelText("3 queued messages")).toBeDefined();
+    await harness.emitRealtime("queue", { threadId: "thr_q", count: 0 });
+    await waitFor(() =>
+      expect(screen.queryByLabelText(/queued messages/)).toBeNull(),
+    );
   });
 });
 
@@ -504,14 +672,19 @@ describe("card metadata", () => {
   // Status and age share one slot. A row that shows both puts a variable-width
   // label in the column, and no two rows line up.
   it("replaces the age label with the status glyph while work runs", async () => {
-    render([
-      thread({
-        id: "thr_run",
-        indicator: "runtime",
-        indicatorLabel: "Agent is working",
-        updatedAt: Date.now() - (3 * 3_600_000 + 60_000),
-      }),
-    ]);
+    // The Working shelf would hide the card; this test is about the card.
+    render(
+      [
+        thread({
+          id: "thr_run",
+          indicator: "runtime",
+          indicatorLabel: "Agent is working",
+          updatedAt: Date.now() - (3 * 3_600_000 + 60_000),
+        }),
+      ],
+      undefined,
+      { workingShelf: false },
+    );
     expect(await screen.findByLabelText("Agent is working")).toBeDefined();
     expect(screen.queryByText("3h")).toBeNull();
   });
@@ -558,14 +731,18 @@ describe("attention states", () => {
   // Running work is the one state the user does NOT have to act on, so it gets
   // the neutral spinner and no notification dot.
   it("shows the spinner, not a dot, while work runs", async () => {
-    render([
-      thread({
-        id: "thr_busy",
-        isUnread: true,
-        indicator: "runtime",
-        indicatorLabel: "Thread working",
-      }),
-    ]);
+    render(
+      [
+        thread({
+          id: "thr_busy",
+          isUnread: true,
+          indicator: "runtime",
+          indicatorLabel: "Thread working",
+        }),
+      ],
+      undefined,
+      { workingShelf: false },
+    );
     expect(await screen.findByLabelText("Thread working")).toBeDefined();
     expect(screen.queryByLabelText("Unread thread succeeded")).toBeNull();
   });

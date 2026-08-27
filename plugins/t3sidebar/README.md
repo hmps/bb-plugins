@@ -34,7 +34,7 @@ One setting, off by default, bends that rule: **Needs attention first**
 input, then unread results, then live work, then everything you have read.
 Inside each tier the order stays newest first.
 
-Three shelves:
+Four shelves:
 
 - **Inbox** — three-line cards: project and one fixed-width status slot on the
   first line; title on the second; then branch (or the machine, when a thread
@@ -43,15 +43,27 @@ Three shelves:
 
   One slot, one marker, one width, so the whole column lines up. The slot
   shows the status glyph while a thread has something to say, and the age
-  ("now", "7m") once it does not. The glyphs are bb's own: the red circle-x
-  for a failure, the circle-question for a raised hand, the spinner for live
-  work, and a blue notification dot for a thread that finished while you were
-  not looking. Both lists sit in the same window, so they speak one language.
+  ("now", "7m") once it does not. The glyphs are bb's own shapes: the red
+  circle-x for a failure, the circle-question for a raised hand, the spinner
+  for live work, and a notification dot for a thread that finished while you
+  were not looking. The two that wait on you — the dot and the raised hand —
+  are drawn vivid (blue with a halo, amber) so they pull the eye down a long
+  list; the rest stay muted.
+
+  The third line also counts what is queued: a small bubble-and-clock badge
+  with the number of messages waiting in the thread's queue. The sidebar's
+  thread view has no queue field, so the plugin's backend reads it over the
+  SDK once per thread and then pushes changes as bb reports them.
 
   Snooze and Settle sit in the status slot on hover. A touch screen has no
   hover, so there they stay on, and a long-press on any row opens the menu
   with the same actions.
 
+- **Working** — live work that does not need you, folded to one line above
+  the inbox. Open it and the threads show as full cards, the same as the inbox. A thread that starts working leaves the inbox for this shelf, and comes
+  back the moment it finishes or asks you something. Pinned threads stay
+  pinned. The setting **Working shelf** (Tools → t3sidebar, on by default)
+  turns this off, and working threads then stay in the inbox.
 - **Snoozed** — hidden until a wake time you chose. A snoozed thread comes
   back early if it starts working or asks you something.
 - **Settled** — work you are done with, collapsed to one line each.
@@ -75,18 +87,28 @@ and in both chips.
 An orphan — a child whose parent is deleted — stays in the list, and its
 header shows no parent chip.
 
+A hidden child must not make its parent read as idle, so the parent card rolls
+its whole branch up: a branch badge counts the descendants that work, and the
+empty status slot borrows their glyph — the raised hand when one asks you
+something, the spinner when one only runs. The parent then follows them onto
+the Working shelf, and stays unparkable while they work. The rollup reads every
+thread, not the scoped list, so a child spawned into another project still
+counts. The children chip in the header follows the same order: "Needs you",
+then "N working", then the plain count.
+
 ## What it demonstrates
 
-| Plugin API                                         | Used for                                                                                    |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `experimental_threadList`                          | the sidebar's scrolling list (bb keeps the New-thread button, search, nav rows, and footer) |
-| `experimental_threadHeaderAction`                  | the two header chips: children on a parent, and the way back on a child                     |
-| `experimental_useSidebarThreads`                   | live threads and projects, from the host's own cache                                        |
-| `experimental_useSidebarThreadActions`             | open, open-in-split, new thread                                                             |
-| `experimental_useSidebarThreadSplit`               | dragging a card out to a split pane                                                         |
-| `experimental_useSidebarThreadPullRequest`         | the `#412` badge, coloured by bb's attention state                                          |
-| `@radix-ui/react-context-menu` (shimmed)           | this plugin's own right-click menu, built on the action hook                                |
-| `bb.storage.database()` + `bb.rpc` + `bb.realtime` | the settled/snoozed store                                                                   |
+| Plugin API                                           | Used for                                                                                    |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `experimental_threadList`                            | the sidebar's scrolling list (bb keeps the New-thread button, search, nav rows, and footer) |
+| `experimental_threadHeaderAction`                    | the two header chips: children on a parent, and the way back on a child                     |
+| `experimental_useSidebarThreads`                     | live threads and projects, from the host's own cache                                        |
+| `experimental_useSidebarThreadActions`               | open, open-in-split, new thread                                                             |
+| `experimental_useSidebarThreadSplit`                 | dragging a card out to a split pane                                                         |
+| `experimental_useSidebarThreadPullRequest`           | the `#412` badge, coloured by bb's attention state                                          |
+| `@radix-ui/react-context-menu` (shimmed)             | this plugin's own right-click menu, built on the action hook                                |
+| `bb.storage.database()` + `bb.rpc` + `bb.realtime`   | the settled/snoozed store                                                                   |
+| `bb.sdk.threads.queuedMessages` + `bb.sdk.subscribe` | queued-message counts, cached per thread and pushed on `queue-changed`                      |
 
 The plugin API ships **no components**. Status glyphs and the right-click menu
 are both this plugin's own: `indicator` arrives as data, and every menu item is

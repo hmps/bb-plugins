@@ -18,12 +18,16 @@ import {
 import { ThreadCard } from "./ThreadCard";
 import { SlimRow } from "./SlimRow";
 import { useLifecycle } from "./useLifecycle";
+import { useQueueCounts } from "./useQueueCounts";
 import { TRAILING_GLYPH_BOX_CLASS } from "./StatusSlot";
 import {
   ATTENTION_FIRST_SETTING,
+  WORKING_SHELF_SETTING,
   attentionFirst,
+  descendantSignals,
   filterByProject,
   hideChildrenOfVisibleParents,
+  isOnWorkingShelf,
   partitionPinned,
   searchThreadsByTitle,
   sortByCreatedAtDescending,
@@ -47,8 +51,13 @@ export function ThreadInbox({
   const { status, threads, projects } = useSidebarThreads();
   const actions = useSidebarThreadActions();
   const lifecycle = useLifecycle(threads);
+  const queueCounts = useQueueCounts(threads);
   const settings = useSettings();
   const attentionOnTop = settings.values?.[ATTENTION_FIRST_SETTING] === true;
+  // On unless the user turns it off: the setting's default lives in server.ts,
+  // and `values` is undefined until settings load, so only an explicit false
+  // disables the shelf.
+  const workingShelfOn = settings.values?.[WORKING_SHELF_SETTING] !== false;
   const [scope, setScope] = useState<string>(ALL_PROJECTS);
   // One clock for every card in a render, quantized to the minute so the
   // labels do not disagree and do not churn on unrelated re-renders.
@@ -63,6 +72,7 @@ export function ThreadInbox({
     return () => clearInterval(timer);
   }, []);
   const now = nowMinute * 60_000;
+  const [showWorking, setShowWorking] = useState(false);
   const [showSnoozed, setShowSnoozed] = useState(false);
   const [showSettled, setShowSettled] = useState(false);
 
@@ -71,7 +81,11 @@ export function ThreadInbox({
     [projects],
   );
 
-  const { pinned, inbox, snoozed, settled } = useMemo(() => {
+  // Computed over every thread, never the scoped list: a child spawned into
+  // another project still works for the parent this list shows.
+  const descendants = useMemo(() => descendantSignals(threads), [threads]);
+
+  const { pinned, inbox, working, snoozed, settled } = useMemo(() => {
     const scoped = filterByProject(
       visibleInboxThreads(threads),
       scope === ALL_PROJECTS ? null : scope,
@@ -83,12 +97,21 @@ export function ThreadInbox({
       searchQuery,
     );
     const active: typeof matched = [];
+    const onWorkingShelf: typeof matched = [];
     const onSnoozeShelf: typeof matched = [];
     const onSettledShelf: typeof matched = [];
     for (const thread of matched) {
       const shelf = lifecycle.shelfFor(thread);
       if (shelf === "snoozed") onSnoozeShelf.push(thread);
       else if (shelf === "settled") onSettledShelf.push(thread);
+      // Live work that does not need you leaves the inbox for its own shelf.
+      // A pinned thread stays put: pinning is the user's own ordering.
+      else if (
+        workingShelfOn &&
+        !thread.isPinned &&
+        isOnWorkingShelf(thread, descendants)
+      )
+        onWorkingShelf.push(thread);
       else active.push(thread);
     }
     const split = partitionPinned(active);
@@ -96,11 +119,12 @@ export function ThreadInbox({
     // newest first inside every tier.
     const order = (list: typeof matched) =>
       attentionOnTop
-        ? attentionFirst(sortByCreatedAtDescending(list))
+        ? attentionFirst(sortByCreatedAtDescending(list), descendants)
         : sortByCreatedAtDescending(list);
     return {
       pinned: order(split.pinned),
       inbox: order(split.inbox),
+      working: sortByCreatedAtDescending(onWorkingShelf),
       // Soonest wake first: "what comes back next" is the shelf's question.
       snoozed: [...onSnoozeShelf].sort(
         (left, right) =>
@@ -108,7 +132,15 @@ export function ThreadInbox({
       ),
       settled: sortByCreatedAtDescending(onSettledShelf),
     };
-  }, [attentionOnTop, lifecycle, scope, searchQuery, threads]);
+  }, [
+    attentionOnTop,
+    descendants,
+    lifecycle,
+    scope,
+    searchQuery,
+    threads,
+    workingShelfOn,
+  ]);
 
   const scopeLabel =
     scope === ALL_PROJECTS
@@ -154,7 +186,11 @@ export function ThreadInbox({
           >
             Could not load threads.
           </p>
-        ) : pinned.length + inbox.length + snoozed.length + settled.length ===
+        ) : pinned.length +
+            inbox.length +
+            working.length +
+            snoozed.length +
+            settled.length ===
           0 ? (
           <p
             role="status"
@@ -177,12 +213,46 @@ export function ThreadInbox({
                     onSettle={() => lifecycle.settle(thread.id)}
                     onSnooze={(until) => lifecycle.snooze(thread.id, until)}
                     now={now}
+                    queuedMessages={queueCounts.get(thread.id) ?? 0}
+                    workingChildren={descendants.get(thread.id)?.working ?? 0}
+                    childrenNeedYou={descendants.get(thread.id)?.needsYou ?? 0}
                   />
                 ))}
               </Shelf>
             ) : null}
+            {/* Above the inbox, collapsed: one line says how much is
+                running, and the cards that may need you start right below. */}
+            {working.length > 0 ? (
+              <CollapsibleShelf
+                label="Working"
+                count={working.length}
+                expanded={showWorking}
+                onToggle={() => setShowWorking((open) => !open)}
+              >
+                {/* Full cards, not slim rows: a working thread is still
+                    current work, and its branch, counts, and PR matter. */}
+                {working.map((thread) => (
+                  <ThreadCard
+                    key={thread.id}
+                    thread={thread}
+                    projectName={projectNameById.get(thread.projectId) ?? null}
+                    isActive={thread.id === activeThreadId}
+                    canPark={lifecycle.canPark(thread)}
+                    onNavigate={onNavigate}
+                    onSettle={() => lifecycle.settle(thread.id)}
+                    onSnooze={(until) => lifecycle.snooze(thread.id, until)}
+                    now={now}
+                    queuedMessages={queueCounts.get(thread.id) ?? 0}
+                    workingChildren={descendants.get(thread.id)?.working ?? 0}
+                    childrenNeedYou={descendants.get(thread.id)?.needsYou ?? 0}
+                  />
+                ))}
+              </CollapsibleShelf>
+            ) : null}
             {inbox.length > 0 ? (
-              <Shelf label={pinned.length > 0 ? "Inbox" : null}>
+              <Shelf
+                label={pinned.length > 0 || working.length > 0 ? "Inbox" : null}
+              >
                 {inbox.map((thread) => (
                   <ThreadCard
                     key={thread.id}
@@ -194,6 +264,9 @@ export function ThreadInbox({
                     onSettle={() => lifecycle.settle(thread.id)}
                     onSnooze={(until) => lifecycle.snooze(thread.id, until)}
                     now={now}
+                    queuedMessages={queueCounts.get(thread.id) ?? 0}
+                    workingChildren={descendants.get(thread.id)?.working ?? 0}
+                    childrenNeedYou={descendants.get(thread.id)?.needsYou ?? 0}
                   />
                 ))}
               </Shelf>
@@ -226,9 +299,55 @@ export function ThreadInbox({
 }
 
 /**
- * A collapsed shelf of parked threads. The header stays while anything is
- * parked — the count is the whole footprint when collapsed — and the shelf
- * vanishes entirely at zero.
+ * A shelf that folds to one line. The header stays while anything is on it —
+ * the count is the whole footprint when collapsed — and the caller hides the
+ * shelf entirely at zero.
+ */
+function CollapsibleShelf({
+  label,
+  count,
+  expanded,
+  onToggle,
+  children,
+}: {
+  label: string;
+  count: number;
+  expanded: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <section aria-label={label}>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        // Padded like a card, so the chevron ends on the same right edge as
+        // every row's status and provider glyph.
+        className="mt-3 flex w-full items-center gap-2 px-2.5 pb-1 text-left"
+      >
+        <span className="text-2xs font-medium text-muted-foreground/70">
+          {expanded ? label : `${label} (${count})`}
+        </span>
+        <span className="h-px flex-1 bg-sidebar-border" />
+        <span className={TRAILING_GLYPH_BOX_CLASS}>
+          <Icon
+            name="ChevronDown"
+            className={cn(
+              "size-3 text-muted-foreground/70 transition-transform",
+              expanded && "rotate-180",
+            )}
+          />
+        </span>
+      </button>
+      {expanded ? <ul className="flex flex-col gap-px">{children}</ul> : null}
+    </section>
+  );
+}
+
+/**
+ * A collapsed shelf of parked threads, one slim row each. Density comes from
+ * the user parking work, so these rows earn the smaller size.
  */
 function ParkedShelf({
   label,
@@ -252,50 +371,29 @@ function ParkedShelf({
   if (threads.length === 0) return null;
   const now = Date.now();
   return (
-    <section aria-label={label}>
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={expanded}
-        // Padded like a card, so the chevron ends on the same right edge as
-        // every row's status and provider glyph.
-        className="mt-3 flex w-full items-center gap-2 px-2.5 pb-1 text-left"
-      >
-        <span className="text-2xs font-medium text-muted-foreground/70">
-          {expanded ? label : `${label} (${threads.length})`}
-        </span>
-        <span className="h-px flex-1 bg-sidebar-border" />
-        <span className={TRAILING_GLYPH_BOX_CLASS}>
-          <Icon
-            name="ChevronDown"
-            className={cn(
-              "size-3 text-muted-foreground/70 transition-transform",
-              expanded && "rotate-180",
-            )}
-          />
-        </span>
-      </button>
-      {expanded ? (
-        <ul className="flex flex-col gap-px">
-          {threads.map((thread) => (
-            <SlimRow
-              key={thread.id}
-              thread={thread}
-              isActive={thread.id === activeThreadId}
-              shelf={shelf}
-              wakeAt={lifecycle.wakeAtFor(thread)}
-              now={now}
-              onNavigate={onNavigate}
-              onRestore={() =>
-                shelf === "snoozed"
-                  ? lifecycle.unsnooze(thread.id)
-                  : lifecycle.unsettle(thread.id)
-              }
-            />
-          ))}
-        </ul>
-      ) : null}
-    </section>
+    <CollapsibleShelf
+      label={label}
+      count={threads.length}
+      expanded={expanded}
+      onToggle={onToggle}
+    >
+      {threads.map((thread) => (
+        <SlimRow
+          key={thread.id}
+          thread={thread}
+          isActive={thread.id === activeThreadId}
+          shelf={shelf}
+          wakeAt={lifecycle.wakeAtFor(thread)}
+          now={now}
+          onNavigate={onNavigate}
+          onRestore={() =>
+            shelf === "snoozed"
+              ? lifecycle.unsnooze(thread.id)
+              : lifecycle.unsettle(thread.id)
+          }
+        />
+      ))}
+    </CollapsibleShelf>
   );
 }
 
