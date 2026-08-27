@@ -20,13 +20,22 @@ export function sortByCreatedAtDescending<
 /** Setting key, defined in server.ts and read with `useSettings`. */
 export const ATTENTION_FIRST_SETTING = "attentionFirst";
 
-/** Any live work at all, which blocks parking and wakes a parked thread. */
+/**
+ * Agent work in progress, which blocks parking and wakes a parked thread.
+ *
+ * `activity.backgroundCommands` is deliberately NOT part of this. A background
+ * command is a detached process the agent left behind — a dev server, a
+ * watcher, a test run — and it outlives the turn that started it. Worse, a
+ * command that never reports completion leaves the count stuck above zero on
+ * an idle thread forever. Either way it says nothing about whether the agent
+ * is working, and `descendantSignals` would then pin the whole branch above it
+ * as "working" for good. The other counts all end with the turn.
+ */
 export function isWorking(thread: PluginSidebarThread): boolean {
   const { activity } = thread;
   return (
     activity.workflows > 0 ||
     activity.backgroundAgents > 0 ||
-    activity.backgroundCommands > 0 ||
     activity.planMode > 0 ||
     activity.goals > 0 ||
     thread.indicator === "runtime" ||

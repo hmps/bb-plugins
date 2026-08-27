@@ -310,6 +310,26 @@ describe("descendantSignals", () => {
     expect(signals.get("grandparent")).toEqual({ working: 0, needsYou: 1 });
   });
 
+  // A background command outlives its turn, and one that never reports back
+  // leaves the count stuck on an idle child. That must not pin the parent.
+  it("ignores a child that only has a background command", () => {
+    const signals = descendantSignals([
+      thread({ id: "parent" }),
+      thread({
+        id: "child",
+        parentThreadId: "parent",
+        activity: {
+          workflows: 0,
+          backgroundAgents: 0,
+          backgroundCommands: 1,
+          planMode: 0,
+          goals: 0,
+        },
+      }),
+    ]);
+    expect(signals.get("parent")).toBeUndefined();
+  });
+
   it("ignores an archived child", () => {
     const signals = descendantSignals([
       thread({ id: "parent" }),
