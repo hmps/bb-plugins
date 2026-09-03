@@ -210,7 +210,7 @@ export default function plugin(bb: BbPluginApi) {
       settle(threadId);
       // The lifecycle store and BB's thread store cannot share a transaction.
       // If this fails, keep the settlement and reject so the caller can retry.
-      await bb.sdk.threads.archive({ threadId });
+      await bb.sdk.threads.archiveAll({ threadId });
       return { ok: true };
     },
     async unsettle({ threadId }) {

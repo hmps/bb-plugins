@@ -54,7 +54,7 @@ function setup(
     realtime: { publish: () => {} },
     sdk: {
       threads: {
-        archive: async ({ threadId }: { threadId: string }) => {
+        archiveAll: async ({ threadId }: { threadId: string }) => {
           archiveCalls.push(threadId);
           return await archive(threadId);
         },
