@@ -121,14 +121,14 @@ export function ThreadCard({
                   onActivate={snoozeUntilTomorrow}
                 />
                 <ParkButton
-                  label="Settle thread"
-                  icon="Check"
-                  onActivate={onSettle}
-                />
-                <ParkButton
                   label="Settle and archive thread"
                   icon="Archive"
                   onActivate={onSettleAndArchive}
+                />
+                <ParkButton
+                  label="Settle thread"
+                  icon="Check"
+                  onActivate={onSettle}
                 />
               </span>
             ) : null}
