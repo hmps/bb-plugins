@@ -55,9 +55,10 @@ Four shelves:
   thread view has no queue field, so the plugin's backend reads it over the
   SDK once per thread and then pushes changes as bb reports them.
 
-  Snooze and Settle sit in the status slot on hover. A touch screen has no
-  hover, so there they stay on, and a long-press on any row opens the menu
-  with the same actions.
+  Snooze, Settle, and **Settle and archive** sit in the status slot on hover.
+  The last action records the settlement, then archives the BB thread. A touch
+  screen has no hover, so the controls stay on, and a long-press on any row
+  opens the menu with the same actions.
 
 - **Working** — live work that does not need you, folded to one line above
   the inbox. Open it and the threads show as full cards, the same as the inbox. A thread that starts working leaves the inbox for this shelf, and comes

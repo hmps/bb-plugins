@@ -4,7 +4,6 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "jsx": "react-jsx",
     "lib": [
       "ES2022",
       "DOM"
@@ -22,10 +21,8 @@
   },
   "include": [
     "server.ts",
-    "app.tsx",
-    "components",
+    "app.ts",
     "lib",
-    "hooks",
     "*.test.ts",
     "vitest.config.ts"
   ]

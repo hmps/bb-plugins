@@ -211,6 +211,7 @@ export function ThreadInbox({
                     canPark={lifecycle.canPark(thread)}
                     onNavigate={onNavigate}
                     onSettle={() => lifecycle.settle(thread.id)}
+                    onSettleAndArchive={() => lifecycle.settleAndArchive(thread.id)}
                     onSnooze={(until) => lifecycle.snooze(thread.id, until)}
                     now={now}
                     queuedMessages={queueCounts.get(thread.id) ?? 0}
@@ -240,6 +241,7 @@ export function ThreadInbox({
                     canPark={lifecycle.canPark(thread)}
                     onNavigate={onNavigate}
                     onSettle={() => lifecycle.settle(thread.id)}
+                    onSettleAndArchive={() => lifecycle.settleAndArchive(thread.id)}
                     onSnooze={(until) => lifecycle.snooze(thread.id, until)}
                     now={now}
                     queuedMessages={queueCounts.get(thread.id) ?? 0}
@@ -262,6 +264,7 @@ export function ThreadInbox({
                     canPark={lifecycle.canPark(thread)}
                     onNavigate={onNavigate}
                     onSettle={() => lifecycle.settle(thread.id)}
+                    onSettleAndArchive={() => lifecycle.settleAndArchive(thread.id)}
                     onSnooze={(until) => lifecycle.snooze(thread.id, until)}
                     now={now}
                     queuedMessages={queueCounts.get(thread.id) ?? 0}
@@ -273,6 +276,7 @@ export function ThreadInbox({
             ) : null}
             <ParkedShelf
               label="Snoozed"
+              icon="Clock"
               threads={snoozed}
               expanded={showSnoozed}
               onToggle={() => setShowSnoozed((open) => !open)}
@@ -283,6 +287,7 @@ export function ThreadInbox({
             />
             <ParkedShelf
               label="Settled"
+              icon="Check"
               threads={settled}
               expanded={showSettled}
               onToggle={() => setShowSettled((open) => !open)}
@@ -305,12 +310,14 @@ export function ThreadInbox({
  */
 function CollapsibleShelf({
   label,
+  icon,
   count,
   expanded,
   onToggle,
   children,
 }: {
   label: string;
+  icon?: "Clock" | "Check";
   count: number;
   expanded: boolean;
   onToggle: () => void;
@@ -326,6 +333,7 @@ function CollapsibleShelf({
         // every row's status and provider glyph.
         className="mt-3 flex w-full items-center gap-2 px-2.5 pb-1 text-left"
       >
+        {icon ? <Icon name={icon} className="size-3 text-muted-foreground/70" /> : null}
         <span className="text-2xs font-medium text-muted-foreground/70">
           {expanded ? label : `${label} (${count})`}
         </span>
@@ -351,6 +359,7 @@ function CollapsibleShelf({
  */
 function ParkedShelf({
   label,
+  icon,
   threads,
   expanded,
   onToggle,
@@ -360,6 +369,7 @@ function ParkedShelf({
   onNavigate,
 }: {
   label: string;
+  icon: "Clock" | "Check";
   threads: readonly PluginSidebarThread[];
   expanded: boolean;
   onToggle: () => void;
@@ -373,6 +383,7 @@ function ParkedShelf({
   return (
     <CollapsibleShelf
       label={label}
+      icon={icon}
       count={threads.length}
       expanded={expanded}
       onToggle={onToggle}

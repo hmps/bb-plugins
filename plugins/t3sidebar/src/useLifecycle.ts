@@ -23,6 +23,7 @@ export interface LifecycleApi {
   canPark(thread: PluginSidebarThread): boolean;
   wakeAtFor(thread: PluginSidebarThread): number | null;
   settle(threadId: string): void;
+  settleAndArchive(threadId: string): void;
   unsettle(threadId: string): void;
   snooze(threadId: string, snoozedUntil: number): void;
   unsnooze(threadId: string): void;
@@ -94,7 +95,7 @@ export function useLifecycle(
     // One read per mutation: the write publishes on the realtime channel, and
     // that subscription already triggers a refresh for every client.
     const mutate = async (
-      method: "settle" | "unsettle" | "unsnooze",
+      method: "settle" | "settleAndArchive" | "unsettle" | "unsnooze",
       threadId: string,
     ) => {
       await rpc.call(method, { threadId });
@@ -105,6 +106,7 @@ export function useLifecycle(
       canPark: (thread) => canPark(signalsFor(thread)),
       wakeAtFor: (thread) => rows.get(thread.id)?.snoozedUntil ?? null,
       settle: (threadId) => void mutate("settle", threadId),
+      settleAndArchive: (threadId) => void mutate("settleAndArchive", threadId),
       unsettle: (threadId) => void mutate("unsettle", threadId),
       unsnooze: (threadId) => void mutate("unsnooze", threadId),
       snooze: (threadId, snoozedUntil) => {

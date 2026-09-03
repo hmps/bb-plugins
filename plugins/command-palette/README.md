@@ -1,32 +1,38 @@
 # Command Palette
 
-A ⌘K palette for BB. It searches your threads, opens one, starts a new thread,
-and runs the common thread actions without leaving the keyboard.
+Thread actions in bb's own quick palette. Press `Mod+Shift+P`, type, and act on
+the thread you are looking at.
 
-## Shortcut
+bb 0.40 owns the quick palette and its thread search, so this plugin no longer
+draws a palette of its own. It registers rows the host renders, matches, and
+orders, listed under the plugin's name beside bb's commands.
 
-Press `⌘K` (`Ctrl+K` on Windows and Linux) anywhere in the BB app. Press it
-again, or `Esc`, to close the palette.
+## What it adds
 
-## What it does
+Every row acts on the thread in view. When no thread is in view, the rows do
+not appear.
 
-- **Search threads.** Type to match a thread title or its project name. Press
-  `Enter` to open the thread.
-- **Start a thread.** "New thread" opens the composer. "New thread in
-  \<project\>" opens the composer inside that project.
-- **Run thread actions.** Press `Tab` or `→` on a highlighted thread to see its
-  actions: Open, Pin / Unpin, Mark read / unread, Archive, Settle / Unsettle,
-  Snooze, and Unsnooze. Press `←` or `Backspace` on an empty input to go back.
+- **Pin thread**, **Unpin thread**
+- **Mark thread read**, **Mark thread unread**
+- **Archive thread**
+- **Settle thread**, **Settle and archive thread**, **Unsettle thread**,
+  **Unsnooze thread**
+- **Snooze thread 1 hour**, **3 hours**, **until tomorrow 9:00**, **until next
+  Monday 9:00**
 
-Pin and read actions keep the palette open and refresh the list. Every other
-action closes it.
+A palette row has a fixed title and cannot read thread state, so both
+directions of a toggle get their own row. Type "pin" to narrow to the pair.
+
+Snooze needs a wake time and a row cannot ask for one, so each preset is its
+own row. The wake time is computed when you pick the row, not at startup.
 
 ## What it needs
 
-- BB `>=0.39`.
-- The **t3sidebar** plugin, but only for Settle, Unsettle, Snooze, and Unsnooze.
-  That plugin owns the settled / snoozed state. When it is not installed or not
-  enabled, the palette hides those actions and everything else keeps working.
+- BB `>=0.40`.
+- The **t3sidebar** plugin, but only for Settle, Settle and archive, Unsettle,
+  Snooze, and Unsnooze. That plugin owns the settled / snoozed state. The
+  plugin probes for it once at startup; when it is not installed or not enabled,
+  those rows stay hidden and everything else keeps working.
 
 ## Install
 

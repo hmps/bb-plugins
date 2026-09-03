@@ -3,12 +3,6 @@
 const HOUR_MS = 3_600_000;
 const MORNING_HOUR = 9;
 
-export interface SnoozeChoice {
-  id: string;
-  label: string;
-  snoozedUntil: number;
-}
-
 /** `hours` from now. */
 export function inHours(now: number, hours: number): number {
   return now + hours * HOUR_MS;
@@ -36,20 +30,31 @@ export function nextMondayMorning(now: number): number {
   return date.getTime();
 }
 
-/** The choices the palette offers, newest-first by wake time. */
-export function snoozeChoices(now: number): SnoozeChoice[] {
-  return [
-    { id: "snooze-1h", label: "Snooze 1 hour", snoozedUntil: inHours(now, 1) },
-    { id: "snooze-3h", label: "Snooze 3 hours", snoozedUntil: inHours(now, 3) },
-    {
-      id: "snooze-tomorrow",
-      label: "Snooze until tomorrow 9:00",
-      snoozedUntil: tomorrowMorning(now),
-    },
-    {
-      id: "snooze-monday",
-      label: "Snooze until next Monday 9:00",
-      snoozedUntil: nextMondayMorning(now),
-    },
-  ];
+/**
+ * The snooze rows the palette registers.
+ *
+ * Registration runs once at startup, so an id and a label must not depend on
+ * the clock. `snoozeWakeTime` resolves the time when the user picks a row.
+ */
+export const snoozePresets = [
+  { id: "snooze-1h", label: "Snooze thread 1 hour" },
+  { id: "snooze-3h", label: "Snooze thread 3 hours" },
+  { id: "snooze-tomorrow", label: "Snooze thread until tomorrow 9:00" },
+  { id: "snooze-monday", label: "Snooze thread until next Monday 9:00" },
+] as const;
+
+export type SnoozePresetId = (typeof snoozePresets)[number]["id"];
+
+/** When `preset` wakes a thread, measured from `now`. */
+export function snoozeWakeTime(preset: SnoozePresetId, now: number): number {
+  switch (preset) {
+    case "snooze-1h":
+      return inHours(now, 1);
+    case "snooze-3h":
+      return inHours(now, 3);
+    case "snooze-tomorrow":
+      return tomorrowMorning(now);
+    case "snooze-monday":
+      return nextMondayMorning(now);
+  }
 }

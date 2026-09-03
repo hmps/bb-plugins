@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { inHours, nextMondayMorning, snoozeChoices, tomorrowMorning } from "./snooze";
+import {
+  inHours,
+  nextMondayMorning,
+  snoozePresets,
+  snoozeWakeTime,
+  tomorrowMorning,
+} from "./snooze";
 
 /** A Wednesday, 14:30 local time. */
 const wednesday = new Date(2026, 7, 19, 14, 30, 0, 0).getTime();
@@ -30,11 +36,15 @@ describe("snooze times", () => {
     expect(at).toBeGreaterThan(monday);
   });
 
-  it("offers four choices, all in the future", () => {
-    const choices = snoozeChoices(wednesday);
-    expect(choices).toHaveLength(4);
-    for (const choice of choices) {
-      expect(choice.snoozedUntil).toBeGreaterThan(wednesday);
+  it("offers four presets, all waking in the future", () => {
+    expect(snoozePresets).toHaveLength(4);
+    for (const preset of snoozePresets) {
+      expect(snoozeWakeTime(preset.id, wednesday)).toBeGreaterThan(wednesday);
     }
+  });
+
+  it("gives every preset a unique id", () => {
+    const ids = snoozePresets.map((preset) => preset.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });

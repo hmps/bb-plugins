@@ -1,24 +1,14 @@
 /**
  * Backend RPC over raw fetch.
  *
- * The palette mounts its own React root from a content script, and the SDK's
- * `useRpc` hook only works inside a plugin slot component. A same-origin fetch
+ * The palette rows run outside React — the host calls `run` after it closes the
+ * palette — so the SDK's `useRpc` hook is unreachable. A same-origin fetch
  * against the plugin's own RPC route is the supported path from here.
  */
-import type { rpcContract } from "../server";
 
 const BASE = "/api/v1/plugins/command-palette/rpc";
 
 type Envelope<T> = { ok: true; result: T } | { ok: false; error: unknown };
-
-export type ListThreadsResult = ReturnType<
-  (typeof rpcContract)["listThreads"]["output"]["parse"]
->;
-export type ListProjectsResult = ReturnType<
-  (typeof rpcContract)["listProjects"]["output"]["parse"]
->;
-export type PaletteThread = ListThreadsResult["threads"][number];
-export type PaletteProject = ListProjectsResult["projects"][number];
 
 async function call<T>(method: string, input: unknown): Promise<T> {
   const response = await fetch(`${BASE}/${method}`, {
@@ -40,8 +30,8 @@ function describe(error: unknown): string {
 }
 
 export const rpc = {
-  listThreads: () => call<ListThreadsResult>("listThreads", null),
-  listProjects: () => call<ListProjectsResult>("listProjects", null),
+  lifecycleAvailable: () =>
+    call<{ available: boolean }>("lifecycleAvailable", null),
   threadAction: (threadId: string, action: string) =>
     call<{ ok: true }>("threadAction", { threadId, action }),
   snooze: (threadId: string, snoozedUntil: number) =>

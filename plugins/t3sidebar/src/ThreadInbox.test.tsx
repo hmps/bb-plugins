@@ -547,6 +547,7 @@ describe("row context menu", () => {
       "Open in split",
       "Snooze until tomorrow",
       "Settle",
+      "Settle and archive",
       "Mark unread",
       "Pin",
       "Archive",
@@ -577,6 +578,28 @@ describe("row context menu", () => {
     const menu = await screen.findByRole("menu", { name: "Thread actions" });
     fireEvent.click(within(menu).getByText("Settle"));
     await waitFor(() => expect(settled).toBe("thr_menu_park"));
+  });
+
+  it("settles and archives a thread from the context menu", async () => {
+    let settledAndArchived: string | null = null;
+    renderSlot(inbox, listProps, {
+      sidebarThreads: {
+        status: "ready",
+        threads: [thread({ id: "thr_menu_archive", title: "Archive me" })],
+        projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
+      },
+      rpc: {
+        listLifecycle: () => ({ rows: [] }),
+        settleAndArchive: (input) => {
+          settledAndArchived = (input as { threadId: string }).threadId;
+          return { ok: true };
+        },
+      },
+    });
+    fireEvent.contextMenu(await screen.findByText("Archive me"));
+    const menu = await screen.findByRole("menu", { name: "Thread actions" });
+    fireEvent.click(within(menu).getByText("Settle and archive"));
+    await waitFor(() => expect(settledAndArchived).toBe("thr_menu_archive"));
   });
 
   it("offers wake from a snoozed row's context menu", async () => {

@@ -53,6 +53,10 @@ export const t3sidebarRpcContract = defineRpcContract({
     }),
   },
   settle: { input: threadIdSchema, output: z.object({ ok: z.boolean() }) },
+  settleAndArchive: {
+    input: threadIdSchema,
+    output: z.object({ ok: z.boolean() }),
+  },
   unsettle: { input: threadIdSchema, output: z.object({ ok: z.boolean() }) },
   snooze: {
     input: z.object({
@@ -140,6 +144,17 @@ export default function plugin(bb: BbPluginApi) {
     bb.realtime.publish(LIFECYCLE_CHANNEL, { threadId });
   };
 
+  const settle = (threadId: string): void => {
+    // Settling clears any snooze: they are two answers to the same question,
+    // and holding both would make the shelf order ambiguous.
+    write({
+      threadId,
+      settledAt: Date.now(),
+      snoozedUntil: null,
+      snoozedAt: null,
+    });
+  };
+
   // Queue counts, cached per thread. The sidebar has no queue field, and
   // one list call per visible thread on every render would be far too many,
   // so a thread is read once and then only again when bb reports a change.
@@ -188,14 +203,14 @@ export default function plugin(bb: BbPluginApi) {
       return { counts };
     },
     async settle({ threadId }) {
-      // Settling clears any snooze: they are two answers to the same
-      // question, and holding both would make the shelf order ambiguous.
-      write({
-        threadId,
-        settledAt: Date.now(),
-        snoozedUntil: null,
-        snoozedAt: null,
-      });
+      settle(threadId);
+      return { ok: true };
+    },
+    async settleAndArchive({ threadId }) {
+      settle(threadId);
+      // The lifecycle store and BB's thread store cannot share a transaction.
+      // If this fails, keep the settlement and reject so the caller can retry.
+      await bb.sdk.threads.archive({ threadId });
       return { ok: true };
     },
     async unsettle({ threadId }) {

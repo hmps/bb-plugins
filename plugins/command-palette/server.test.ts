@@ -3,50 +3,23 @@ import { createFakePluginHost, makeThreadResponse } from "@get-bb/plugin-sdk/tes
 import plugin from "./server";
 
 interface SetupOptions {
-  /** Rows t3sidebar reports, or an error to simulate it being absent. */
-  lifecycle?: { rows: unknown[] } | "unavailable";
+  /** Whether t3sidebar answers, or an error to simulate it being absent. */
+  lifecycle?: "available" | "unavailable";
 }
 
-const threads = [
-  makeThreadResponse({
-    id: "th_new",
-    title: "Newest",
-    projectId: "proj_1",
-    updatedAt: 900,
-    latestAttentionAt: 900,
-    lastReadAt: null,
-    pinnedAt: 5,
-  }),
-  makeThreadResponse({
-    id: "th_old",
-    title: "Older",
-    projectId: "proj_1",
-    updatedAt: 100,
-    latestAttentionAt: 100,
-    lastReadAt: 100,
-  }),
-  makeThreadResponse({ id: "th_gone", title: "Archived", archivedAt: 1 }),
-  makeThreadResponse({ id: "th_hidden", title: "Hidden", visibility: "hidden" }),
-];
+const thread = makeThreadResponse({ id: "th_new", title: "Newest" });
 
 function setup(options: SetupOptions = {}) {
-  const lifecycle = options.lifecycle ?? { rows: [] };
-  const host = createFakePluginHost({
+  const lifecycle = options.lifecycle ?? "available";
+  return createFakePluginHost({
     pluginId: "command-palette",
     sdk: {
       threads: {
-        list: async () => threads,
-        pin: async () => threads[0],
-        unpin: async () => threads[0],
+        pin: async () => thread,
+        unpin: async () => thread,
         archive: async () => ({ archivedThreadIds: ["th_new"] }),
-        markRead: async () => threads[0],
-        markUnread: async () => threads[0],
-      },
-      projects: {
-        list: async () => [
-          { id: "proj_1", name: "bb-plugins" },
-          { id: "proj_2", name: "other" },
-        ],
+        markRead: async () => thread,
+        markUnread: async () => thread,
       },
       plugins: {
         callRpc: async ({ method }: { method: string }) => {
@@ -54,87 +27,31 @@ function setup(options: SetupOptions = {}) {
             if (lifecycle === "unavailable") {
               throw new Error("plugin t3sidebar is not loaded");
             }
-            return lifecycle;
+            return { rows: [] };
           }
           return { ok: true };
         },
       },
     },
   });
-  return host;
 }
 
-describe("listThreads", () => {
-  it("maps visible threads with their project names and lifecycle rows", async () => {
-    const { bb, harness } = setup({
-      lifecycle: {
-        rows: [
-          { threadId: "th_new", settledAt: 7, snoozedUntil: null, snoozedAt: null },
-          { threadId: "th_old", settledAt: null, snoozedUntil: 42, snoozedAt: 1 },
-        ],
-      },
-    });
-    await plugin(bb);
-
-    const result = await harness.behavior.callRpc("listThreads", null);
-
-    expect(result).toEqual({
-      lifecycleAvailable: true,
-      threads: [
-        {
-          id: "th_new",
-          title: "Newest",
-          projectId: "proj_1",
-          projectName: "bb-plugins",
-          updatedAt: 900,
-          isPinned: true,
-          isUnread: true,
-          settled: true,
-          snoozedUntil: null,
-        },
-        {
-          id: "th_old",
-          title: "Older",
-          projectId: "proj_1",
-          projectName: "bb-plugins",
-          updatedAt: 100,
-          isPinned: false,
-          isUnread: false,
-          settled: false,
-          snoozedUntil: 42,
-        },
-      ],
-    });
-  });
-
-  it("degrades when t3sidebar is not there", async () => {
-    const { bb, harness } = setup({ lifecycle: "unavailable" });
-    await plugin(bb);
-
-    const result = (await harness.behavior.callRpc("listThreads", null)) as {
-      lifecycleAvailable: boolean;
-      threads: { settled: boolean; snoozedUntil: number | null }[];
-    };
-
-    expect(result.lifecycleAvailable).toBe(false);
-    expect(result.threads).toHaveLength(2);
-    for (const thread of result.threads) {
-      expect(thread.settled).toBe(false);
-      expect(thread.snoozedUntil).toBeNull();
-    }
-  });
-});
-
-describe("listProjects", () => {
-  it("returns id and name only", async () => {
+describe("lifecycleAvailable", () => {
+  it("reports true when t3sidebar answers", async () => {
     const { bb, harness } = setup();
     await plugin(bb);
 
-    expect(await harness.behavior.callRpc("listProjects", null)).toEqual({
-      projects: [
-        { id: "proj_1", name: "bb-plugins" },
-        { id: "proj_2", name: "other" },
-      ],
+    expect(await harness.behavior.callRpc("lifecycleAvailable", null)).toEqual({
+      available: true,
+    });
+  });
+
+  it("reports false when t3sidebar is not there", async () => {
+    const { bb, harness } = setup({ lifecycle: "unavailable" });
+    await plugin(bb);
+
+    expect(await harness.behavior.callRpc("lifecycleAvailable", null)).toEqual({
+      available: false,
     });
   });
 });
@@ -157,7 +74,7 @@ describe("threadAction", () => {
     const { bb, harness } = setup();
     await plugin(bb);
 
-    for (const action of ["settle", "unsettle", "unsnooze"]) {
+    for (const action of ["settle", "settleAndArchive", "unsettle", "unsnooze"]) {
       expect(
         await harness.behavior.callRpc("threadAction", { threadId: "th_new", action }),
       ).toEqual({ ok: true });
@@ -166,7 +83,7 @@ describe("threadAction", () => {
       harness.inspection.sdk
         .callsTo("plugins.callRpc")
         .map((args) => (args[0] as { method: string }).method),
-    ).toEqual(["settle", "unsettle", "unsnooze"]);
+    ).toEqual(["settle", "settleAndArchive", "unsettle", "unsnooze"]);
   });
 
   it("rejects an action it does not know", async () => {

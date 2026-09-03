@@ -28,6 +28,7 @@ export function ThreadCard({
   canPark,
   onNavigate,
   onSettle,
+  onSettleAndArchive,
   onSnooze,
   now,
   queuedMessages = 0,
@@ -41,6 +42,7 @@ export function ThreadCard({
   canPark: boolean;
   onNavigate: () => void;
   onSettle: () => void;
+  onSettleAndArchive: () => void;
   onSnooze: (snoozedUntil: number) => void;
   /** Quantized clock, so every card in one render agrees on "now". */
   now: number;
@@ -70,6 +72,10 @@ export function ThreadCard({
           ? [
               { label: "Snooze until tomorrow", onSelect: snoozeUntilTomorrow },
               { label: "Settle", onSelect: onSettle },
+              {
+                label: "Settle and archive",
+                onSelect: onSettleAndArchive,
+              },
             ]
           : []
       }
@@ -118,6 +124,11 @@ export function ThreadCard({
                   label="Settle thread"
                   icon="Check"
                   onActivate={onSettle}
+                />
+                <ParkButton
+                  label="Settle and archive thread"
+                  icon="Check"
+                  onActivate={onSettleAndArchive}
                 />
               </span>
             ) : null}
