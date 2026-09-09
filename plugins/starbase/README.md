@@ -61,8 +61,8 @@ thr_crew · Build the Sentinel · active · pr:https://github.com/hmps/bb-plugin
 
 - `pr` — `none`, the pull request URL and its state, or `unknown` when bb could
   not read it.
-- `worktree` — `clean`, `dirty`, `n/a` when the thread has no environment, or
-  `unknown` when git could not answer.
+- `worktree` — `clean`, `dirty`, `n/a` when there is no worktree to report (no
+  environment, or a non-git one), or `unknown` when git could not answer.
 - `interactions` — how many interactions are pending right now.
 
 A title is collapsed to one line, so one Crew thread is always one line.
@@ -81,9 +81,9 @@ Archive a Crew thread and its descendants once the work is done.
 first. It refuses, with one line and a non-zero exit code, naming the first
 thread that is not safe. A thread is safe only when both of these hold:
 
-- its worktree is clean, or it has no environment. A worktree bb could not read
-  is refused, and so is an environment that is not a git repository — an
-  unknown state is not a safe one.
+- its worktree is clean, it has no environment, or its environment is not a git
+  repository. Those last two are definite answers with no worktree to lose. A
+  worktree bb could not read is refused: an unknown state is not a safe one.
 - its pull request is absent, merged, or closed. An open or draft pull request
   is refused, and so is a pull request state bb could not read.
 

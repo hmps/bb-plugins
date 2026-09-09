@@ -430,10 +430,11 @@ export default function plugin(bb: BbPluginApi) {
   /**
    * What the worktree is, for the report, and whether it is safe to archive.
    *
-   * `safe` is never true on an answer bb could not give. An environment that
-   * exists but whose status is `not_applicable` or `unavailable` is unknown,
-   * and unknown is not safe. A thread with no environment at all is a
-   * different case: there is no worktree to lose, so it is safe.
+   * `safe` is never true on an answer bb could not give: an `unavailable`
+   * status means git failed, and a failure is unknown, not clean. The two
+   * "there is no worktree here" answers are different — no environment at all,
+   * and a `not_applicable` non-git environment. Both are definite, and neither
+   * has anything to lose, so both are safe.
    */
   async function worktreeState(
     environmentId: string | null,
@@ -449,12 +450,9 @@ export default function plugin(bb: BbPluginApi) {
         reason: `git could not read the worktree (${status.failure.code})`,
       };
     }
-    if (status.outcome !== "available") {
-      return {
-        label: "unknown",
-        safe: false,
-        reason: `worktree status is ${status.outcome}`,
-      };
+    if (status.outcome === "not_applicable") {
+      // bb definitively says this environment is not a git repository.
+      return { label: "n/a", safe: true, reason: null };
     }
     if (status.workspace.workingTree.hasUncommittedChanges) {
       return {

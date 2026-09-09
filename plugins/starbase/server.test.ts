@@ -491,6 +491,34 @@ describe("sitrep", () => {
     expect(result.stdout).toContain("pr:none");
   });
 
+  it("reports worktree n/a for a non-git environment", async () => {
+    const { harness } = host({
+      threadsList: () => [
+        {
+          id: CREW_THREAD,
+          title: "Crew",
+          titleFallback: null,
+          status: "idle",
+          environmentId: CREW_ENVIRONMENT,
+          hasPendingInteraction: false,
+        },
+      ],
+      environmentStatus: () => ({
+        outcome: "not_applicable",
+        reason: "non_git_environment",
+        message: "this environment is not a git repository",
+      }),
+    });
+
+    const result = await harness.runCli([
+      "sitrep",
+      "--commander",
+      COMMANDER_THREAD,
+    ]);
+
+    expect(result.stdout).toContain("worktree:n/a");
+  });
+
   it("reports worktree unknown when git could not answer", async () => {
     const { harness } = host({
       threadsList: () => [
@@ -671,7 +699,7 @@ describe("settle", () => {
     expect(harness.sdk.callsTo("threads.archiveAll")).toHaveLength(0);
   });
 
-  it("refuses a non-git environment, because that is not a known-clean one", async () => {
+  it("allows a non-git environment, which has no worktree to lose", async () => {
     const { harness } = host({
       threadsGet: () => crewThread(),
       environmentStatus: () => ({
@@ -679,15 +707,13 @@ describe("settle", () => {
         reason: "non_git_environment",
         message: "this environment is not a git repository",
       }),
+      archiveAll: () => ({ ok: true, archivedThreadIds: [CREW_THREAD] }),
     });
 
     const result = await harness.runCli(["settle", CREW_THREAD]);
 
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toBe(
-      `Refused: ${CREW_THREAD} — worktree status is not_applicable.`,
-    );
-    expect(harness.sdk.callsTo("threads.archiveAll")).toHaveLength(0);
+    expect(result.exitCode).toBe(0);
+    expect(harness.sdk.callsTo("threads.archiveAll")).toHaveLength(1);
   });
 
   it("allows a thread that has no environment at all", async () => {
