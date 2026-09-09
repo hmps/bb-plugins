@@ -5,15 +5,15 @@
 // target projects. bb already pushes a child's completion message to its
 // parent, so a completed Crew needs no help from a plugin.
 //
-// The Sentinel fills the two gaps that push does not cover. A Crew thread that
-// raises a hand or fails is invisible to the Commander until somebody looks,
-// so this plugin relays both as one line each. It also owns `bb starbase
-// settle`, a guarded archive that refuses to file away work that is still on
-// the worktree or still in review.
+// The Sentinel covers the two cases that push does not. A Crew thread waiting
+// on an interaction, or one that failed, is invisible to the Commander until
+// somebody looks, so this plugin relays both as one line each. It also owns
+// `bb starbase settle`, a guarded archive that refuses to file away work that
+// is still on the worktree or still in review.
 //
 // Every relay is written to the plugin's own SQLite database first. The insert
-// carries a unique dedupe key, so a repeated event relays exactly once even
-// when bb replays it after a reload.
+// carries a unique dedupe key, so a replay of the same event is ignored; a
+// failed send releases the key so the next identical event tries again.
 import { createHash } from "node:crypto";
 import type {
   BbPluginApi,
@@ -27,6 +27,11 @@ import type {
 type PendingInteraction =
   PluginThreadEventPayloads["interaction.pending"]["interaction"];
 
+/** One row of `bb.sdk.threads.list`, which is not the same DTO as a thread. */
+type ThreadListRow = Awaited<
+  ReturnType<BbPluginApi["sdk"]["threads"]["list"]>
+>[number];
+
 const COMMANDER_PROJECTS_SETTING = "commanderProjectIds";
 
 /** The Starbase project the first Commander runs in. */
@@ -37,6 +42,15 @@ const SUMMARY_MAX_CHARS = 160;
 
 /** How many threads settle inspects before it gives up on a runaway tree. */
 const SETTLE_MAX_TREE_SIZE = 500;
+
+/** Rows per `threads.list` page. Paging stops on the first short page. */
+const LIST_PAGE_SIZE = 100;
+
+/** A cap on pages per parent, so a list that never shortens cannot spin. */
+const LIST_MAX_PAGES = 50;
+
+/** The refusal when the descendant set could not be shown to be complete. */
+const ENUMERATION_FAILED = "settle: could not enumerate all descendants";
 
 const migrations = [
   `CREATE TABLE IF NOT EXISTS mission_event (
@@ -312,22 +326,40 @@ export default function plugin(bb: BbPluginApi) {
   }
 
   /**
-   * Send one Sentinel line to the Commander.
+   * Send one Sentinel line to the Commander, never steering a live turn.
    *
-   * The SDK types carry no comment on `mode`, and the authoring reference
-   * documents only `auto` ("starts a turn on an idle thread or queues/steers a
-   * running one"). Nothing states that `queue-if-active` starts a turn on an
-   * idle thread, so the mode is chosen from the Commander's status instead of
-   * assumed: `auto` wakes an idle Commander, and `queue-if-active` waits
-   * behind a busy one rather than steering it mid-turn.
+   * `auto` is deliberately unused. It resolves the mode from the thread's state
+   * at send time, and the status this reads is already stale — a Commander that
+   * was idle a moment ago can be mid-turn now, and `auto` would steer it. The
+   * two explicit modes have no such reading: `start` only ever begins a turn,
+   * and `queue-if-active` only ever waits.
+   *
+   * So an idle Commander gets `start`. When `start` is refused because the
+   * Commander is no longer idle, the one retry sends `queue-if-active` instead,
+   * which is where the race lands. A busy Commander skips straight to it.
    */
   async function relay(commanderId: string, text: string): Promise<void> {
+    const input = [{ type: "text" as const, text, mentions: [] }];
     const commander = await bb.sdk.threads.get({ threadId: commanderId });
-    const mode = commander.status === "idle" ? "auto" : "queue-if-active";
+    if (commander.status === "idle") {
+      try {
+        await bb.sdk.threads.send({
+          threadId: commanderId,
+          mode: "start",
+          input,
+        });
+        return;
+      } catch (error) {
+        // The Commander started a turn between the read and the send.
+        bb.log.info(
+          `starbase: start refused on ${commanderId}, queueing instead: ${shorten(describe(error), 120)}`,
+        );
+      }
+    }
     await bb.sdk.threads.send({
       threadId: commanderId,
-      mode,
-      input: [{ type: "text", text, mentions: [] }],
+      mode: "queue-if-active",
+      input,
     });
   }
 
@@ -512,12 +544,43 @@ export default function plugin(bb: BbPluginApi) {
   // CLI: `bb starbase …`.
   // ------------------------------------------------------------------
 
-  async function sitrep(commanderId: string): Promise<SitrepRow[]> {
+  /**
+   * Every live child of a thread, hidden ones included, across every page.
+   *
+   * Both callers need the same guarantee and for the same reason: a child bb
+   * does not return is a child nothing checks. `includeHidden` is required —
+   * a hidden background worker is a real thread with a real worktree — and so
+   * is paging, because one `threads.list` call returns one page.
+   *
+   * Returns null when the list could not be shown to be exhausted.
+   */
+  async function listChildren(
+    parentThreadId: string,
+  ): Promise<ThreadListRow[] | null> {
+    const rows: ThreadListRow[] = [];
+    for (let page = 0; page < LIST_MAX_PAGES; page += 1) {
+      const batch = await bb.sdk.threads.list({
+        parentThreadId,
+        archived: false,
+        includeHidden: true,
+        limit: LIST_PAGE_SIZE,
+        offset: page * LIST_PAGE_SIZE,
+      });
+      rows.push(...batch);
+      // A short page is the end of the list; a full one may not be.
+      if (batch.length < LIST_PAGE_SIZE) return rows;
+    }
+    return null;
+  }
+
+  async function sitrep(
+    commanderId: string,
+  ): Promise<{ rows: SitrepRow[] } | { error: string }> {
     // Live Crew only. An archived thread has already been settled.
-    const children = await bb.sdk.threads.list({
-      parentThreadId: commanderId,
-      archived: false,
-    });
+    const children = await listChildren(commanderId);
+    if (children === null) {
+      return { error: `Could not list every Crew thread under ${commanderId}.` };
+    }
     const rows: SitrepRow[] = [];
     for (const child of children) {
       const [worktree, pr, interactions] = await Promise.all([
@@ -537,7 +600,7 @@ export default function plugin(bb: BbPluginApi) {
         last: event === null ? "none" : event.kind,
       });
     }
-    return rows;
+    return { rows };
   }
 
   /**
@@ -573,28 +636,52 @@ export default function plugin(bb: BbPluginApi) {
    */
   async function threadTree(
     rootThreadId: string,
-  ): Promise<{ threadIds: string[] } | { error: string }> {
+  ): Promise<{ threadIds: string[] } | { incomplete: true }> {
     const ordered: string[] = [];
     const visited = new Set<string>();
     const queue = [rootThreadId];
     while (queue.length > 0) {
       // A tree this deep was never inspected in full, so it is not known safe.
-      if (ordered.length >= SETTLE_MAX_TREE_SIZE) {
-        return {
-          error: `its thread tree is larger than ${SETTLE_MAX_TREE_SIZE} threads`,
-        };
-      }
+      if (ordered.length >= SETTLE_MAX_TREE_SIZE) return { incomplete: true };
       const threadId = queue.shift() as string;
       if (visited.has(threadId)) continue;
       visited.add(threadId);
       ordered.push(threadId);
-      const children = await bb.sdk.threads.list({
-        parentThreadId: threadId,
-        archived: false,
-      });
+      const children = await listChildren(threadId);
+      if (children === null) return { incomplete: true };
       for (const child of children) queue.push(child.id);
     }
     return { threadIds: ordered };
+  }
+
+  /**
+   * Whether settle may touch this thread at all.
+   *
+   * `settle` archives a tree, so it must not be pointed at an arbitrary thread.
+   * The target has to sit under a Commander — Crew, or something beneath Crew —
+   * and it must not be the Commander itself, because settling a Commander would
+   * file away the whole Base.
+   */
+  async function isSettleTarget(
+    threadId: string,
+  ): Promise<{ ok: true } | { reason: string }> {
+    const commanderProjects = await commanderProjectIds();
+    if (commanderProjects.size === 0) {
+      return { reason: `${COMMANDER_PROJECTS_SETTING} names no project` };
+    }
+    let current = await bb.sdk.threads.get({ threadId });
+    if (isCommander(current, commanderProjects)) {
+      return { reason: "it is a Commander, not Crew" };
+    }
+    // Walk up to the root. SETTLE_MAX_TREE_SIZE also caps a parent cycle.
+    for (let step = 0; step < SETTLE_MAX_TREE_SIZE; step += 1) {
+      const parentThreadId = current.parentThreadId;
+      if (parentThreadId === null) break;
+      const parent = await bb.sdk.threads.get({ threadId: parentThreadId });
+      if (isCommander(parent, commanderProjects)) return { ok: true };
+      current = parent;
+    }
+    return { reason: "it is not Crew under a Commander" };
   }
 
   /**
@@ -607,9 +694,15 @@ export default function plugin(bb: BbPluginApi) {
     stdout?: string;
     stderr?: string;
   }> {
+    const target = await isSettleTarget(threadId);
+    if ("reason" in target) return refusal(threadId, threadId, target.reason);
+
     const thread = await bb.sdk.threads.get({ threadId });
     const tree = await threadTree(threadId);
-    if ("error" in tree) return refusal(threadId, threadId, tree.error);
+    if ("incomplete" in tree) {
+      return { exitCode: 1, stderr: ENUMERATION_FAILED };
+    }
+    const checked = new Set(tree.threadIds);
     for (const memberId of tree.threadIds) {
       const member =
         memberId === threadId
@@ -624,17 +717,37 @@ export default function plugin(bb: BbPluginApi) {
         return refusal(threadId, memberId, pr.reason);
       }
     }
-    const result = await bb.sdk.threads.archiveAll({ threadId });
+
+    // Archive the checked ids one by one rather than calling `archiveAll`.
+    // `archiveAll` decides its own tree, and nothing in the SDK reports that
+    // tree or offers a dry run, so it could take a thread this never checked.
+    // Deepest first, so a thread is archived after its own descendants.
+    const archived = new Set<string>();
+    for (const memberId of [...tree.threadIds].reverse()) {
+      const result = await bb.sdk.threads.archive({ threadId: memberId });
+      for (const id of result.archivedThreadIds) archived.add(id);
+    }
+
     recordEvent({
       dedupeKey: `settled:${threadId}:${Date.now()}`,
       threadId,
       commanderId: thread.parentThreadId,
       kind: "settled",
-      summary: `archived ${result.archivedThreadIds.length} thread(s)`,
+      summary: `archived ${archived.size} thread(s)`,
     });
+
+    // A belt-and-braces check on the assumption above. If bb archived a thread
+    // outside the checked set, say so instead of reporting a clean settle.
+    const unchecked = [...archived].filter((id) => !checked.has(id));
+    if (unchecked.length > 0) {
+      return {
+        exitCode: 1,
+        stderr: `Settled ${threadId}, but bb also archived ${unchecked.length} unchecked thread(s): ${unchecked.slice(0, 5).join(", ")}.`,
+      };
+    }
     return {
       exitCode: 0,
-      stdout: `Settled ${threadId}: archived ${result.archivedThreadIds.length} thread(s).`,
+      stdout: `Settled ${threadId}: archived ${archived.size} thread(s).`,
     };
   }
 
@@ -674,7 +787,11 @@ export default function plugin(bb: BbPluginApi) {
           if ("error" in resolved) {
             return { exitCode: 1, stderr: resolved.error };
           }
-          const rows = await sitrep(resolved.commanderId);
+          const report = await sitrep(resolved.commanderId);
+          if ("error" in report) {
+            return { exitCode: 1, stderr: report.error };
+          }
+          const rows = report.rows;
           if (json) {
             return {
               exitCode: 0,

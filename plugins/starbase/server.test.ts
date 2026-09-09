@@ -104,8 +104,35 @@ interface HostOptions {
   threadsList?: (args?: unknown) => unknown;
   interactionsList?: (args: { threadId: string }) => unknown;
   archiveAll?: (args: { threadId: string }) => unknown;
+  threadsArchive?: (args: { threadId: string }) => unknown;
   threadsSend?: (args: unknown) => unknown;
   commanderProjectIds?: string;
+}
+
+/**
+ * The default thread lookup: the Commander answers for its own id, and every
+ * other id answers as Crew under it. That is the shape the parent walks in
+ * `commanderFor` and `isSettleTarget` expect.
+ */
+/**
+ * A `threads.list` stub from a parent-id map. Every list is one short page, so
+ * paging stops after the first call.
+ */
+function pages(byParent: Record<string, Array<{ id: string }>>) {
+  return (args?: unknown) => {
+    const { parentThreadId, offset } = args as {
+      parentThreadId: string;
+      offset?: number;
+    };
+    if ((offset ?? 0) > 0) return [];
+    return byParent[parentThreadId] ?? [];
+  };
+}
+
+function defaultThreadsGet(args: { threadId: string }) {
+  return args.threadId === COMMANDER_THREAD
+    ? commanderThread()
+    : crewThread({ id: args.threadId });
 }
 
 /** A fake host with just enough of `bb.sdk` stubbed for the case at hand. */
@@ -117,9 +144,15 @@ function host(options: HostOptions = {}) {
     },
     sdk: {
       threads: {
-        get: options.threadsGet ?? (() => commanderThread()),
+        get: options.threadsGet ?? defaultThreadsGet,
         list: options.threadsList ?? (() => []),
         send: options.threadsSend ?? (() => ({ ok: true, delivery: "sent" })),
+        archive:
+          options.threadsArchive ??
+          ((args: { threadId: string }) => ({
+            ok: true,
+            archivedThreadIds: [args.threadId],
+          })),
         archiveAll:
           options.archiveAll ?? (() => ({ ok: true, archivedThreadIds: [] })),
         interactions: {
@@ -290,10 +323,50 @@ describe("interaction relay", () => {
       interaction: approvalInteraction("int_1"),
     });
 
-    const [args] = harness.sdk.callsTo("threads.send")[0] as [
-      { mode: string },
-    ];
-    expect(args.mode).toBe("queue-if-active");
+    const sends = harness.sdk.callsTo("threads.send");
+    expect(sends).toHaveLength(1);
+    expect((sends[0][0] as { mode: string }).mode).toBe("queue-if-active");
+  });
+
+  it("starts a turn on an idle Commander, never steering with auto", async () => {
+    const { harness } = host();
+
+    await harness.emitThreadEvent("interaction.pending", {
+      thread: crewThread(),
+      interaction: approvalInteraction("int_1"),
+    });
+
+    const sends = harness.sdk.callsTo("threads.send");
+    expect(sends).toHaveLength(1);
+    expect((sends[0][0] as { mode: string }).mode).toBe("start");
+  });
+
+  it("queues once when the Commander starts a turn during the send", async () => {
+    // The status read says idle; by the time `start` lands, it is not.
+    const modes: string[] = [];
+    const { harness } = host({
+      threadsSend: (args) => {
+        const mode = (args as { mode: string }).mode;
+        modes.push(mode);
+        if (mode === "start") throw new Error("thread is no longer idle");
+        return { ok: true, delivery: "queued" };
+      },
+    });
+
+    const result = await harness.emitThreadEvent("interaction.pending", {
+      thread: crewThread(),
+      interaction: approvalInteraction("int_1"),
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(modes).toEqual(["start", "queue-if-active"]);
+
+    // The retry succeeded, so the dedupe row stands: a replay does not resend.
+    await harness.emitThreadEvent("interaction.pending", {
+      thread: crewThread(),
+      interaction: approvalInteraction("int_1"),
+    });
+    expect(modes).toEqual(["start", "queue-if-active"]);
   });
 });
 
@@ -491,6 +564,98 @@ describe("sitrep", () => {
     expect(result.stdout).toContain("pr:none");
   });
 
+  it("lists a hidden Crew thread", async () => {
+    const { harness } = host({
+      threadsList: (args) => {
+        const query = args as { includeHidden?: boolean };
+        return query.includeHidden === true
+          ? [
+              {
+                id: "thr_hidden",
+                title: "Background worker",
+                titleFallback: null,
+                status: "active",
+                environmentId: null,
+                hasPendingInteraction: false,
+              },
+            ]
+          : [];
+      },
+    });
+
+    const result = await harness.runCli([
+      "sitrep",
+      "--commander",
+      COMMANDER_THREAD,
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("thr_hidden");
+  });
+
+  it("reads every page of Crew threads", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      id: `thr_page1_${index}`,
+      title: "Crew",
+      titleFallback: null,
+      status: "idle",
+      environmentId: null,
+      hasPendingInteraction: false,
+    }));
+    const { harness } = host({
+      threadsList: (args) => {
+        const offset = (args as { offset?: number }).offset ?? 0;
+        return offset === 0
+          ? firstPage
+          : [
+              {
+                id: "thr_page2_0",
+                title: "Late Crew",
+                titleFallback: null,
+                status: "idle",
+                environmentId: null,
+                hasPendingInteraction: false,
+              },
+            ];
+      },
+    });
+
+    const result = await harness.runCli([
+      "sitrep",
+      "--commander",
+      COMMANDER_THREAD,
+    ]);
+
+    expect(result.stdout.split("\n")).toHaveLength(101);
+    expect(result.stdout).toContain("thr_page2_0");
+  });
+
+  it("refuses when the Crew list never ends", async () => {
+    let next = 0;
+    const { harness } = host({
+      threadsList: () =>
+        Array.from({ length: 100 }, () => ({
+          id: `thr_endless_${next++}`,
+          title: "Crew",
+          titleFallback: null,
+          status: "idle",
+          environmentId: null,
+          hasPendingInteraction: false,
+        })),
+    });
+
+    const result = await harness.runCli([
+      "sitrep",
+      "--commander",
+      COMMANDER_THREAD,
+    ]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe(
+      `Could not list every Crew thread under ${COMMANDER_THREAD}.`,
+    );
+  });
+
   it("reports worktree n/a for a non-git environment", async () => {
     const { harness } = host({
       threadsList: () => [
@@ -623,11 +788,15 @@ describe("sitrep", () => {
 });
 
 describe("settle", () => {
+  /** Every id `threads.archive` was called with, in call order. */
+  function archivedIds(harness: { sdk: { callsTo(p: string): unknown[][] } }) {
+    return harness.sdk
+      .callsTo("threads.archive")
+      .map(([args]) => (args as { threadId: string }).threadId);
+  }
+
   it("refuses a dirty worktree and archives nothing", async () => {
-    const { harness } = host({
-      threadsGet: () => crewThread(),
-      environmentStatus: () => dirtyStatus(),
-    });
+    const { harness } = host({ environmentStatus: () => dirtyStatus() });
 
     const result = await harness.runCli(["settle", CREW_THREAD]);
 
@@ -635,12 +804,11 @@ describe("settle", () => {
     expect(result.stderr).toBe(
       `Refused: ${CREW_THREAD} — the worktree has uncommitted changes.`,
     );
-    expect(harness.sdk.callsTo("threads.archiveAll")).toHaveLength(0);
+    expect(archivedIds(harness)).toEqual([]);
   });
 
   it("refuses an open pull request", async () => {
     const { harness } = host({
-      threadsGet: () => crewThread(),
       environmentPullRequest: () => ({
         outcome: "available",
         pullRequest: {
@@ -656,12 +824,11 @@ describe("settle", () => {
     expect(result.stderr).toBe(
       `Refused: ${CREW_THREAD} — pull request https://github.com/hmps/bb-plugins/pull/9 is still open.`,
     );
-    expect(harness.sdk.callsTo("threads.archiveAll")).toHaveLength(0);
+    expect(archivedIds(harness)).toEqual([]);
   });
 
   it("refuses a worktree status bb could not read", async () => {
     const { harness } = host({
-      threadsGet: () => crewThread(),
       environmentStatus: () => ({
         outcome: "unavailable",
         failure: {
@@ -678,12 +845,11 @@ describe("settle", () => {
     expect(result.stderr).toBe(
       `Refused: ${CREW_THREAD} — git could not read the worktree (permission_denied).`,
     );
-    expect(harness.sdk.callsTo("threads.archiveAll")).toHaveLength(0);
+    expect(archivedIds(harness)).toEqual([]);
   });
 
   it("refuses a pull request state bb could not read", async () => {
     const { harness } = host({
-      threadsGet: () => crewThread(),
       environmentPullRequest: () => ({
         outcome: "unavailable",
         message: "gh is not authenticated",
@@ -696,64 +862,60 @@ describe("settle", () => {
     expect(result.stderr).toBe(
       `Refused: ${CREW_THREAD} — the pull request state is unavailable.`,
     );
-    expect(harness.sdk.callsTo("threads.archiveAll")).toHaveLength(0);
+    expect(archivedIds(harness)).toEqual([]);
   });
 
   it("allows a non-git environment, which has no worktree to lose", async () => {
     const { harness } = host({
-      threadsGet: () => crewThread(),
       environmentStatus: () => ({
         outcome: "not_applicable",
         reason: "non_git_environment",
         message: "this environment is not a git repository",
       }),
-      archiveAll: () => ({ ok: true, archivedThreadIds: [CREW_THREAD] }),
     });
 
     const result = await harness.runCli(["settle", CREW_THREAD]);
 
     expect(result.exitCode).toBe(0);
-    expect(harness.sdk.callsTo("threads.archiveAll")).toHaveLength(1);
+    expect(archivedIds(harness)).toEqual([CREW_THREAD]);
   });
 
   it("allows a thread that has no environment at all", async () => {
     const { harness } = host({
-      threadsGet: () => crewThread({ environmentId: null }),
-      archiveAll: () => ({ ok: true, archivedThreadIds: [CREW_THREAD] }),
+      threadsGet: (args) =>
+        args.threadId === COMMANDER_THREAD
+          ? commanderThread()
+          : crewThread({ id: args.threadId, environmentId: null }),
     });
 
     const result = await harness.runCli(["settle", CREW_THREAD]);
 
     expect(result.exitCode).toBe(0);
-    expect(harness.sdk.callsTo("threads.archiveAll")).toHaveLength(1);
+    expect(archivedIds(harness)).toEqual([CREW_THREAD]);
   });
 
   it("allows an environment that simply has no pull request", async () => {
     const { harness } = host({
-      threadsGet: () => crewThread(),
       environmentPullRequest: () => ({ outcome: "absent" }),
-      archiveAll: () => ({ ok: true, archivedThreadIds: [CREW_THREAD] }),
     });
 
     const result = await harness.runCli(["settle", CREW_THREAD]);
 
     expect(result.exitCode).toBe(0);
-    expect(harness.sdk.callsTo("threads.archiveAll")).toHaveLength(1);
+    expect(archivedIds(harness)).toEqual([CREW_THREAD]);
   });
 
   it("refuses when a child in the tree is unsafe, naming that child", async () => {
     const childId = "thr_child";
     const { harness } = host({
-      threadsGet: (args) =>
-        args.threadId === childId
-          ? crewThread({ id: childId, environmentId: "env_child" })
-          : crewThread(),
-      threadsList: (args) => {
-        const parentThreadId = (args as { parentThreadId: string })
-          .parentThreadId;
-        if (parentThreadId === CREW_THREAD) return [{ id: childId }];
-        return [];
+      threadsGet: (args) => {
+        if (args.threadId === COMMANDER_THREAD) return commanderThread();
+        if (args.threadId === childId) {
+          return crewThread({ id: childId, environmentId: "env_child" });
+        }
+        return crewThread({ id: args.threadId });
       },
+      threadsList: pages({ [CREW_THREAD]: [{ id: childId }] }),
       // The root is clean; only the child's worktree is dirty.
       environmentStatus: (args) =>
         args.environmentId === "env_child" ? dirtyStatus() : cleanStatus(),
@@ -765,7 +927,7 @@ describe("settle", () => {
     expect(result.stderr).toBe(
       `Refused: ${childId} (a child of ${CREW_THREAD}) — the worktree has uncommitted changes.`,
     );
-    expect(harness.sdk.callsTo("threads.archiveAll")).toHaveLength(0);
+    expect(archivedIds(harness)).toEqual([]);
   });
 
   it("refuses when a grandchild in the tree has an open pull request", async () => {
@@ -773,21 +935,19 @@ describe("settle", () => {
     const grandchildId = "thr_grandchild";
     const { harness } = host({
       threadsGet: (args) => {
+        if (args.threadId === COMMANDER_THREAD) return commanderThread();
         if (args.threadId === childId) {
           return crewThread({ id: childId, environmentId: "env_child" });
         }
         if (args.threadId === grandchildId) {
           return crewThread({ id: grandchildId, environmentId: "env_grand" });
         }
-        return crewThread();
+        return crewThread({ id: args.threadId });
       },
-      threadsList: (args) => {
-        const parentThreadId = (args as { parentThreadId: string })
-          .parentThreadId;
-        if (parentThreadId === CREW_THREAD) return [{ id: childId }];
-        if (parentThreadId === childId) return [{ id: grandchildId }];
-        return [];
-      },
+      threadsList: pages({
+        [CREW_THREAD]: [{ id: childId }],
+        [childId]: [{ id: grandchildId }],
+      }),
       environmentPullRequest: (args) =>
         args.environmentId === "env_grand"
           ? {
@@ -806,45 +966,196 @@ describe("settle", () => {
     expect(result.stderr).toBe(
       `Refused: ${grandchildId} (a child of ${CREW_THREAD}) — pull request https://github.com/hmps/bb-plugins/pull/12 is still draft.`,
     );
-    expect(harness.sdk.callsTo("threads.archiveAll")).toHaveLength(0);
+    expect(archivedIds(harness)).toEqual([]);
   });
 
-  it("archives the tree when every thread in it is safe", async () => {
+  it("refuses when a hidden grandchild has a dirty worktree", async () => {
     const childId = "thr_child";
+    const hiddenId = "thr_hidden";
+    const { harness } = host({
+      threadsGet: (args) => {
+        if (args.threadId === COMMANDER_THREAD) return commanderThread();
+        if (args.threadId === hiddenId) {
+          return crewThread({
+            id: hiddenId,
+            environmentId: "env_hidden",
+            visibility: "hidden",
+          });
+        }
+        return crewThread({ id: args.threadId, environmentId: null });
+      },
+      // The hidden grandchild is only returned when includeHidden is set.
+      threadsList: (args) => {
+        const query = args as { parentThreadId: string; includeHidden?: boolean };
+        if (query.parentThreadId === CREW_THREAD) return [{ id: childId }];
+        if (query.parentThreadId === childId) {
+          return query.includeHidden === true ? [{ id: hiddenId }] : [];
+        }
+        return [];
+      },
+      environmentStatus: (args) =>
+        args.environmentId === "env_hidden" ? dirtyStatus() : cleanStatus(),
+    });
+
+    const result = await harness.runCli(["settle", CREW_THREAD]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe(
+      `Refused: ${hiddenId} (a child of ${CREW_THREAD}) — the worktree has uncommitted changes.`,
+    );
+    expect(archivedIds(harness)).toEqual([]);
+  });
+
+  it("checks a child that only appears on the second page", async () => {
+    // A full first page, then one more child: the second page must be read.
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      id: `thr_page1_${index}`,
+    }));
+    const lateId = "thr_page2_0";
+    const { harness } = host({
+      threadsGet: (args) => {
+        if (args.threadId === COMMANDER_THREAD) return commanderThread();
+        if (args.threadId === lateId) {
+          return crewThread({ id: lateId, environmentId: "env_late" });
+        }
+        return crewThread({ id: args.threadId, environmentId: null });
+      },
+      threadsList: (args) => {
+        const query = args as {
+          parentThreadId: string;
+          offset?: number;
+        };
+        if (query.parentThreadId !== CREW_THREAD) return [];
+        return (query.offset ?? 0) === 0 ? firstPage : [{ id: lateId }];
+      },
+      environmentStatus: (args) =>
+        args.environmentId === "env_late" ? dirtyStatus() : cleanStatus(),
+    });
+
+    const result = await harness.runCli(["settle", CREW_THREAD]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe(
+      `Refused: ${lateId} (a child of ${CREW_THREAD}) — the worktree has uncommitted changes.`,
+    );
+    expect(archivedIds(harness)).toEqual([]);
+  });
+
+  it("refuses when the descendant list never ends", async () => {
+    // Every page is full, so the list is never shown to be exhausted.
+    let next = 0;
     const { harness } = host({
       threadsGet: (args) =>
-        args.threadId === childId
-          ? crewThread({ id: childId, environmentId: null })
-          : crewThread(),
-      threadsList: (args) => {
-        const parentThreadId = (args as { parentThreadId: string })
-          .parentThreadId;
-        return parentThreadId === CREW_THREAD ? [{ id: childId }] : [];
-      },
-      environmentPullRequest: () => ({
-        outcome: "available",
-        pullRequest: {
-          url: "https://github.com/hmps/bb-plugins/pull/9",
-          state: "merged",
-        },
-      }),
-      archiveAll: () => ({
-        ok: true,
-        archivedThreadIds: [CREW_THREAD, childId],
+        args.threadId === COMMANDER_THREAD
+          ? commanderThread()
+          : crewThread({ id: args.threadId, environmentId: null }),
+      threadsList: () =>
+        Array.from({ length: 100 }, () => ({ id: `thr_endless_${next++}` })),
+    });
+
+    const result = await harness.runCli(["settle", CREW_THREAD]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe(
+      "settle: could not enumerate all descendants",
+    );
+    expect(archivedIds(harness)).toEqual([]);
+  });
+
+  it("archives every checked thread one by one, deepest first", async () => {
+    const childId = "thr_child";
+    const grandchildId = "thr_grandchild";
+    const { harness } = host({
+      threadsGet: (args) =>
+        args.threadId === COMMANDER_THREAD
+          ? commanderThread()
+          : crewThread({ id: args.threadId, environmentId: null }),
+      threadsList: pages({
+        [CREW_THREAD]: [{ id: childId }],
+        [childId]: [{ id: grandchildId }],
       }),
     });
 
     const result = await harness.runCli(["settle", CREW_THREAD]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe(`Settled ${CREW_THREAD}: archived 2 thread(s).`);
-    expect(harness.sdk.callsTo("threads.archiveAll")).toEqual([
-      [{ threadId: CREW_THREAD }],
-    ]);
+    expect(result.stdout).toBe(`Settled ${CREW_THREAD}: archived 3 thread(s).`);
+    // Deepest first, and never `archiveAll`, which picks its own tree.
+    expect(archivedIds(harness)).toEqual([grandchildId, childId, CREW_THREAD]);
+    expect(harness.sdk.callsTo("threads.archiveAll")).toHaveLength(0);
+  });
+
+  it("reports an archive that reached a thread it never checked", async () => {
+    const { harness } = host({
+      threadsArchive: (args) => ({
+        ok: true,
+        archivedThreadIds: [args.threadId, "thr_surprise"],
+      }),
+    });
+
+    const result = await harness.runCli(["settle", CREW_THREAD]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe(
+      `Settled ${CREW_THREAD}, but bb also archived 1 unchecked thread(s): thr_surprise.`,
+    );
+  });
+
+  it("refuses a thread that is not Crew under a Commander", async () => {
+    const { harness } = host({
+      threadsGet: () =>
+        makeThreadResponse({
+          id: "thr_loose",
+          projectId: "proj_elsewhere",
+          parentThreadId: null,
+        }),
+    });
+
+    const result = await harness.runCli(["settle", "thr_loose"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe(
+      "Refused: thr_loose — it is not Crew under a Commander.",
+    );
+    expect(archivedIds(harness)).toEqual([]);
+  });
+
+  it("refuses a Commander, which would file away the whole Base", async () => {
+    const { harness } = host();
+
+    const result = await harness.runCli(["settle", COMMANDER_THREAD]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe(
+      `Refused: ${COMMANDER_THREAD} — it is a Commander, not Crew.`,
+    );
+    expect(archivedIds(harness)).toEqual([]);
+  });
+
+  it("allows a grandchild of a Commander", async () => {
+    const grandchildId = "thr_grandchild";
+    const { harness } = host({
+      threadsGet: (args) => {
+        if (args.threadId === COMMANDER_THREAD) return commanderThread();
+        if (args.threadId === grandchildId) {
+          return crewThread({
+            id: grandchildId,
+            parentThreadId: CREW_THREAD,
+            environmentId: null,
+          });
+        }
+        return crewThread({ id: args.threadId, environmentId: null });
+      },
+    });
+
+    const result = await harness.runCli(["settle", grandchildId]);
+
+    expect(result.exitCode).toBe(0);
+    expect(archivedIds(harness)).toEqual([grandchildId]);
   });
 
   it("says --force-archive is not supported", async () => {
-    const { harness } = host({ threadsGet: () => crewThread() });
+    const { harness } = host();
 
     const result = await harness.runCli([
       "settle",
@@ -854,7 +1165,7 @@ describe("settle", () => {
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe("--force-archive: not supported in v1.");
-    expect(harness.sdk.callsTo("threads.archiveAll")).toHaveLength(0);
+    expect(archivedIds(harness)).toEqual([]);
   });
 });
 

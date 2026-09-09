@@ -44,8 +44,13 @@ A Commander has no parent, so its own events are never relayed. `thread.idle`
 is never relayed either — bb's completion push already covers it. An idle Crew
 thread is still recorded, so `--json` can report the last event.
 
-A Sentinel message uses `auto` when the Commander is idle and `queue-if-active`
-when it is not, so a busy Commander is never steered mid-turn.
+**A Sentinel line is never steered into a live turn.** The Sentinel never sends
+with `auto`, because `auto` resolves the mode from the thread's state at send
+time and would steer a Commander that started a turn just after the status was
+read. An idle Commander gets `start`, which only ever begins a turn. If `start`
+is refused because the Commander is no longer idle, the one retry sends
+`queue-if-active`, which only ever waits. A busy Commander goes straight to
+`queue-if-active`.
 
 The Sentinel polls nothing. Every relay runs from a bb lifecycle event.
 
@@ -73,13 +78,24 @@ mission event the Sentinel recorded.
 Without `--commander`, the command uses the thread it runs in. It refuses a
 thread that is not a Commander.
 
+Like `settle`, the SITREP lists hidden Crew threads and reads every page. It
+refuses rather than report a partial list.
+
 ### `bb starbase settle <thread-id>`
 
 Archive a Crew thread and its descendants once the work is done.
 
-`settle` archives the whole thread tree, so it checks the whole thread tree
-first. It refuses, with one line and a non-zero exit code, naming the first
-thread that is not safe. A thread is safe only when both of these hold:
+The target must be Crew, or a thread beneath Crew. `settle` refuses a Commander
+— that would file away the whole Base — and refuses a thread that does not sit
+under a Commander at all.
+
+`settle` archives a whole thread tree, so it checks the whole thread tree
+first. It enumerates descendants with hidden threads included and reads every
+page; when the list cannot be shown to be complete, it refuses with `settle:
+could not enumerate all descendants` rather than archive a thread it never saw.
+
+It refuses, with one line and a non-zero exit code, naming the first thread
+that is not safe. A thread is safe only when both of these hold:
 
 - its worktree is clean, it has no environment, or its environment is not a git
   repository. Those last two are definite answers with no worktree to lose. A
@@ -89,8 +105,24 @@ thread that is not safe. A thread is safe only when both of these hold:
 
 A tree of more than 500 threads is refused rather than inspected in part.
 
+Once every thread passes, `settle` archives the checked ids one at a time with
+`threads.archive`, deepest first. It does not call `threads.archiveAll`:
+`archiveAll` decides its own tree, and the SDK offers no dry run and no report
+of the tree it would take, so it could reach a thread that was never checked.
+As a last check, `settle` compares what bb reports archiving against what it
+checked and exits non-zero naming any thread outside that set.
+
 `--force-archive` is not implemented in v1. The command says so and exits
 non-zero, so nobody builds a habit on it.
+
+### Known limit: the window between checking and archiving
+
+bb has no transactional archive. A Crew thread can dirty its worktree or open a
+pull request in the moment between `settle` reading its state and `settle`
+archiving it, and nothing here can prevent that. Archiving each checked thread
+individually narrows the window — it is one thread's check-to-archive gap
+rather than the whole tree's — but it does not close it. Settle Crew that has
+stopped working.
 
 ## Settings
 
