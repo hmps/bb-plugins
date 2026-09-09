@@ -52,6 +52,35 @@ const LIST_MAX_PAGES = 50;
 /** The refusal when the descendant set could not be shown to be complete. */
 const ENUMERATION_FAILED = "settle: could not enumerate all descendants";
 
+/**
+ * How bb reports "you asked to start a turn on a thread that is already
+ * running one" — the only send failure worth retrying with a queueing mode.
+ *
+ * Confirmed against the server source rather than guessed. `dispatch-attempt.ts`
+ * calls `throwThreadNotWritable(thread, "already_active", "Thread is already
+ * active")` when `mode: "start"` meets an active thread, and
+ * `lifecycle-api-errors.ts` turns that into
+ * `new ApiError(409, "thread_not_writable", message, { details: { reason,
+ * archivedAt, threadStatus } })`, whose body serializes as
+ * `{ code, message, details }`. The SDK's `resolveResponse` wraps a non-ok
+ * response in `BbHttpError`, which carries `status`, `code` (the body's
+ * top-level `code`), and `body`.
+ *
+ * `BbHttpError` is not exported from `@get-bb/plugin-sdk`, so this reads the
+ * shape rather than using `instanceof`.
+ */
+export function isThreadAlreadyActiveError(error: unknown): boolean {
+  if (error === null || typeof error !== "object") return false;
+  const candidate = error as {
+    status?: unknown;
+    code?: unknown;
+    body?: { details?: { reason?: unknown } };
+  };
+  if (candidate.status !== 409) return false;
+  if (candidate.code !== "thread_not_writable") return false;
+  return candidate.body?.details?.reason === "already_active";
+}
+
 const migrations = [
   `CREATE TABLE IF NOT EXISTS mission_event (
      id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -350,9 +379,12 @@ export default function plugin(bb: BbPluginApi) {
         });
         return;
       } catch (error) {
-        // The Commander started a turn between the read and the send.
+        // Retry ONLY on the one error that proves nothing was delivered. A
+        // timeout or a dropped response says nothing about whether the server
+        // accepted the message, and retrying those would post the line twice.
+        if (!isThreadAlreadyActiveError(error)) throw error;
         bb.log.info(
-          `starbase: start refused on ${commanderId}, queueing instead: ${shorten(describe(error), 120)}`,
+          `starbase: ${commanderId} became active during the send; queueing instead`,
         );
       }
     }
@@ -554,13 +586,13 @@ export default function plugin(bb: BbPluginApi) {
    *
    * Returns null when the list could not be shown to be exhausted.
    */
-  async function listChildren(
-    parentThreadId: string,
+  async function listAllPages(
+    filter: { parentThreadId: string } | { sourceThreadId: string },
   ): Promise<ThreadListRow[] | null> {
     const rows: ThreadListRow[] = [];
     for (let page = 0; page < LIST_MAX_PAGES; page += 1) {
       const batch = await bb.sdk.threads.list({
-        parentThreadId,
+        ...filter,
         archived: false,
         includeHidden: true,
         limit: LIST_PAGE_SIZE,
@@ -571,6 +603,21 @@ export default function plugin(bb: BbPluginApi) {
       if (batch.length < LIST_PAGE_SIZE) return rows;
     }
     return null;
+  }
+
+  function listChildren(
+    parentThreadId: string,
+  ): Promise<ThreadListRow[] | null> {
+    return listAllPages({ parentThreadId });
+  }
+
+  /**
+   * Threads forked from this one. A fork carries `sourceThreadId`, not
+   * `parentThreadId`, so a parent-only walk never sees it — and a hidden fork
+   * is exactly the thread that would be archived without ever being checked.
+   */
+  function listForks(sourceThreadId: string): Promise<ThreadListRow[] | null> {
+    return listAllPages({ sourceThreadId });
   }
 
   async function sitrep(
@@ -650,6 +697,9 @@ export default function plugin(bb: BbPluginApi) {
       const children = await listChildren(threadId);
       if (children === null) return { incomplete: true };
       for (const child of children) queue.push(child.id);
+      const forks = await listForks(threadId);
+      if (forks === null) return { incomplete: true };
+      for (const fork of forks) queue.push(fork.id);
     }
     return { threadIds: ordered };
   }
@@ -682,6 +732,101 @@ export default function plugin(bb: BbPluginApi) {
       current = parent;
     }
     return { reason: "it is not Crew under a Commander" };
+  }
+
+  /** `a, b, c` or `none`, for a report line. */
+  function idList(ids: readonly string[]): string {
+    if (ids.length === 0) return "none";
+    if (ids.length <= 5) return ids.join(", ");
+    return `${ids.slice(0, 5).join(", ")} and ${ids.length - 5} more`;
+  }
+
+  /**
+   * Put back threads bb archived that settle never checked.
+   *
+   * Returns the ids it could not restore, which is the part a human has to
+   * deal with by hand.
+   */
+  async function unarchiveAll(ids: readonly string[]): Promise<string[]> {
+    const stuck: string[] = [];
+    for (const id of ids) {
+      try {
+        await bb.sdk.threads.unarchive({ threadId: id });
+      } catch (error) {
+        bb.log.warn(
+          `starbase: could not unarchive ${id}: ${shorten(describe(error), 120)}`,
+        );
+        stuck.push(id);
+      }
+    }
+    return stuck;
+  }
+
+  /**
+   * Archive the checked threads, deepest first, verifying after every call.
+   *
+   * In SDK 0.4.47 `threads.archive` and `threads.archiveAll` both POST to the
+   * same `threads/:id/archive-all` route, so there is no single-thread archive
+   * to reach for: every call takes a whole subtree. Going deepest first keeps
+   * each call's blast radius as small as it can be, and the check after each
+   * call stops the run before the next, larger one.
+   *
+   * An id bb archived that settle never checked is put back immediately.
+   */
+  async function archiveChecked(
+    rootThreadId: string,
+    threadIds: readonly string[],
+    checked: ReadonlySet<string>,
+  ): Promise<{ exitCode: number; stdout?: string; stderr?: string }> {
+    const order = [...threadIds].reverse();
+    const archived = new Set<string>();
+    const remainingAfter = (index: number): string[] =>
+      order.slice(index + 1).filter((id) => !archived.has(id));
+
+    for (let index = 0; index < order.length; index += 1) {
+      const memberId = order[index];
+      // An earlier subtree archive already took this one.
+      if (archived.has(memberId)) continue;
+
+      let result;
+      try {
+        result = await bb.sdk.threads.archive({ threadId: memberId });
+      } catch (error) {
+        return {
+          exitCode: 1,
+          stderr: shorten(
+            `settle ${rootThreadId}: archiving ${memberId} failed (${describe(error)}). Archived: ${idList([...archived])}. Failed: ${memberId}. Not archived: ${idList(remainingAfter(index))}.`,
+            600,
+          ),
+        };
+      }
+
+      const unexpected = result.archivedThreadIds.filter(
+        (id) => !checked.has(id),
+      );
+      for (const id of result.archivedThreadIds) archived.add(id);
+
+      if (unexpected.length > 0) {
+        // Stop before the next, larger archive, and put these back.
+        const stuck = await unarchiveAll(unexpected);
+        for (const id of unexpected) {
+          if (!stuck.includes(id)) archived.delete(id);
+        }
+        const restored = unexpected.filter((id) => !stuck.includes(id));
+        return {
+          exitCode: 1,
+          stderr: shorten(
+            `settle ${rootThreadId}: stopped — archiving ${memberId} also took unchecked thread(s) ${idList(unexpected)}. Unarchived: ${idList(restored)}. Still archived: ${idList(stuck)}. Archived as intended: ${idList([...archived])}. Not archived: ${idList(remainingAfter(index))}.`,
+            600,
+          ),
+        };
+      }
+    }
+
+    return {
+      exitCode: 0,
+      stdout: `Settled ${rootThreadId}: archived ${archived.size} thread(s).`,
+    };
   }
 
   /**
@@ -718,37 +863,15 @@ export default function plugin(bb: BbPluginApi) {
       }
     }
 
-    // Archive the checked ids one by one rather than calling `archiveAll`.
-    // `archiveAll` decides its own tree, and nothing in the SDK reports that
-    // tree or offers a dry run, so it could take a thread this never checked.
-    // Deepest first, so a thread is archived after its own descendants.
-    const archived = new Set<string>();
-    for (const memberId of [...tree.threadIds].reverse()) {
-      const result = await bb.sdk.threads.archive({ threadId: memberId });
-      for (const id of result.archivedThreadIds) archived.add(id);
-    }
-
+    const outcome = await archiveChecked(threadId, tree.threadIds, checked);
     recordEvent({
       dedupeKey: `settled:${threadId}:${Date.now()}`,
       threadId,
       commanderId: thread.parentThreadId,
       kind: "settled",
-      summary: `archived ${archived.size} thread(s)`,
+      summary: shorten(outcome.stdout ?? outcome.stderr ?? "settled", 120),
     });
-
-    // A belt-and-braces check on the assumption above. If bb archived a thread
-    // outside the checked set, say so instead of reporting a clean settle.
-    const unchecked = [...archived].filter((id) => !checked.has(id));
-    if (unchecked.length > 0) {
-      return {
-        exitCode: 1,
-        stderr: `Settled ${threadId}, but bb also archived ${unchecked.length} unchecked thread(s): ${unchecked.slice(0, 5).join(", ")}.`,
-      };
-    }
-    return {
-      exitCode: 0,
-      stdout: `Settled ${threadId}: archived ${archived.size} thread(s).`,
-    };
+    return outcome;
   }
 
   bb.cli.register({

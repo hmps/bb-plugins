@@ -75,6 +75,32 @@ function dirtyStatus() {
   };
 }
 
+/**
+ * The error bb raises for `mode: "start"` against an active thread, in the
+ * exact shape the SDK's `BbHttpError` carries it: HTTP 409, a top-level
+ * `code`, and the server's `details.reason`.
+ */
+function alreadyActiveError() {
+  const error = new Error("HTTP 409: Thread is already active") as Error & {
+    status: number;
+    code: string;
+    body: unknown;
+  };
+  error.name = "BbHttpError";
+  error.status = 409;
+  error.code = "thread_not_writable";
+  error.body = {
+    code: "thread_not_writable",
+    message: "Thread is already active",
+    details: {
+      reason: "already_active",
+      archivedAt: null,
+      threadStatus: "active",
+    },
+  };
+  return error;
+}
+
 /** A minimal `approval` interaction — only the fields the plugin reads. */
 function approvalInteraction(id: string): PendingInteraction {
   return {
@@ -105,6 +131,7 @@ interface HostOptions {
   interactionsList?: (args: { threadId: string }) => unknown;
   archiveAll?: (args: { threadId: string }) => unknown;
   threadsArchive?: (args: { threadId: string }) => unknown;
+  threadsUnarchive?: (args: { threadId: string }) => unknown;
   threadsSend?: (args: unknown) => unknown;
   commanderProjectIds?: string;
 }
@@ -153,6 +180,7 @@ function host(options: HostOptions = {}) {
             ok: true,
             archivedThreadIds: [args.threadId],
           })),
+        unarchive: options.threadsUnarchive ?? (() => ({ ok: true })),
         archiveAll:
           options.archiveAll ?? (() => ({ ok: true, archivedThreadIds: [] })),
         interactions: {
@@ -348,7 +376,7 @@ describe("interaction relay", () => {
       threadsSend: (args) => {
         const mode = (args as { mode: string }).mode;
         modes.push(mode);
-        if (mode === "start") throw new Error("thread is no longer idle");
+        if (mode === "start") throw alreadyActiveError();
         return { ok: true, delivery: "queued" };
       },
     });
@@ -367,6 +395,80 @@ describe("interaction relay", () => {
       interaction: approvalInteraction("int_1"),
     });
     expect(modes).toEqual(["start", "queue-if-active"]);
+  });
+
+  it("never retries an ambiguous send failure, and releases the key", async () => {
+    // A timeout says nothing about whether the server took the message.
+    // Retrying would post the same line twice.
+    const modes: string[] = [];
+    let attempt = 0;
+    const { harness } = host({
+      threadsSend: (args) => {
+        modes.push((args as { mode: string }).mode);
+        attempt += 1;
+        if (attempt === 1) {
+          throw new Error("BB request timed out after 75 seconds.");
+        }
+        return { ok: true, delivery: "sent" };
+      },
+    });
+    const payload = {
+      thread: crewThread(),
+      interaction: approvalInteraction("int_1"),
+    };
+
+    const first = await harness.emitThreadEvent("interaction.pending", payload);
+    expect(first.errors).toEqual([]);
+    // One attempt only: no queue retry behind an ambiguous failure.
+    expect(modes).toEqual(["start"]);
+
+    // The row was released, so the next identical event tries again.
+    await harness.emitThreadEvent("interaction.pending", payload);
+    expect(modes).toEqual(["start", "start"]);
+  });
+
+  it("keeps the dedupe row when the queue retry succeeds", async () => {
+    const { harness } = host({
+      threadsSend: (args) => {
+        if ((args as { mode: string }).mode === "start") {
+          throw alreadyActiveError();
+        }
+        return { ok: true, delivery: "queued" };
+      },
+    });
+    const payload = {
+      thread: crewThread(),
+      interaction: approvalInteraction("int_1"),
+    };
+
+    await harness.emitThreadEvent("interaction.pending", payload);
+    await harness.emitThreadEvent("interaction.pending", payload);
+
+    // start + queue on the first event, nothing on the replay.
+    expect(harness.sdk.callsTo("threads.send")).toHaveLength(2);
+  });
+
+  it("deletes the dedupe row when both the start and the queue fail", async () => {
+    let attempt = 0;
+    const { harness } = host({
+      threadsSend: (args) => {
+        const mode = (args as { mode: string }).mode;
+        if (mode === "start") throw alreadyActiveError();
+        attempt += 1;
+        if (attempt === 1) throw new Error("commander unreachable");
+        return { ok: true, delivery: "queued" };
+      },
+    });
+    const payload = {
+      thread: crewThread(),
+      interaction: approvalInteraction("int_1"),
+    };
+
+    await harness.emitThreadEvent("interaction.pending", payload);
+    await harness.emitThreadEvent("interaction.pending", payload);
+
+    // Two full attempts: the first released its key when the queue send failed.
+    expect(harness.sdk.callsTo("threads.send")).toHaveLength(4);
   });
 });
 
@@ -1085,10 +1187,17 @@ describe("settle", () => {
     expect(harness.sdk.callsTo("threads.archiveAll")).toHaveLength(0);
   });
 
-  it("reports an archive that reached a thread it never checked", async () => {
+  it("stops and unarchives when an archive reaches an unchecked thread", async () => {
+    const childId = "thr_child";
     const { harness } = host({
+      threadsGet: (args) =>
+        args.threadId === COMMANDER_THREAD
+          ? commanderThread()
+          : crewThread({ id: args.threadId, environmentId: null }),
+      threadsList: pages({ [CREW_THREAD]: [{ id: childId }] }),
       threadsArchive: (args) => ({
         ok: true,
+        // The deepest call already reaches a thread settle never saw.
         archivedThreadIds: [args.threadId, "thr_surprise"],
       }),
     });
@@ -1097,8 +1206,122 @@ describe("settle", () => {
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe(
-      `Settled ${CREW_THREAD}, but bb also archived 1 unchecked thread(s): thr_surprise.`,
+      `settle ${CREW_THREAD}: stopped — archiving ${childId} also took unchecked thread(s) thr_surprise. Unarchived: thr_surprise. Still archived: none. Archived as intended: ${childId}. Not archived: ${CREW_THREAD}.`,
     );
+    // It stopped before the root's larger archive.
+    expect(archivedIds(harness)).toEqual([childId]);
+    expect(
+      harness.sdk.callsTo("threads.unarchive").map(([a]) => a),
+    ).toEqual([{ threadId: "thr_surprise" }]);
+  });
+
+  it("reports an unchecked thread it could not put back", async () => {
+    const { harness } = host({
+      threadsArchive: (args) => ({
+        ok: true,
+        archivedThreadIds: [args.threadId, "thr_surprise"],
+      }),
+      threadsUnarchive: () => {
+        throw new Error("unarchive is not permitted");
+      },
+    });
+
+    const result = await harness.runCli(["settle", CREW_THREAD]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("Unarchived: none");
+    expect(result.stderr).toContain("Still archived: thr_surprise");
+  });
+
+  it("names what was archived when a later archive fails", async () => {
+    const childId = "thr_child";
+    const grandchildId = "thr_grandchild";
+    const { harness } = host({
+      threadsGet: (args) =>
+        args.threadId === COMMANDER_THREAD
+          ? commanderThread()
+          : crewThread({ id: args.threadId, environmentId: null }),
+      threadsList: pages({
+        [CREW_THREAD]: [{ id: childId }],
+        [childId]: [{ id: grandchildId }],
+      }),
+      threadsArchive: (args) => {
+        if (args.threadId === childId) throw new Error("host is offline");
+        return { ok: true, archivedThreadIds: [args.threadId] };
+      },
+    });
+
+    const result = await harness.runCli(["settle", CREW_THREAD]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe(
+      `settle ${CREW_THREAD}: archiving ${childId} failed (host is offline). Archived: ${grandchildId}. Failed: ${childId}. Not archived: ${CREW_THREAD}.`,
+    );
+  });
+
+  it("refuses a fork with a dirty worktree before archiving anything", async () => {
+    const forkId = "thr_fork";
+    const { harness } = host({
+      threadsGet: (args) => {
+        if (args.threadId === COMMANDER_THREAD) return commanderThread();
+        if (args.threadId === forkId) {
+          return crewThread({ id: forkId, environmentId: "env_fork" });
+        }
+        return crewThread({ id: args.threadId, environmentId: null });
+      },
+      // A fork is linked by sourceThreadId, never by parentThreadId.
+      threadsList: (args) => {
+        const query = args as {
+          parentThreadId?: string;
+          sourceThreadId?: string;
+        };
+        if (query.sourceThreadId === CREW_THREAD) return [{ id: forkId }];
+        return [];
+      },
+      environmentStatus: (args) =>
+        args.environmentId === "env_fork" ? dirtyStatus() : cleanStatus(),
+    });
+
+    const result = await harness.runCli(["settle", CREW_THREAD]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe(
+      `Refused: ${forkId} (a child of ${CREW_THREAD}) — the worktree has uncommitted changes.`,
+    );
+    expect(archivedIds(harness)).toEqual([]);
+  });
+
+  it("checks a fork of a child, not just a fork of the root", async () => {
+    const childId = "thr_child";
+    const forkId = "thr_fork";
+    const { harness } = host({
+      threadsGet: (args) => {
+        if (args.threadId === COMMANDER_THREAD) return commanderThread();
+        if (args.threadId === forkId) {
+          return crewThread({ id: forkId, environmentId: "env_fork" });
+        }
+        return crewThread({ id: args.threadId, environmentId: null });
+      },
+      threadsList: (args) => {
+        const query = args as {
+          parentThreadId?: string;
+          sourceThreadId?: string;
+        };
+        if (query.parentThreadId === CREW_THREAD) return [{ id: childId }];
+        if (query.sourceThreadId === childId) return [{ id: forkId }];
+        return [];
+      },
+      environmentStatus: (args) =>
+        args.environmentId === "env_fork" ? dirtyStatus() : cleanStatus(),
+    });
+
+    const result = await harness.runCli(["settle", CREW_THREAD]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe(
+      `Refused: ${forkId} (a child of ${CREW_THREAD}) — the worktree has uncommitted changes.`,
+    );
+    expect(archivedIds(harness)).toEqual([]);
   });
 
   it("refuses a thread that is not Crew under a Commander", async () => {

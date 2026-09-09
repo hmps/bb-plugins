@@ -47,10 +47,17 @@ thread is still recorded, so `--json` can report the last event.
 **A Sentinel line is never steered into a live turn.** The Sentinel never sends
 with `auto`, because `auto` resolves the mode from the thread's state at send
 time and would steer a Commander that started a turn just after the status was
-read. An idle Commander gets `start`, which only ever begins a turn. If `start`
-is refused because the Commander is no longer idle, the one retry sends
-`queue-if-active`, which only ever waits. A busy Commander goes straight to
-`queue-if-active`.
+read. An idle Commander gets `start`, which only ever begins a turn. A busy
+Commander gets `queue-if-active`, which only ever waits.
+
+**A send is retried only when bb proves nothing was delivered.** The one retry
+fires on exactly one error: HTTP 409 with `code: "thread_not_writable"` and
+`details.reason: "already_active"`, which bb raises when `start` meets a thread
+that just went active. That error means the message was refused, so sending it
+again with `queue-if-active` cannot double-post. Every other failure — a
+timeout, a dropped response — is ambiguous about delivery, so the Sentinel does
+not retry it; it releases the dedupe key instead and lets the next identical
+event try again.
 
 The Sentinel polls nothing. Every relay runs from a bb lifecycle event.
 
@@ -105,12 +112,27 @@ that is not safe. A thread is safe only when both of these hold:
 
 A tree of more than 500 threads is refused rather than inspected in part.
 
-Once every thread passes, `settle` archives the checked ids one at a time with
-`threads.archive`, deepest first. It does not call `threads.archiveAll`:
-`archiveAll` decides its own tree, and the SDK offers no dry run and no report
-of the tree it would take, so it could reach a thread that was never checked.
-As a last check, `settle` compares what bb reports archiving against what it
-checked and exits non-zero naming any thread outside that set.
+### bb has no single-thread archive
+
+In SDK 0.4.47 `threads.archive` and `threads.archiveAll` both POST to the same
+`threads/:id/archive-all` route. There is no call that archives one thread, and
+no dry run that reports the tree a call would take. `settle` is built around
+that fact:
+
+- It enumerates **children and forks**. A fork carries `sourceThreadId`, not
+  `parentThreadId`, so a parent-only walk would miss it — and a hidden fork is
+  exactly the thread that would be archived without ever being checked.
+- It archives **deepest first**, so each call takes the smallest subtree it can.
+- It checks the returned `archivedThreadIds` **after every call, before the
+  next one**, and stops at the first id it did not check.
+- It **puts back** what it should not have taken: every unexpected id goes
+  through `threads.unarchive` right away. The refusal names what was
+  unarchived, what could not be unarchived, what was archived as intended, and
+  what was left alone.
+
+When an archive call fails part-way through a tree, the error names the ids
+already archived, the id that failed, and the ids not archived, so the state is
+recoverable by hand.
 
 `--force-archive` is not implemented in v1. The command says so and exits
 non-zero, so nobody builds a habit on it.
@@ -118,11 +140,12 @@ non-zero, so nobody builds a habit on it.
 ### Known limit: the window between checking and archiving
 
 bb has no transactional archive. A Crew thread can dirty its worktree or open a
-pull request in the moment between `settle` reading its state and `settle`
-archiving it, and nothing here can prevent that. Archiving each checked thread
-individually narrows the window — it is one thread's check-to-archive gap
-rather than the whole tree's — but it does not close it. Settle Crew that has
-stopped working.
+pull request in the moment between `settle` reading its state and the archive
+call that takes it, and nothing here can prevent that. Because each call
+archives a subtree rather than one thread, the window is per subtree, not per
+thread: the deepest-first order and the per-call check keep it as small as the
+API allows, and the unarchive compensation undoes what it can, but neither
+closes it. Settle Crew that has stopped working.
 
 ## Settings
 
