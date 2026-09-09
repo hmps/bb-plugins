@@ -36,7 +36,18 @@ interface LifecycleDbRow {
   snoozed_at: number | null;
 }
 
+interface SweepThread {
+  id: string;
+  archivedAt: number | null;
+  latestAttentionAt: number;
+  hasPendingInteraction: boolean;
+  status: string;
+  activity: Record<string, number>;
+}
+
 const threadIdSchema = z.object({ threadId: z.string().trim().min(1) });
+const SETTLED_SWEEP_CRON = "15 3 * * *";
+const SETTLED_RETENTION_MS = 10 * 24 * 60 * 60 * 1_000;
 
 export const t3sidebarRpcContract = defineRpcContract({
   listLifecycle: {
@@ -124,6 +135,22 @@ export default function plugin(bb: BbPluginApi) {
       snoozedAt: row.snoozed_at,
     }));
 
+  const readSettledBefore = (cutoff: number): StoredLifecycleRow[] =>
+    (
+      db
+        .prepare(
+          `SELECT thread_id, settled_at, snoozed_until, snoozed_at
+             FROM thread_lifecycle
+            WHERE settled_at IS NOT NULL AND settled_at < ?`,
+        )
+        .all(cutoff) as LifecycleDbRow[]
+    ).map((row) => ({
+      threadId: row.thread_id,
+      settledAt: row.settled_at,
+      snoozedUntil: row.snoozed_until,
+      snoozedAt: row.snoozed_at,
+    }));
+
   const write = (row: StoredLifecycleRow): void => {
     db.prepare(
       `INSERT INTO thread_lifecycle
@@ -143,6 +170,43 @@ export default function plugin(bb: BbPluginApi) {
     );
     bb.realtime.publish(LIFECYCLE_CHANNEL, { threadId });
   };
+
+  const runSettledSweep = async (): Promise<void> => {
+    const threads: SweepThread[] = [];
+    const pageSize = 500;
+    for (let offset = 0; ; offset += pageSize) {
+      const page = (await bb.sdk.threads.list({
+        archived: false,
+        includeHidden: true,
+        limit: pageSize,
+        offset,
+      })) as SweepThread[];
+      threads.push(...page);
+      if (page.length < pageSize) break;
+    }
+    const byId = new Map(threads.map((thread) => [thread.id, thread]));
+    for (const row of readSettledBefore(Date.now() - SETTLED_RETENTION_MS)) {
+      const thread = byId.get(row.threadId);
+      if (thread === undefined || row.settledAt === null) continue;
+      if (
+        thread.archivedAt !== null ||
+        thread.latestAttentionAt > row.settledAt ||
+        thread.hasPendingInteraction ||
+        (thread.status !== "idle" && thread.status !== "error") ||
+        Object.values(thread.activity).some((count) => count > 0)
+      ) continue;
+      try {
+        await bb.sdk.threads.archiveAll({ threadId: row.threadId });
+        clear(row.threadId);
+      } catch (error) {
+        bb.log.error(
+          `settled sweep archive failed for ${row.threadId}: ${String(error)}`,
+        );
+      }
+    }
+  };
+
+  bb.background.schedule("settled-sweep", SETTLED_SWEEP_CRON, runSettledSweep);
 
   const settle = (threadId: string): void => {
     // Settling clears any snooze: they are two answers to the same question,

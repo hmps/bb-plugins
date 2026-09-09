@@ -28,21 +28,27 @@ export function useQueueCounts(
       .filter((id) => !requested.current.has(id));
     if (fresh.length === 0) return;
     for (const id of fresh) requested.current.add(id);
-    rpc
-      .call("queueCounts", { threadIds: fresh })
-      .then((result) => {
-        setCounts((previous) => {
-          const next = new Map(previous);
-          for (const { threadId, count } of result.counts) {
-            next.set(threadId, count);
-          }
-          return next;
-        });
-      })
-      .catch(() => {
-        // Let a failed batch be asked for again on the next thread change.
-        for (const id of fresh) requested.current.delete(id);
+    const applyResults = (entries: Array<{ threadId: string; count: number }>) =>
+      setCounts((previous) => {
+        const next = new Map(previous);
+        for (const { threadId, count } of entries) {
+          next.set(threadId, count);
+        }
+        return next;
       });
+    // One rpc call per at most 500 ids: the queueCounts contract caps a
+    // single batch, and a sidebar with more threads than that would
+    // otherwise fail every call and re-ask the same oversized batch forever.
+    for (let start = 0; start < fresh.length; start += 500) {
+      const batch = fresh.slice(start, start + 500);
+      rpc
+        .call("queueCounts", { threadIds: batch })
+        .then((result) => applyResults(result.counts))
+        .catch(() => {
+          // Let a failed batch be asked for again on the next thread change.
+          for (const id of batch) requested.current.delete(id);
+        });
+    }
   }, [rpc, threads]);
 
   useRealtime(QUEUE_CHANNEL, (payload) => {

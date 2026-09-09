@@ -69,6 +69,15 @@ Four shelves:
   back early if it starts working or asks you something.
 - **Settled** — work you are done with, collapsed to one line each.
 
+The server runs a daily sweep at 03:15. It checks settled rows older than ten
+days and archives only threads that still have no new attention, pending
+interaction, live status, or activity. Threads that are not returned as active
+by bb remain in the plugin store. A failed archive stays in the store for a
+later sweep.
+
+Warning: archiving a thread in a managed environment can start its environment
+cleanup. Keep a thread unsettled if you still need its managed worktree.
+
 ## Child threads live in the header
 
 A flat inbox has nowhere to nest a child thread, so the list hides a child
