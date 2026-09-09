@@ -11,7 +11,7 @@
 //
 // Placement stays advisory. This plugin never spawns and never rewrites a
 // spawn target; it only reports.
-import type { BbPluginApi } from "@get-bb/plugin-sdk";
+import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 
 /** How often the background service refreshes the snapshot. */
@@ -84,39 +84,92 @@ export const EMPTY_SNAPSHOT: Snapshot = {
 };
 
 /**
- * Parse the capacity setting.
+ * One machine's fan-out configuration, keyed by host id.
  *
- * The setting doubles as the eligibility list: a machine that is not named
- * here is never advised as a target. That is how the user's laptop stays out
- * of the fan-out pool without a second list to keep in sync.
- *
- * The schema rejects bad input at the settings boundary, but the parse still
- * falls back to a safe value rather than throwing: a value stored before the
- * schema existed must not take the plugin down.
+ * Keyed by id rather than name so renaming a machine in bb does not silently
+ * drop its configuration. The name is stored alongside purely so the raw
+ * record stays readable when inspected outside the UI.
  */
-function parseCapacityOrNull(raw: string): Record<string, number> | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    return null;
-  }
-  const out: Record<string, number> = {};
-  for (const [name, value] of Object.entries(parsed)) {
-    if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
-      return null;
+export type MachineConfig = {
+  name: string;
+  /** Maximum concurrently running threads before the machine is "full". */
+  capacity: number;
+  /**
+   * Whether this machine takes part in fan-out at all.
+   *
+   * A disabled machine is invisible to the advice logic in both directions: it
+   * is never offered as a target, and threads running on it are never told to
+   * move. That is how a laptop stays out of the scheme while still appearing
+   * in the settings list.
+   */
+  enabled: boolean;
+};
+
+export type MachineConfigMap = Record<string, MachineConfig>;
+
+/** Capacity suggested for a machine the user has not configured yet. */
+export const DEFAULT_CAPACITY = 8;
+
+/**
+ * Parse the stored machine configuration.
+ *
+ * Persisted values are untrusted: they may predate a schema change or have
+ * been edited by hand. Every record is validated field by field and anything
+ * malformed is dropped rather than throwing, because a bad stored value must
+ * not take the plugin down.
+ */
+export function parseMachineConfig(raw: unknown): MachineConfigMap {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  const out: MachineConfigMap = {};
+  for (const [hostId, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value !== "object" || value === null) continue;
+    const record = value as Record<string, unknown>;
+    const capacity = record.capacity;
+    if (
+      typeof capacity !== "number" ||
+      !Number.isInteger(capacity) ||
+      capacity < 1
+    ) {
+      continue;
     }
-    out[name] = value;
+    out[hostId] = {
+      name: typeof record.name === "string" ? record.name : hostId,
+      capacity,
+      enabled: record.enabled === true,
+    };
   }
   return out;
 }
 
-/** Parse the capacity setting, falling back to an empty map on bad input. */
-export function parseCapacity(raw: string): Record<string, number> {
-  return parseCapacityOrNull(raw) ?? {};
+/**
+ * Fill in every machine bb knows about, so the settings list shows all of
+ * them and a new machine appears without any migration step.
+ *
+ * An unconfigured machine defaults to DISABLED. Enabling a machine means
+ * sending real work to it, so that has to be a decision the user makes rather
+ * than something that happens by default when a machine is enrolled.
+ */
+export function mergeMachineConfig(
+  stored: MachineConfigMap,
+  hosts: HostRow[],
+): MachineConfigMap {
+  const out: MachineConfigMap = {};
+  for (const host of hosts) {
+    const existing = stored[host.id];
+    out[host.id] = existing
+      ? { ...existing, name: host.name }
+      : { name: host.name, capacity: DEFAULT_CAPACITY, enabled: false };
+  }
+  return out;
+}
+
+/** The capacity lookup the snapshot uses: enabled machines only. */
+export function enabledCapacities(config: MachineConfigMap): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [hostId, record] of Object.entries(config)) {
+    if (record.enabled) out[hostId] = record.capacity;
+  }
+  return out;
 }
 
 /** Default used when the threshold setting is missing or unparseable. */
@@ -156,6 +209,7 @@ export function buildSnapshot(args: {
   threads: ThreadRow[];
   hosts: HostRow[];
   projectHosts: Map<string, Set<string>>;
+  /** Capacity per host id; only enabled machines appear. */
   capacity: Record<string, number>;
   now: number;
 }): Snapshot {
@@ -169,7 +223,7 @@ export function buildSnapshot(args: {
   }
 
   const machines = args.hosts.map<MachineStat>((host) => {
-    const capacity = args.capacity[host.name] ?? null;
+    const capacity = args.capacity[host.id] ?? null;
     const count = running.get(host.id) ?? 0;
     return {
       hostId: host.id,
@@ -213,7 +267,7 @@ export function pickTarget(args: {
   const threshold = args.thresholdPercent / 100;
   const current = snapshot.machines.find((m) => m.hostId === currentHostId);
 
-  // An unlisted machine has no capacity, so we cannot say it is overloaded.
+  // A disabled machine has no capacity, so we cannot say it is overloaded.
   // This is also what keeps threads on the user's laptop out of the scheme.
   if (!current || current.saturation === null) return null;
   if (current.saturation < threshold) return null;
@@ -245,7 +299,7 @@ export function pickTarget(args: {
 
 function formatMachine(machine: MachineStat): string {
   if (machine.capacity === null || machine.saturation === null) {
-    return `${machine.name} (${machine.running} running, not a fan-out target)`;
+    return `${machine.name} (${machine.running} running, disabled)`;
   }
   const percent = Math.round(machine.saturation * 100);
   return `${machine.name} (${machine.running}/${machine.capacity} running, ${percent}%)`;
@@ -281,8 +335,8 @@ export function renderStatus(
     .slice()
     .sort((a, b) => (a.saturation ?? 2) - (b.saturation ?? 2))
     .map((machine) => {
-      // `formatMachine` already says when a machine is not a target, so only
-      // the reasons it does not repeat belong here.
+      // `formatMachine` already says when a machine is disabled, so only the
+      // reasons it does not repeat belong here.
       const notes: string[] = [];
       if (!machine.connected) notes.push("disconnected");
       if (eligibleHosts && !eligibleHosts.has(machine.hostId)) {
@@ -298,22 +352,60 @@ export function renderStatus(
   return [`Machine load (sampled ${age}):`, ...lines].join("\n");
 }
 
+/** One row of the settings machine list. */
+const machineRowSchema = z.object({
+  hostId: z.string(),
+  name: z.string(),
+  connected: z.boolean(),
+  /** Threads running on this machine right now. */
+  running: z.number().int().min(0),
+  capacity: z.number().int().min(1),
+  enabled: z.boolean(),
+});
+
+export type MachineRow = z.infer<typeof machineRowSchema>;
+
+export const rpcContract = defineRpcContract({
+  listMachines: {
+    input: z.null(),
+    output: z.object({ machines: z.array(machineRowSchema) }),
+  },
+  saveMachines: {
+    input: z.object({
+      machines: z.array(
+        z.object({
+          hostId: z.string().trim().min(1),
+          capacity: z.number().int().min(1).max(1000),
+          enabled: z.boolean(),
+        }),
+      ),
+    }),
+    output: z.object({ machines: z.array(machineRowSchema) }),
+  },
+});
+
+/** Render the machine list shown by `bb fanout machines`. */
+export function renderMachines(rows: MachineRow[]): string {
+  if (rows.length === 0) return "bb knows about no machines.";
+
+  const width = Math.max(...rows.map((row) => row.name.length));
+  const lines = rows.map((row) => {
+    const name = row.name.padEnd(width);
+    const state = row.enabled ? `enabled  ${row.running}/${row.capacity}` : "disabled";
+    const link = row.connected ? "" : "  (disconnected)";
+    return `  ${name}  ${state}${link}`;
+  });
+
+  const enabled = rows.filter((row) => row.enabled).length;
+  const footer =
+    enabled === 0
+      ? "\nNo machine is enabled, so no advice is ever given. Enable one with `bb fanout enable <machine>`."
+      : "";
+  return `Machines:\n${lines.join("\n")}${footer}`;
+}
+
 export default async function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
-    capacity: {
-      type: "string",
-      label: "Machine capacity",
-      description:
-        "JSON map of machine name to the maximum number of concurrently running threads. Only machines listed here are offered as fan-out targets.",
-      experimental_multiline: true,
-      experimental_schema: z
-        .string()
-        .refine((raw) => parseCapacityOrNull(raw) !== null, {
-          message:
-            'Capacity must be a JSON object of machine name to positive integer, e.g. {"MSI": 12}',
-        }),
-      default: '{\n  "Ethereal-Titan": 8,\n  "MSI": 12\n}',
-    },
     thresholdPercent: {
       type: "number",
       label: "Offload threshold (%)",
@@ -323,6 +415,19 @@ export default async function plugin(bb: BbPluginApi) {
       default: DEFAULT_THRESHOLD_PERCENT,
     },
   });
+
+  // Per-machine configuration lives in plugin storage rather than in a
+  // declarative setting: the host renders declarative settings as a form, and
+  // a machine list needs the live host list to render at all.
+  const MACHINES_KEY = "machines";
+
+  async function loadMachineConfig(): Promise<MachineConfigMap> {
+    return parseMachineConfig(await bb.storage.kv.get(MACHINES_KEY));
+  }
+
+  async function saveMachineConfig(config: MachineConfigMap): Promise<void> {
+    await bb.storage.kv.set(MACHINES_KEY, config);
+  }
 
   // The snapshot the synchronous instruction hook reads. Replaced wholesale by
   // the sampler so a reader never sees a half-updated view.
@@ -354,12 +459,13 @@ export default async function plugin(bb: BbPluginApi) {
   async function sample(signal?: AbortSignal): Promise<Snapshot> {
     const raw = await settings.get();
     thresholdPercent = parseThresholdPercent(raw.thresholdPercent);
-    const capacity = parseCapacity(raw.capacity);
 
-    const [threads, hosts] = await Promise.all([
+    const [threads, hosts, stored] = await Promise.all([
       listAllThreads(signal),
-      bb.sdk.hosts.list({ signal }),
+      bb.sdk.hosts.list({ signal }) as Promise<unknown> as Promise<HostRow[]>,
+      loadMachineConfig(),
     ]);
+    const capacity = enabledCapacities(mergeMachineConfig(stored, hosts));
 
     // A machine can only run a project it holds a source for, so resolve the
     // source hosts of every project that currently has threads.
@@ -386,7 +492,7 @@ export default async function plugin(bb: BbPluginApi) {
 
     return buildSnapshot({
       threads,
-      hosts: hosts as unknown as HostRow[],
+      hosts,
       projectHosts,
       capacity,
       now: Date.now(),
@@ -434,6 +540,59 @@ export default async function plugin(bb: BbPluginApi) {
       thresholdPercent,
     });
     return advice ? renderAdvice(advice) : null;
+  });
+
+  /**
+   * Build the settings rows: every machine bb knows about, with its stored
+   * configuration and its current running count.
+   */
+  async function machineRows(signal?: AbortSignal): Promise<MachineRow[]> {
+    const [hosts, stored] = await Promise.all([
+      bb.sdk.hosts.list({ signal }) as Promise<unknown> as Promise<HostRow[]>,
+      loadMachineConfig(),
+    ]);
+    const config = mergeMachineConfig(stored, hosts);
+    const running = countRunningByHost(await listAllThreads(signal));
+
+    return hosts.map((host) => ({
+      hostId: host.id,
+      name: host.name,
+      connected: host.status === "connected",
+      running: running.get(host.id) ?? 0,
+      capacity: config[host.id]?.capacity ?? DEFAULT_CAPACITY,
+      enabled: config[host.id]?.enabled ?? false,
+    }));
+  }
+
+  bb.rpc.register(rpcContract, {
+    async listMachines() {
+      return { machines: await machineRows() };
+    },
+
+    async saveMachines({ machines }) {
+      const hosts = (await bb.sdk.hosts.list()) as unknown as HostRow[];
+      const byId = new Map(hosts.map((host) => [host.id, host]));
+      const stored = await loadMachineConfig();
+      const next: MachineConfigMap = { ...stored };
+
+      for (const row of machines) {
+        const host = byId.get(row.hostId);
+        // Ignore a machine bb no longer knows about rather than persisting a
+        // record that can never apply. Frontend input is untrusted.
+        if (!host) continue;
+        next[row.hostId] = {
+          name: host.name,
+          capacity: row.capacity,
+          enabled: row.enabled,
+        };
+      }
+
+      await saveMachineConfig(next);
+      // Re-sample immediately so the advice reflects the new configuration
+      // instead of waiting out the sampling interval.
+      snapshot = await sample().catch(() => snapshot);
+      return { machines: await machineRows() };
+    },
   });
 
   bb.agents.registerTool({
@@ -490,21 +649,102 @@ export default async function plugin(bb: BbPluginApi) {
         summary: "Show running threads and spare capacity per machine",
         usage: "bb fanout status [--project <id>]",
       },
+      {
+        name: "machines",
+        summary: "List every machine with its fan-out setting",
+        usage: "bb fanout machines",
+      },
+      {
+        name: "enable",
+        summary: "Enable a machine as a fan-out target, optionally setting its capacity",
+        usage: "bb fanout enable <machine> [capacity]",
+      },
+      {
+        name: "disable",
+        summary: "Stop offering a machine as a fan-out target",
+        usage: "bb fanout disable <machine>",
+      },
     ],
     async run(argv, ctx) {
-      if (argv[0] !== "status") {
+      const [command, ...rest] = argv;
+
+      if (command === "status") {
+        const flagIndex = rest.indexOf("--project");
+        const projectId =
+          flagIndex >= 0 ? (rest[flagIndex + 1] ?? null) : (ctx.projectId ?? null);
+        const fresh = await sample(ctx.signal).catch(() => snapshot);
+        snapshot = fresh;
+        return { exitCode: 0, stdout: `${renderStatus(fresh, projectId)}\n` };
+      }
+
+      if (command === "machines") {
+        const rows = await machineRows(ctx.signal);
+        return { exitCode: 0, stdout: `${renderMachines(rows)}\n` };
+      }
+
+      if (command === "enable" || command === "disable") {
+        const query = rest[0];
+        if (!query) {
+          return {
+            exitCode: 1,
+            stderr: `usage: bb fanout ${command} <machine>\n`,
+          };
+        }
+
+        const rows = await machineRows(ctx.signal);
+        const matches = rows.filter(
+          (row) =>
+            row.hostId === query ||
+            row.name.toLowerCase() === query.toLowerCase(),
+        );
+        if (matches.length === 0) {
+          return {
+            exitCode: 1,
+            stderr: `No machine matches "${query}". Run \`bb fanout machines\`.\n`,
+          };
+        }
+        if (matches.length > 1) {
+          return {
+            exitCode: 1,
+            stderr: `"${query}" matches more than one machine; use the host id.\n`,
+          };
+        }
+        const row = matches[0]!;
+
+        let capacity = row.capacity;
+        if (command === "enable" && rest[1] !== undefined) {
+          const parsed = Number(rest[1]);
+          if (!Number.isInteger(parsed) || parsed < 1 || parsed > 1000) {
+            return {
+              exitCode: 1,
+              stderr: "Capacity must be a whole number between 1 and 1000.\n",
+            };
+          }
+          capacity = parsed;
+        }
+
+        const stored = await loadMachineConfig();
+        await saveMachineConfig({
+          ...stored,
+          [row.hostId]: {
+            name: row.name,
+            capacity,
+            enabled: command === "enable",
+          },
+        });
+        snapshot = await sample(ctx.signal).catch(() => snapshot);
+
         return {
-          exitCode: 1,
-          stderr: "usage: bb fanout status [--project <id>]\n",
+          exitCode: 0,
+          stdout: `${renderMachines(await machineRows(ctx.signal))}\n`,
         };
       }
-      const flagIndex = argv.indexOf("--project");
-      const projectId =
-        flagIndex >= 0 ? (argv[flagIndex + 1] ?? null) : (ctx.projectId ?? null);
 
-      const fresh = await sample(ctx.signal).catch(() => snapshot);
-      snapshot = fresh;
-      return { exitCode: 0, stdout: `${renderStatus(fresh, projectId)}\n` };
+      return {
+        exitCode: 1,
+        stderr:
+          "usage: bb fanout <status|machines|enable|disable> [...]\n",
+      };
     },
   });
 }

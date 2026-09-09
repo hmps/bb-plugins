@@ -12,10 +12,17 @@
       "node"
     ],
     "noEmit": true,
-    "skipLibCheck": false
+    "skipLibCheck": false,
+    "jsx": "react-jsx",
+    "paths": {
+      "@/*": [
+        "./*"
+      ]
+    }
   },
   "include": [
     "server.ts",
+    "app.tsx",
     "*.test.ts",
     "vitest.config.ts"
   ]

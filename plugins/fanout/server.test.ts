@@ -4,8 +4,12 @@ import {
   buildSnapshot,
   countRunningByHost,
   isRunning,
-  parseCapacity,
+  DEFAULT_CAPACITY,
+  enabledCapacities,
+  mergeMachineConfig,
+  parseMachineConfig,
   parseThresholdPercent,
+  renderMachines,
   pickTarget,
   renderAdvice,
   renderStatus,
@@ -36,7 +40,8 @@ const HOSTS: HostRow[] = [
   { id: LAPTOP, name: "Silicon Knight", status: "connected" },
 ];
 
-const CAPACITY = { "Ethereal-Titan": 8, MSI: 12 };
+/** Capacity is keyed by host id, and only enabled machines appear. */
+const CAPACITY = { [TITAN]: 8, [MSI]: 12 };
 
 function snapshotOf(threads: ThreadRow[], hosts: HostRow[] = HOSTS): Snapshot {
   return buildSnapshot({
@@ -92,18 +97,92 @@ describe("countRunningByHost", () => {
   });
 });
 
-describe("parseCapacity", () => {
-  it("parses a valid map", () => {
-    expect(parseCapacity('{"MSI": 12}')).toEqual({ MSI: 12 });
+describe("parseMachineConfig", () => {
+  it("parses a valid record", () => {
+    expect(
+      parseMachineConfig({
+        [MSI]: { name: "MSI", capacity: 12, enabled: true },
+      }),
+    ).toEqual({ [MSI]: { name: "MSI", capacity: 12, enabled: true } });
   });
 
-  it("rejects bad shapes rather than throwing", () => {
-    expect(parseCapacity("not json")).toEqual({});
-    expect(parseCapacity("[1,2]")).toEqual({});
-    expect(parseCapacity('{"MSI": 0}')).toEqual({});
-    expect(parseCapacity('{"MSI": -1}')).toEqual({});
-    expect(parseCapacity('{"MSI": 1.5}')).toEqual({});
-    expect(parseCapacity('{"MSI": "big"}')).toEqual({});
+  it("treats a missing enabled flag as disabled", () => {
+    // Enabling a machine sends real work to it, so anything short of an
+    // explicit true must read as disabled.
+    const parsed = parseMachineConfig({
+      [MSI]: { name: "MSI", capacity: 12 },
+    });
+    expect(parsed[MSI]?.enabled).toBe(false);
+  });
+
+  it("drops malformed records rather than throwing", () => {
+    expect(parseMachineConfig(null)).toEqual({});
+    expect(parseMachineConfig("nope")).toEqual({});
+    expect(parseMachineConfig([1, 2])).toEqual({});
+    expect(parseMachineConfig({ [MSI]: { capacity: 0 } })).toEqual({});
+    expect(parseMachineConfig({ [MSI]: { capacity: 1.5 } })).toEqual({});
+    expect(parseMachineConfig({ [MSI]: { capacity: "big" } })).toEqual({});
+  });
+});
+
+describe("mergeMachineConfig", () => {
+  it("lists every machine bb knows about", () => {
+    const merged = mergeMachineConfig({}, HOSTS);
+    expect(Object.keys(merged).sort()).toEqual([TITAN, MSI, LAPTOP].sort());
+  });
+
+  it("defaults an unconfigured machine to disabled", () => {
+    // A newly enrolled machine must not start receiving work on its own.
+    const merged = mergeMachineConfig({}, HOSTS);
+    expect(merged[MSI]).toEqual({
+      name: "MSI",
+      capacity: DEFAULT_CAPACITY,
+      enabled: false,
+    });
+  });
+
+  it("keeps stored settings and refreshes the display name", () => {
+    const merged = mergeMachineConfig(
+      { [MSI]: { name: "Old name", capacity: 12, enabled: true } },
+      HOSTS,
+    );
+    expect(merged[MSI]).toEqual({ name: "MSI", capacity: 12, enabled: true });
+  });
+});
+
+describe("enabledCapacities", () => {
+  it("includes only enabled machines", () => {
+    expect(
+      enabledCapacities({
+        [TITAN]: { name: "Ethereal-Titan", capacity: 8, enabled: true },
+        [LAPTOP]: { name: "Silicon Knight", capacity: 10, enabled: false },
+      }),
+    ).toEqual({ [TITAN]: 8 });
+  });
+});
+
+describe("renderMachines", () => {
+  it("shows a disabled machine as a decision, not an omission", () => {
+    const text = renderMachines([
+      { hostId: TITAN, name: "Ethereal-Titan", connected: true, running: 4, capacity: 8, enabled: true },
+      { hostId: LAPTOP, name: "Silicon Knight", connected: true, running: 1, capacity: 10, enabled: false },
+    ]);
+    expect(text).toContain("Ethereal-Titan  enabled  4/8");
+    expect(text).toContain("Silicon Knight  disabled");
+  });
+
+  it("warns when nothing is enabled", () => {
+    const text = renderMachines([
+      { hostId: MSI, name: "MSI", connected: true, running: 0, capacity: 12, enabled: false },
+    ]);
+    expect(text).toContain("No machine is enabled");
+  });
+
+  it("flags a disconnected machine", () => {
+    const text = renderMachines([
+      { hostId: MSI, name: "MSI", connected: false, running: 0, capacity: 12, enabled: true },
+    ]);
+    expect(text).toContain("(disconnected)");
   });
 });
 
@@ -125,7 +204,7 @@ describe("parseThresholdPercent", () => {
 });
 
 describe("buildSnapshot", () => {
-  it("leaves capacity and saturation null for unlisted machines", () => {
+  it("leaves capacity and saturation null for disabled machines", () => {
     const snapshot = snapshotOf([]);
     const laptop = snapshot.machines.find((m) => m.hostId === LAPTOP);
     expect(laptop?.capacity).toBeNull();
@@ -162,7 +241,7 @@ describe("pickTarget", () => {
     ).toBeNull();
   });
 
-  it("never advises a machine that is absent from the capacity map", () => {
+  it("never advises a disabled machine", () => {
     // Silicon Knight is the user's laptop. It must never receive work, even
     // though it is connected and holds a source for the project.
     const advice = pickTarget({
@@ -176,7 +255,7 @@ describe("pickTarget", () => {
     expect(advice).toBeNull();
   });
 
-  it("stays quiet for a thread running on an unlisted machine", () => {
+  it("stays quiet for a thread running on a disabled machine", () => {
     expect(
       pickTarget({
         ...base,
@@ -274,8 +353,8 @@ describe("renderStatus", () => {
     expect(text).toContain("no source for this project");
     // The "not a fan-out target" reason belongs to the machine line itself and
     // must not also be repeated in the bracketed notes.
-    expect(text).toContain("Silicon Knight (1 running, not a fan-out target)");
-    expect(text).not.toContain("[not a fan-out target]");
+    expect(text).toContain("Silicon Knight (1 running, disabled)");
+    expect(text).not.toContain("[disabled]");
   });
 
   it("reports honestly before the first sample", () => {
