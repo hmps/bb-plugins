@@ -147,10 +147,13 @@ interface HostOptions {
  */
 function pages(byParent: Record<string, Array<{ id: string }>>) {
   return (args?: unknown) => {
-    const { parentThreadId, offset } = args as {
+    const { parentThreadId, offset, archived } = args as {
       parentThreadId: string;
       offset?: number;
+      archived?: boolean;
     };
+    // These are live children; an `archived: true` query matches none of them.
+    if (archived === true) return [];
     if ((offset ?? 0) > 0) return [];
     return byParent[parentThreadId] ?? [];
   };
@@ -1206,13 +1209,124 @@ describe("settle", () => {
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe(
-      `settle ${CREW_THREAD}: stopped — archiving ${childId} also took unchecked thread(s) thr_surprise. Unarchived: thr_surprise. Still archived: none. Archived as intended: ${childId}. Not archived: ${CREW_THREAD}.`,
+      [
+        `settle ${CREW_THREAD}: stopped — archiving ${childId} also took 1 unchecked thread(s).`,
+        "Unchecked: thr_surprise",
+        "Unarchived: thr_surprise",
+        "Still archived: none",
+        `Archived as intended: ${childId}`,
+        `Not archived: ${CREW_THREAD}`,
+      ].join("\n"),
     );
     // It stopped before the root's larger archive.
     expect(archivedIds(harness)).toEqual([childId]);
     expect(
       harness.sdk.callsTo("threads.unarchive").map(([a]) => a),
     ).toEqual([{ threadId: "thr_surprise" }]);
+  });
+
+  it("names all twelve unchecked ids, one per line, hiding none", async () => {
+    const surprises = Array.from(
+      { length: 12 },
+      (_, index) => `thr_surprise_${index}`,
+    );
+    const { harness } = host({
+      threadsArchive: (args) => ({
+        ok: true,
+        archivedThreadIds: [args.threadId, ...surprises],
+      }),
+      // Every unarchive fails, so all twelve stay archived and must be named.
+      threadsUnarchive: () => {
+        throw new Error("unarchive is not permitted");
+      },
+    });
+
+    const result = await harness.runCli(["settle", CREW_THREAD]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe(
+      [
+        `settle ${CREW_THREAD}: stopped — archiving ${CREW_THREAD} also took 12 unchecked thread(s).`,
+        "Unchecked:",
+        ...surprises.map((id) => `  ${id}`),
+        "Unarchived: none",
+        "Still archived:",
+        ...surprises.map((id) => `  ${id}`),
+        `Archived as intended: ${CREW_THREAD}`,
+        "Not archived: none",
+      ].join("\n"),
+    );
+    // Every id appears; nothing is summarised away.
+    for (const id of surprises) expect(result.stderr).toContain(id);
+    expect(result.stderr).not.toContain("more");
+  });
+
+  it("keeps a thread it failed to unarchive out of the archived-as-intended list", async () => {
+    const { harness } = host({
+      threadsArchive: (args) => ({
+        ok: true,
+        archivedThreadIds: [args.threadId, "thr_stuck"],
+      }),
+      threadsUnarchive: () => {
+        throw new Error("unarchive is not permitted");
+      },
+    });
+
+    const result = await harness.runCli(["settle", CREW_THREAD]);
+
+    expect(result.stderr).toContain("Still archived: thr_stuck");
+    expect(result.stderr).toContain(`Archived as intended: ${CREW_THREAD}`);
+    // The stuck id belongs under its own heading, not among the intended ones.
+    expect(result.stderr).not.toContain(
+      `Archived as intended: ${CREW_THREAD}, thr_stuck`,
+    );
+  });
+
+  it("never unarchives a thread bb had already archived before settle ran", async () => {
+    const preArchivedFork = "thr_old_fork";
+    const { harness } = host({
+      threadsList: (args) => {
+        const query = args as {
+          sourceThreadId?: string;
+          archived?: boolean;
+        };
+        // A hidden fork that was archived long before this settle.
+        return query.archived === true && query.sourceThreadId === CREW_THREAD
+          ? [{ id: preArchivedFork }]
+          : [];
+      },
+      threadsArchive: (args) => ({
+        ok: true,
+        // bb's archive-all response names it again.
+        archivedThreadIds: [args.threadId, preArchivedFork],
+      }),
+    });
+
+    const result = await harness.runCli(["settle", CREW_THREAD]);
+
+    expect(result.exitCode).toBe(0);
+    expect(harness.sdk.callsTo("threads.unarchive")).toHaveLength(0);
+  });
+
+  it("refuses when the already-archived descendants cannot be listed", async () => {
+    let next = 0;
+    const { harness } = host({
+      threadsList: (args) => {
+        const query = args as { archived?: boolean };
+        if (query.archived !== true) return [];
+        return Array.from({ length: 100 }, () => ({
+          id: `thr_old_${next++}`,
+        }));
+      },
+    });
+
+    const result = await harness.runCli(["settle", CREW_THREAD]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe(
+      "settle: could not enumerate already-archived descendants",
+    );
+    expect(archivedIds(harness)).toEqual([]);
   });
 
   it("reports an unchecked thread it could not put back", async () => {
@@ -1255,8 +1369,46 @@ describe("settle", () => {
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe(
-      `settle ${CREW_THREAD}: archiving ${childId} failed (host is offline). Archived: ${grandchildId}. Failed: ${childId}. Not archived: ${CREW_THREAD}.`,
+      [
+        `settle ${CREW_THREAD}: archiving ${childId} failed (host is offline).`,
+        `Archived: ${grandchildId}`,
+        `Failed: ${childId}`,
+        `Not archived: ${CREW_THREAD}`,
+      ].join("\n"),
     );
+  });
+
+  it("names every archived and remaining id when an archive fails late", async () => {
+    // A wide tree: twelve children, and the root's archive fails at the end.
+    const childIds = Array.from({ length: 12 }, (_, i) => `thr_child_${i}`);
+    const { harness } = host({
+      threadsGet: (args) =>
+        args.threadId === COMMANDER_THREAD
+          ? commanderThread()
+          : crewThread({ id: args.threadId, environmentId: null }),
+      threadsList: pages({
+        [CREW_THREAD]: childIds.map((id) => ({ id })),
+      }),
+      threadsArchive: (args) => {
+        if (args.threadId === CREW_THREAD) throw new Error("host is offline");
+        return { ok: true, archivedThreadIds: [args.threadId] };
+      },
+    });
+
+    const result = await harness.runCli(["settle", CREW_THREAD]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe(
+      [
+        `settle ${CREW_THREAD}: archiving ${CREW_THREAD} failed (host is offline).`,
+        "Archived:",
+        // Deepest first, so the children archived in reverse order.
+        ...[...childIds].reverse().map((id) => `  ${id}`),
+        `Failed: ${CREW_THREAD}`,
+        "Not archived: none",
+      ].join("\n"),
+    );
+    for (const id of childIds) expect(result.stderr).toContain(id);
   });
 
   it("refuses a fork with a dirty worktree before archiving anything", async () => {

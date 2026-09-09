@@ -126,13 +126,47 @@ that fact:
 - It checks the returned `archivedThreadIds` **after every call, before the
   next one**, and stops at the first id it did not check.
 - It **puts back** what it should not have taken: every unexpected id goes
-  through `threads.unarchive` right away. The refusal names what was
-  unarchived, what could not be unarchived, what was archived as intended, and
-  what was left alone.
+  through `threads.unarchive` right away.
+- It leaves alone anything bb had **already archived before settle ran**.
+  Those ids appear in an archive-all response too, and unarchiving one would
+  undo somebody else's archive. `settle` gathers them up front (an
+  `archived: true`, `includeHidden`, paged walk of the same tree) and never
+  treats them as compensation targets. When that walk cannot be completed,
+  `settle` refuses with `settle: could not enumerate already-archived
+  descendants` rather than risk unarchiving the wrong thread.
+
+**A settle report names every affected thread id.** Nothing is summarised away
+— a report that hides ids is a report nobody can act on. Short lists sit on the
+heading line; longer ones get one id per line:
+
+```
+settle thr_crew: stopped — archiving thr_child also took 12 unchecked thread(s).
+Unchecked:
+  thr_surprise_0
+  thr_surprise_1
+  …
+Unarchived: none
+Still archived:
+  thr_surprise_0
+  …
+Archived as intended: thr_child
+Not archived: thr_crew
+```
+
+A thread that could not be put back is listed under `Still archived` and is
+kept out of `Archived as intended`, so the two headings never overlap.
 
 When an archive call fails part-way through a tree, the error names the ids
-already archived, the id that failed, and the ids not archived, so the state is
-recoverable by hand.
+already archived, the id that failed, and the ids not archived:
+
+```
+settle thr_crew: archiving thr_child failed (host is offline).
+Archived: thr_grandchild
+Failed: thr_child
+Not archived: thr_crew
+```
+
+Only free text — an error message — is ever truncated. Id lists are not.
 
 `--force-archive` is not implemented in v1. The command says so and exits
 non-zero, so nobody builds a habit on it.

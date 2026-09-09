@@ -43,6 +43,9 @@ const SUMMARY_MAX_CHARS = 160;
 /** How many threads settle inspects before it gives up on a runaway tree. */
 const SETTLE_MAX_TREE_SIZE = 500;
 
+/** Ids up to this many stay on the heading line; more get a line each. */
+const INLINE_ID_LIMIT = 3;
+
 /** Rows per `threads.list` page. Paging stops on the first short page. */
 const LIST_PAGE_SIZE = 100;
 
@@ -587,13 +590,16 @@ export default function plugin(bb: BbPluginApi) {
    * Returns null when the list could not be shown to be exhausted.
    */
   async function listAllPages(
-    filter: { parentThreadId: string } | { sourceThreadId: string },
+    filter: (
+      | { parentThreadId: string }
+      | { sourceThreadId: string }
+    ) & { archived?: boolean },
   ): Promise<ThreadListRow[] | null> {
     const rows: ThreadListRow[] = [];
     for (let page = 0; page < LIST_MAX_PAGES; page += 1) {
       const batch = await bb.sdk.threads.list({
-        ...filter,
         archived: false,
+        ...filter,
         includeHidden: true,
         limit: LIST_PAGE_SIZE,
         offset: page * LIST_PAGE_SIZE,
@@ -618,6 +624,42 @@ export default function plugin(bb: BbPluginApi) {
    */
   function listForks(sourceThreadId: string): Promise<ThreadListRow[] | null> {
     return listAllPages({ sourceThreadId });
+  }
+
+  /**
+   * Threads under the tree that bb had already archived before settle ran.
+   *
+   * An archive-all response names these too, and putting one back would undo
+   * an archive somebody else meant. They are not compensation targets, so they
+   * are gathered up front and excluded from the unexpected set.
+   *
+   * The walk descends through archived threads as well, because an archived
+   * node's own archived children are equally reachable from an archive-all.
+   */
+  async function listPreArchived(
+    treeThreadIds: readonly string[],
+  ): Promise<Set<string> | null> {
+    const found = new Set<string>();
+    const visited = new Set<string>();
+    const queue = [...treeThreadIds];
+    while (queue.length > 0) {
+      if (visited.size >= SETTLE_MAX_TREE_SIZE) return null;
+      const threadId = queue.shift() as string;
+      if (visited.has(threadId)) continue;
+      visited.add(threadId);
+      for (const filter of [
+        { parentThreadId: threadId },
+        { sourceThreadId: threadId },
+      ] as const) {
+        const rows = await listAllPages({ ...filter, archived: true });
+        if (rows === null) return null;
+        for (const row of rows) {
+          found.add(row.id);
+          queue.push(row.id);
+        }
+      }
+    }
+    return found;
   }
 
   async function sitrep(
@@ -735,10 +777,18 @@ export default function plugin(bb: BbPluginApi) {
   }
 
   /** `a, b, c` or `none`, for a report line. */
-  function idList(ids: readonly string[]): string {
-    if (ids.length === 0) return "none";
-    if (ids.length <= 5) return ids.join(", ");
-    return `${ids.slice(0, 5).join(", ")} and ${ids.length - 5} more`;
+  /**
+   * One heading of a settle report. Every id is named — a report that hides
+   * ids is a report a human cannot act on, and the tree is capped at
+   * SETTLE_MAX_TREE_SIZE anyway, far below the CLI's 1 MiB output limit.
+   *
+   * A short list stays on the heading line; a long one gets a line per id, so
+   * the ids stay readable and greppable.
+   */
+  function section(heading: string, ids: readonly string[]): string {
+    if (ids.length === 0) return `${heading}: none`;
+    if (ids.length <= INLINE_ID_LIMIT) return `${heading}: ${ids.join(", ")}`;
+    return [`${heading}:`, ...ids.map((id) => `  ${id}`)].join("\n");
   }
 
   /**
@@ -777,11 +827,15 @@ export default function plugin(bb: BbPluginApi) {
     rootThreadId: string,
     threadIds: readonly string[],
     checked: ReadonlySet<string>,
+    preArchived: ReadonlySet<string>,
   ): Promise<{ exitCode: number; stdout?: string; stderr?: string }> {
     const order = [...threadIds].reverse();
     const archived = new Set<string>();
     const remainingAfter = (index: number): string[] =>
       order.slice(index + 1).filter((id) => !archived.has(id));
+    // Stuck ids are never `checked`, so this drops them on its own.
+    const asIntended = (): string[] =>
+      [...archived].filter((id) => checked.has(id));
 
     for (let index = 0; index < order.length; index += 1) {
       const memberId = order[index];
@@ -794,31 +848,38 @@ export default function plugin(bb: BbPluginApi) {
       } catch (error) {
         return {
           exitCode: 1,
-          stderr: shorten(
-            `settle ${rootThreadId}: archiving ${memberId} failed (${describe(error)}). Archived: ${idList([...archived])}. Failed: ${memberId}. Not archived: ${idList(remainingAfter(index))}.`,
-            600,
-          ),
+          stderr: [
+            // Only the error text is capped. Ids never are.
+            `settle ${rootThreadId}: archiving ${memberId} failed (${shorten(describe(error), 200)}).`,
+            section("Archived", asIntended()),
+            `Failed: ${memberId}`,
+            section("Not archived", remainingAfter(index)),
+          ].join("\n"),
         };
       }
 
+      // A thread that was already archived before settle started is not
+      // something settle took, so it is not something settle puts back.
       const unexpected = result.archivedThreadIds.filter(
-        (id) => !checked.has(id),
+        (id) => !checked.has(id) && !preArchived.has(id),
       );
       for (const id of result.archivedThreadIds) archived.add(id);
 
       if (unexpected.length > 0) {
         // Stop before the next, larger archive, and put these back.
         const stuck = await unarchiveAll(unexpected);
-        for (const id of unexpected) {
-          if (!stuck.includes(id)) archived.delete(id);
-        }
         const restored = unexpected.filter((id) => !stuck.includes(id));
+        for (const id of restored) archived.delete(id);
         return {
           exitCode: 1,
-          stderr: shorten(
-            `settle ${rootThreadId}: stopped — archiving ${memberId} also took unchecked thread(s) ${idList(unexpected)}. Unarchived: ${idList(restored)}. Still archived: ${idList(stuck)}. Archived as intended: ${idList([...archived])}. Not archived: ${idList(remainingAfter(index))}.`,
-            600,
-          ),
+          stderr: [
+            `settle ${rootThreadId}: stopped — archiving ${memberId} also took ${unexpected.length} unchecked thread(s).`,
+            section("Unchecked", unexpected),
+            section("Unarchived", restored),
+            section("Still archived", stuck),
+            section("Archived as intended", asIntended()),
+            section("Not archived", remainingAfter(index)),
+          ].join("\n"),
         };
       }
     }
@@ -863,7 +924,20 @@ export default function plugin(bb: BbPluginApi) {
       }
     }
 
-    const outcome = await archiveChecked(threadId, tree.threadIds, checked);
+    const preArchived = await listPreArchived(tree.threadIds);
+    if (preArchived === null) {
+      return {
+        exitCode: 1,
+        stderr: "settle: could not enumerate already-archived descendants",
+      };
+    }
+
+    const outcome = await archiveChecked(
+      threadId,
+      tree.threadIds,
+      checked,
+      preArchived,
+    );
     recordEvent({
       dedupeKey: `settled:${threadId}:${Date.now()}`,
       threadId,
