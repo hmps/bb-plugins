@@ -1,0 +1,39 @@
+{
+  "name": "bb-plugin-fanout",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Advises agents to spawn child threads on a less loaded machine.",
+  "engines": {
+    "bb": ">=0.40",
+    "bbPluginSdk": ">=0.4.21"
+  },
+  "bb": {
+    "name": "Fanout",
+    "description": "Advises agents to spawn child threads on a less loaded machine.",
+    "branding": {
+      "icon": "Zap"
+    },
+    "server": "./server.ts",
+    "skills": []
+  },
+  "keywords": [
+    "bb-plugin"
+  ],
+  "scripts": {
+    "build": "bb plugin build",
+    "test": "vitest run --config vitest.config.ts",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.4.47",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "hono": "^4.11.9",
+    "typescript": "^5.7.0",
+    "vitest": "4.1.11"
+  }
+}
