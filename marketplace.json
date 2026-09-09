@@ -167,6 +167,30 @@
           "tagPrefix": "github-plus/"
         }
       }
+    },
+    {
+      "id": "starbase",
+      "displayName": "Starbase (Sentinel)",
+      "description": "Sentinel for the Starbase orchestration model: relays Crew failures and pending interactions to the Commander thread, and adds `bb starbase sitrep` and a guarded `bb starbase settle`.",
+      "icon": "Satellite",
+      "tags": [
+        "orchestration",
+        "threads",
+        "agents",
+        "cli"
+      ],
+      "author": {
+        "name": "Hampus Persson",
+        "github": "hmps"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/hmps/bb-plugins.git",
+          "subdir": "plugins/starbase",
+          "range": "^0.1.0",
+          "tagPrefix": "starbase/"
+        }
+      }
     }
   ]
 }
