@@ -10,7 +10,7 @@
   },
   "bb": {
     "name": "Starbase",
-    "description": "Sentinel for the Starbase orchestration model. Relays Crew failures and raised hands to the Commander, and adds `bb starbase sitrep` and `bb starbase settle`.",
+    "description": "Sentinel for the Starbase orchestration model. Relays Crew failures and pending interactions to the Commander, and adds `bb starbase sitrep` and `bb starbase settle`.",
     "branding": {
       "icon": "Satellite"
     },

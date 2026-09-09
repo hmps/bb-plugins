@@ -171,7 +171,7 @@
     {
       "id": "starbase",
       "displayName": "Starbase (Sentinel)",
-      "description": "Sentinel for the Starbase orchestration model: relays Crew failures and raised hands to the Commander thread, and adds `bb starbase sitrep` and a guarded `bb starbase settle`.",
+      "description": "Sentinel for the Starbase orchestration model: relays Crew failures and pending interactions to the Commander thread, and adds `bb starbase sitrep` and a guarded `bb starbase settle`.",
       "icon": "Satellite",
       "tags": [
         "orchestration",

@@ -14,6 +14,7 @@
 // Every relay is written to the plugin's own SQLite database first. The insert
 // carries a unique dedupe key, so a repeated event relays exactly once even
 // when bb replays it after a reload.
+import { createHash } from "node:crypto";
 import type {
   BbPluginApi,
   PluginThreadEventPayloads,
@@ -33,6 +34,9 @@ const DEFAULT_COMMANDER_PROJECT_IDS = "proj_s9vk5k4c9u";
 
 /** How much of an interaction prompt or an error a relay line carries. */
 const SUMMARY_MAX_CHARS = 160;
+
+/** How many threads settle inspects before it gives up on a runaway tree. */
+const SETTLE_MAX_TREE_SIZE = 500;
 
 const migrations = [
   `CREATE TABLE IF NOT EXISTS mission_event (
@@ -106,6 +110,27 @@ export function parseProjectIds(raw: string | undefined): Set<string> {
   );
 }
 
+/**
+ * The dedupe key for a failure.
+ *
+ * `thread.failed` carries no id for the failure itself: the payload is
+ * `{ thread, error }` and `ThreadResponse` has no turn id, so the newest
+ * timestamp bb does give — `thread.updatedAt` — stands in for one, hashed
+ * together with the error text. Two distinct failures on the same thread in
+ * the same millisecond with identical text therefore collapse into one relay.
+ * That is accepted: the alternative is relaying a replayed failure twice.
+ */
+export function failureDedupeKey(
+  threadId: string,
+  error: string | null,
+  updatedAt: number,
+): string {
+  const digest = createHash("sha1")
+    .update(`${error ?? ""}\n${updatedAt}`)
+    .digest("hex");
+  return `failed:${threadId}:${digest}`;
+}
+
 /** The `bb thread interactions <verb>` that resolves this interaction. */
 export function resolveVerb(interaction: PendingInteraction): string {
   const payload = interaction.payload;
@@ -142,7 +167,28 @@ export function interactionKind(interaction: PendingInteraction): string {
   return payload.kind;
 }
 
-/** Render one SITREP row. The CLI and the tests share this format. */
+/**
+ * One refusal line. It names the thread that was asked for and the thread that
+ * blocked it, which are the same id when the root itself is unsafe.
+ */
+export function refusal(
+  rootThreadId: string,
+  blockingThreadId: string,
+  reason: string | null,
+): { exitCode: number; stderr: string } {
+  const why = shorten(reason ?? "its state could not be read", 120);
+  const where =
+    blockingThreadId === rootThreadId
+      ? blockingThreadId
+      : `${blockingThreadId} (a child of ${rootThreadId})`;
+  return { exitCode: 1, stderr: `Refused: ${where} — ${why}.` };
+}
+
+/**
+ * Render one SITREP row. `last` is deliberately absent: the text report keeps
+ * the specified columns and nothing else, so one Crew thread is one line.
+ * `--json` carries `last` for a caller that wants it.
+ */
 export function formatSitrepRow(row: SitrepRow): string {
   return [
     row.threadId,
@@ -151,7 +197,6 @@ export function formatSitrepRow(row: SitrepRow): string {
     `pr:${row.pr}`,
     `worktree:${row.worktree}`,
     `interactions:${row.interactions}`,
-    `last:${row.last}`,
   ].join(" · ");
 }
 
@@ -174,6 +219,9 @@ export default function plugin(bb: BbPluginApi) {
     `INSERT OR IGNORE INTO mission_event
        (dedupe_key, thread_id, commander_id, kind, summary, created_at)
      VALUES (?, ?, ?, ?, ?, ?)`,
+  );
+  const deleteEventByKey = db.prepare(
+    `DELETE FROM mission_event WHERE dedupe_key = ?`,
   );
   const selectLastEvent = db.prepare(
     `SELECT thread_id, commander_id, kind, summary, created_at
@@ -205,6 +253,11 @@ export default function plugin(bb: BbPluginApi) {
     return result.changes > 0;
   }
 
+  /** Release a reserved dedupe key so the same event can be relayed again. */
+  function deleteEvent(dedupeKey: string): void {
+    deleteEventByKey.run(dedupeKey);
+  }
+
   function lastEvent(threadId: string): MissionEvent | null {
     const row = selectLastEvent.get(threadId) as MissionEventDbRow | undefined;
     if (row === undefined) return null;
@@ -223,12 +276,26 @@ export default function plugin(bb: BbPluginApi) {
   }
 
   /**
+   * A thread is a Commander when it runs in a Commander project AND it is a
+   * root thread. The root test is what separates a Commander from the Crew it
+   * dispatches into its own Base project.
+   */
+  function isCommander(
+    thread: { parentThreadId: string | null; projectId: string },
+    commanderProjects: Set<string>,
+  ): boolean {
+    return (
+      thread.parentThreadId === null && commanderProjects.has(thread.projectId)
+    );
+  }
+
+  /**
    * The Commander a thread reports to, or null when the thread is not Crew.
    *
-   * A thread is Crew when its parent runs in a Commander project. A Commander
-   * is never its own Crew, so a thread that already runs in a Commander
-   * project is excluded — that is what keeps a Commander's own idle and its
-   * own raised hands off the relay.
+   * A thread is Crew when its parent is a Commander, whatever project the
+   * thread itself runs in — a Commander dispatching a Survey Mission inside
+   * its own Base project still gets the relay. A Commander is a root thread,
+   * so it can never be its own Crew: the parent test below excludes it.
    */
   async function commanderFor(thread: {
     id: string;
@@ -239,18 +306,53 @@ export default function plugin(bb: BbPluginApi) {
     if (parentThreadId === null) return null;
     const commanderProjects = await commanderProjectIds();
     if (commanderProjects.size === 0) return null;
-    if (commanderProjects.has(thread.projectId)) return null;
     const parent = await bb.sdk.threads.get({ threadId: parentThreadId });
-    if (!commanderProjects.has(parent.projectId)) return null;
+    if (!isCommander(parent, commanderProjects)) return null;
     return parent.id;
   }
 
+  /**
+   * Send one Sentinel line to the Commander.
+   *
+   * The SDK types carry no comment on `mode`, and the authoring reference
+   * documents only `auto` ("starts a turn on an idle thread or queues/steers a
+   * running one"). Nothing states that `queue-if-active` starts a turn on an
+   * idle thread, so the mode is chosen from the Commander's status instead of
+   * assumed: `auto` wakes an idle Commander, and `queue-if-active` waits
+   * behind a busy one rather than steering it mid-turn.
+   */
   async function relay(commanderId: string, text: string): Promise<void> {
+    const commander = await bb.sdk.threads.get({ threadId: commanderId });
+    const mode = commander.status === "idle" ? "auto" : "queue-if-active";
     await bb.sdk.threads.send({
       threadId: commanderId,
-      mode: "auto",
+      mode,
       input: [{ type: "text", text, mentions: [] }],
     });
+  }
+
+  /**
+   * Reserve the dedupe key, send, and release the key when the send fails.
+   *
+   * Writing the row first is what makes a concurrent duplicate collapse, but a
+   * row that outlives a failed send would suppress the relay forever. The
+   * delete puts the key back so the next identical event tries again.
+   */
+  async function relayOnce(args: {
+    dedupeKey: string;
+    threadId: string;
+    commanderId: string;
+    kind: string;
+    summary: string;
+    line: string;
+  }): Promise<void> {
+    if (!recordEvent(args)) return;
+    try {
+      await relay(args.commanderId, args.line);
+    } catch (error) {
+      deleteEvent(args.dedupeKey);
+      throw error;
+    }
   }
 
   // ------------------------------------------------------------------
@@ -270,15 +372,14 @@ export default function plugin(bb: BbPluginApi) {
         summary,
         `resolve: bb thread interactions ${resolveVerb(interaction)} ${interaction.id} ${thread.id}`,
       ].join(" · ");
-      const fresh = recordEvent({
+      await relayOnce({
         dedupeKey: `interaction:${thread.id}:${interaction.id}`,
         threadId: thread.id,
         commanderId,
         kind: `interaction/${kind}`,
         summary,
+        line,
       });
-      if (!fresh) return;
-      await relay(commanderId, line);
     } catch (error) {
       bb.log.warn(`starbase: interaction relay failed: ${describe(error)}`);
     }
@@ -290,16 +391,14 @@ export default function plugin(bb: BbPluginApi) {
       if (commanderId === null) return;
       const summary = shorten(error ?? "no error text");
       const line = ["SENTINEL failed", thread.id, summary].join(" · ");
-      // A failure carries no id of its own, so the transition time is the key.
-      const fresh = recordEvent({
-        dedupeKey: `failed:${thread.id}:${thread.updatedAt}`,
+      await relayOnce({
+        dedupeKey: failureDedupeKey(thread.id, error, thread.updatedAt),
         threadId: thread.id,
         commanderId,
         kind: "failed",
         summary,
+        line,
       });
-      if (!fresh) return;
-      await relay(commanderId, line);
     } catch (err) {
       bb.log.warn(`starbase: failure relay failed: ${describe(err)}`);
     }
@@ -328,28 +427,78 @@ export default function plugin(bb: BbPluginApi) {
   // Environment reads, shared by the SITREP and by settle.
   // ------------------------------------------------------------------
 
-  /** "clean", "dirty", or "n/a" when git cannot answer. */
-  async function worktreeState(environmentId: string | null): Promise<string> {
-    if (environmentId === null) return "n/a";
+  /**
+   * What the worktree is, for the report, and whether it is safe to archive.
+   *
+   * `safe` is never true on an answer bb could not give. An environment that
+   * exists but whose status is `not_applicable` or `unavailable` is unknown,
+   * and unknown is not safe. A thread with no environment at all is a
+   * different case: there is no worktree to lose, so it is safe.
+   */
+  async function worktreeState(
+    environmentId: string | null,
+  ): Promise<{ label: string; safe: boolean; reason: string | null }> {
+    if (environmentId === null) {
+      return { label: "n/a", safe: true, reason: null };
+    }
     const status = await bb.sdk.environments.status({ environmentId });
-    if (status.outcome !== "available") return "n/a";
-    return status.workspace.workingTree.hasUncommittedChanges
-      ? "dirty"
-      : "clean";
+    if (status.outcome === "unavailable") {
+      return {
+        label: "unknown",
+        safe: false,
+        reason: `git could not read the worktree (${status.failure.code})`,
+      };
+    }
+    if (status.outcome !== "available") {
+      return {
+        label: "unknown",
+        safe: false,
+        reason: `worktree status is ${status.outcome}`,
+      };
+    }
+    if (status.workspace.workingTree.hasUncommittedChanges) {
+      return {
+        label: "dirty",
+        safe: false,
+        reason: "the worktree has uncommitted changes",
+      };
+    }
+    return { label: "clean", safe: true, reason: null };
   }
 
-  /** "none", or the pull request URL and its state. */
+  /**
+   * What the pull request is, for the report, and whether it is safe to
+   * archive. `absent` — the environment simply has no PR — is safe. So is a
+   * merged or closed one. An open or draft PR is not, and neither is a PR
+   * state bb could not read.
+   */
   async function pullRequestState(
     environmentId: string | null,
-  ): Promise<{ label: string; open: boolean }> {
-    if (environmentId === null) return { label: "none", open: false };
+  ): Promise<{ label: string; safe: boolean; reason: string | null }> {
+    if (environmentId === null) {
+      return { label: "none", safe: true, reason: null };
+    }
     const result = await bb.sdk.environments.pullRequest({ environmentId });
-    if (result.outcome !== "available") return { label: "none", open: false };
+    if (result.outcome === "absent") {
+      return { label: "none", safe: true, reason: null };
+    }
+    if (result.outcome !== "available") {
+      return {
+        label: "unknown",
+        safe: false,
+        reason: `the pull request state is ${result.outcome}`,
+      };
+    }
     const pr = result.pullRequest;
-    return {
-      label: `${pr.url} ${pr.state}`,
-      open: pr.state === "open" || pr.state === "draft",
-    };
+    const label = `${pr.url} ${pr.state}`;
+    if (pr.state === "open" || pr.state === "draft") {
+      return {
+        label,
+        safe: false,
+        reason: `pull request ${pr.url} is still ${pr.state}`,
+      };
+    }
+    return { label, safe: true, reason: null };
   }
 
   async function pendingInteractionCount(
@@ -380,11 +529,12 @@ export default function plugin(bb: BbPluginApi) {
       ]);
       const event = lastEvent(child.id);
       rows.push({
+        // A title can carry a newline; a SITREP row cannot.
+        title: shorten(child.title ?? child.titleFallback ?? "untitled", 80),
         threadId: child.id,
-        title: child.title ?? child.titleFallback ?? "untitled",
         status: child.status,
         pr: pr.label,
-        worktree,
+        worktree: worktree.label,
         interactions,
         last: event === null ? "none" : event.kind,
       });
@@ -408,34 +558,73 @@ export default function plugin(bb: BbPluginApi) {
     }
     const commanderProjects = await commanderProjectIds();
     const thread = await bb.sdk.threads.get({ threadId: candidate });
-    if (!commanderProjects.has(thread.projectId)) {
-      return {
-        error: `Thread ${candidate} is not a Commander: project ${thread.projectId} is not in ${COMMANDER_PROJECTS_SETTING}.`,
-      };
+    if (!isCommander(thread, commanderProjects)) {
+      const why =
+        thread.parentThreadId !== null
+          ? "it is not a root thread"
+          : `project ${thread.projectId} is not in ${COMMANDER_PROJECTS_SETTING}`;
+      return { error: `Thread ${candidate} is not a Commander: ${why}.` };
     }
     return { commanderId: thread.id };
   }
 
+  /**
+   * Every live thread `archiveAll` would take: the thread itself and its
+   * descendants, in breadth-first order. The visited set guards against a
+   * parent cycle, which would otherwise loop forever.
+   */
+  async function threadTree(
+    rootThreadId: string,
+  ): Promise<{ threadIds: string[] } | { error: string }> {
+    const ordered: string[] = [];
+    const visited = new Set<string>();
+    const queue = [rootThreadId];
+    while (queue.length > 0) {
+      // A tree this deep was never inspected in full, so it is not known safe.
+      if (ordered.length >= SETTLE_MAX_TREE_SIZE) {
+        return {
+          error: `its thread tree is larger than ${SETTLE_MAX_TREE_SIZE} threads`,
+        };
+      }
+      const threadId = queue.shift() as string;
+      if (visited.has(threadId)) continue;
+      visited.add(threadId);
+      ordered.push(threadId);
+      const children = await bb.sdk.threads.list({
+        parentThreadId: threadId,
+        archived: false,
+      });
+      for (const child of children) queue.push(child.id);
+    }
+    return { threadIds: ordered };
+  }
+
+  /**
+   * Settle refuses on the first unsafe thread in the tree, not just on the
+   * root. `archiveAll` files the whole tree away, so every thread in it has to
+   * be safe before any of it is archived.
+   */
   async function settle(threadId: string): Promise<{
     exitCode: number;
     stdout?: string;
     stderr?: string;
   }> {
     const thread = await bb.sdk.threads.get({ threadId });
-    const environmentId = thread.environmentId;
-    const worktree = await worktreeState(environmentId);
-    if (worktree === "dirty") {
-      return {
-        exitCode: 1,
-        stderr: `Refused: ${threadId} has uncommitted changes on its worktree.`,
-      };
-    }
-    const pr = await pullRequestState(environmentId);
-    if (pr.open) {
-      return {
-        exitCode: 1,
-        stderr: `Refused: ${threadId} still has an open pull request (${pr.label}).`,
-      };
+    const tree = await threadTree(threadId);
+    if ("error" in tree) return refusal(threadId, threadId, tree.error);
+    for (const memberId of tree.threadIds) {
+      const member =
+        memberId === threadId
+          ? thread
+          : await bb.sdk.threads.get({ threadId: memberId });
+      const worktree = await worktreeState(member.environmentId);
+      if (!worktree.safe) {
+        return refusal(threadId, memberId, worktree.reason);
+      }
+      const pr = await pullRequestState(member.environmentId);
+      if (!pr.safe) {
+        return refusal(threadId, memberId, pr.reason);
+      }
     }
     const result = await bb.sdk.threads.archiveAll({ threadId });
     recordEvent({
@@ -524,7 +713,8 @@ export default function plugin(bb: BbPluginApi) {
         }
         return { exitCode: 1, stderr: `Unknown subcommand "${sub}".\n${USAGE}` };
       } catch (error) {
-        return { exitCode: 1, stderr: describe(error) };
+        // A thrown SDK error can be multi-line; a CLI failure is one line.
+        return { exitCode: 1, stderr: shorten(describe(error), 200) };
       }
     },
   });
