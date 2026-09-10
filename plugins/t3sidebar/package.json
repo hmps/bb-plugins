@@ -8,7 +8,7 @@
     "bbPluginSdk": ">=0.4.6"
   },
   "bb": {
-    "name": "t3sidebar",
+    "name": "Better Sidebar",
     "description": "An inbox-style sidebar with touch support: one flat list of cards that never re-orders.",
     "branding": {
       "icon": "PanelLeft"
@@ -43,6 +43,7 @@
     "jsdom": "^29.0.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "sonner": "^2.0.8",
     "typescript": "^5.7.0",
     "vitest": "^4.1.1"
   }

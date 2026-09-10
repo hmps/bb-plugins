@@ -2,9 +2,11 @@ import {
   experimental_useSidebarThreadPullRequest as useSidebarThreadPullRequest,
   experimental_useSidebarThreadSplit as useSidebarThreadSplit,
   experimental_useSidebarThreadActions as useSidebarThreadActions,
+  type PluginSidebarPullRequest,
   type PluginSidebarThread,
 } from "@get-bb/plugin-sdk/app";
 import { Icon, type IconName } from "./components/Icon";
+import { projectColor } from "./project-colors";
 import { cn } from "./lib/utils";
 import { RowContextMenu } from "./RowContextMenu";
 import { ProviderGlyph } from "./ProviderGlyph";
@@ -13,8 +15,8 @@ import { threadDisplayTitle } from "./inbox";
 import { resolveSnoozePresets } from "./lifecycle";
 
 /**
- * One thread as a three-line card: project and status, title, then branch and
- * activity. The card is the whole point of this sidebar — status lives in the
+ * One thread as a three-line card: title and status, the project badge, then
+ * branch and activity. The card is the whole point of this sidebar — status lives in the
  * row instead of in its position, which is what lets the list stay still.
  *
  * The row is a positioned container with a full-bleed anchor UNDER the
@@ -24,6 +26,7 @@ import { resolveSnoozePresets } from "./lifecycle";
 export function ThreadCard({
   thread,
   projectName,
+  projectColorId,
   isActive,
   canPark,
   onNavigate,
@@ -37,6 +40,8 @@ export function ThreadCard({
 }: {
   thread: PluginSidebarThread;
   projectName: string | null;
+  /** Palette id the user gave the project; unknown or missing reads neutral. */
+  projectColorId?: string | null;
   isActive: boolean;
   /** False while the thread is working or blocked on the user. */
   canPark: boolean;
@@ -106,13 +111,21 @@ export function ThreadCard({
             }}
             className="absolute inset-0 cursor-pointer rounded-md"
           />
-          <div className="pointer-events-none relative flex h-5 items-center gap-1.5">
-            <span className="min-w-0 flex-1 truncate text-2xs font-medium text-muted-foreground">
-              {projectName ?? " "}
+          <div className="pointer-events-none relative flex min-h-5 items-center gap-1.5">
+            <span
+              className={cn(
+                // Weight alone carries unread. Fading the title — or the whole
+                // card — makes a thread at rest read as disabled, and at rest
+                // is what most of the list is most of the time.
+                "min-w-0 flex-1 truncate text-sm text-foreground",
+                thread.isUnread && "font-medium",
+              )}
+            >
+              {threadDisplayTitle(thread)}
             </span>
             {/* Status at rest, park actions on hover. Only the status yields,
-                so the project name never shifts. A touch screen has no hover,
-                so there the buttons stay on and the status keeps its slot. */}
+                so the title never shifts. A touch screen has no hover, so
+                there the buttons stay on and the status keeps its slot. */}
             {canPark ? (
               <span className="pointer-events-auto hidden items-center gap-0.5 group-hover/card:flex pointer-coarse:flex">
                 <ParkButton
@@ -146,17 +159,20 @@ export function ThreadCard({
               />
             </span>
           </div>
-          <div
-            className={cn(
-              // Weight alone carries unread. Fading the title — or the whole
-              // card — makes a thread at rest read as disabled, and at rest is
-              // what most of the list is most of the time.
-              "pointer-events-none relative mt-0.5 truncate text-sm text-foreground",
-              thread.isUnread && "font-medium",
-            )}
-          >
-            {threadDisplayTitle(thread)}
-          </div>
+          {/* The project, as a badge in the colour the user gave it: the row
+              says which project it belongs to before it is read. */}
+          {projectName ? (
+            <div className="pointer-events-none relative mt-0.5 flex h-4 items-center">
+              <span
+                className={cn(
+                  "max-w-full truncate rounded px-1 text-2xs font-medium",
+                  projectColor(projectColorId).badgeClass,
+                )}
+              >
+                {projectName}
+              </span>
+            </div>
+          ) : null}
           <div className="pointer-events-none relative mt-0.5 flex h-4 items-center gap-1.5 text-2xs text-muted-foreground">
             {/* A thread without a worktree still runs somewhere, so the
                 machine takes the branch's place rather than leaving the line
@@ -198,28 +214,7 @@ export function ThreadCard({
                 icon="Queue"
               />
             ) : null}
-            {pullRequest ? (
-              <a
-                href={pullRequest.url}
-                target="_blank"
-                rel="noreferrer"
-                onClick={(event) => event.stopPropagation()}
-                title={pullRequest.title}
-                className={cn(
-                  "relative shrink-0 font-mono hover:underline",
-                  pullRequest.state === "merged"
-                    ? "text-[color:var(--pr-merged)]"
-                    : pullRequest.attention === "checks_failed" ||
-                        pullRequest.attention === "conflicts"
-                      ? "text-destructive-text"
-                      : pullRequest.attention === "ready_to_merge"
-                        ? "text-success-foreground"
-                        : "text-muted-foreground",
-                )}
-              >
-                #{pullRequest.number}
-              </a>
-            ) : null}
+            {pullRequest ? <PullRequestBadge pullRequest={pullRequest} /> : null}
             {/* Always drawn, so the line has a fixed right edge. */}
             <ProviderGlyph providerId={thread.providerId} />
           </div>
@@ -272,5 +267,44 @@ function ActivityCount({
       {icon ? <Icon name={icon} className="size-2.5" aria-hidden /> : null}
       {count}
     </span>
+  );
+}
+
+/** Icon and colour for a PR badge, keyed off state first, then attention. */
+function pullRequestBadgeParts(
+  pullRequest: PluginSidebarPullRequest,
+): { icon: IconName; className: string } {
+  if (pullRequest.state === "merged") {
+    return {
+      icon: "Merge",
+      className: "bg-[color:var(--pr-merged)]/15 text-[color:var(--pr-merged)]",
+    };
+  }
+  if (pullRequest.attention === "checks_failed" || pullRequest.attention === "conflicts") {
+    return { icon: "Alert", className: "bg-destructive-text/15 text-destructive-text" };
+  }
+  if (pullRequest.attention === "ready_to_merge") {
+    return { icon: "Check", className: "bg-success-foreground/15 text-success-foreground" };
+  }
+  return { icon: "PullRequest", className: "bg-muted text-muted-foreground" };
+}
+
+function PullRequestBadge({ pullRequest }: { pullRequest: PluginSidebarPullRequest }) {
+  const { icon, className } = pullRequestBadgeParts(pullRequest);
+  return (
+    <a
+      href={pullRequest.url}
+      target="_blank"
+      rel="noreferrer"
+      onClick={(event) => event.stopPropagation()}
+      title={pullRequest.title}
+      className={cn(
+        "flex shrink-0 items-center gap-0.5 rounded px-1 font-mono text-2xs hover:underline",
+        className,
+      )}
+    >
+      <Icon name={icon} className="size-2.5" aria-hidden />
+      {pullRequest.number}
+    </a>
   );
 }

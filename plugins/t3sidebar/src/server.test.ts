@@ -42,8 +42,29 @@ function setup(
   let scheduleCron: string | null = null;
   let handlers: LifecycleHandlers = {};
 
+  const colors = new Map<string, string>();
+  const projects: Array<{ id: string; name: string }> = [];
+
   const db = {
     prepare(sql: string) {
+      if (sql.includes("project_color")) {
+        if (sql.includes("SELECT")) {
+          return {
+            all: () =>
+              [...colors.entries()].map(([projectId, colorId]) => ({
+                project_id: projectId,
+                color_id: colorId,
+              })),
+          };
+        }
+        if (sql.includes("DELETE")) {
+          return { run: (projectId: string) => colors.delete(projectId) };
+        }
+        return {
+          run: (projectId: string, colorId: string) =>
+            colors.set(projectId, colorId),
+        };
+      }
       if (sql.includes("SELECT")) {
         return {
           all: (cutoff?: number) =>
@@ -92,6 +113,7 @@ function setup(
           })),
         queuedMessages: { list: async () => [] },
       },
+      projects: { list: async () => projects },
       subscribe: () => () => {},
     },
     background: {
@@ -114,6 +136,8 @@ function setup(
   plugin(bb);
   return {
     archiveCalls,
+    colors,
+    projects,
     rows,
     threadById,
     errors,
@@ -234,5 +258,38 @@ describe("settled sweep", () => {
     expect(host.rows.has("thr_missing")).toBe(true);
     expect(host.rows.has("thr_failure")).toBe(true);
     expect(host.errors).toContain("settled sweep archive failed for thr_failure: Error: archive unavailable");
+  });
+});
+
+describe("project colours", () => {
+  it("lists every project, coloured or not", async () => {
+    const host = setup();
+    host.projects.push({ id: "proj_1", name: "bb" }, { id: "proj_2", name: "vaam" });
+    await host.call("setProjectColor", { projectId: "proj_2", colorId: "violet" });
+
+    await expect(host.call("listProjectColors", {})).resolves.toEqual({
+      projects: [
+        { projectId: "proj_1", name: "bb", colorId: "neutral" },
+        { projectId: "proj_2", name: "vaam", colorId: "violet" },
+      ],
+    });
+  });
+
+  // Neutral is the absence of a colour, so it leaves no row behind.
+  it("clears the row when the colour goes back to neutral", async () => {
+    const host = setup();
+    await host.call("setProjectColor", { projectId: "proj_1", colorId: "blue" });
+    expect(host.colors.get("proj_1")).toBe("blue");
+
+    await host.call("setProjectColor", { projectId: "proj_1", colorId: "neutral" });
+    expect(host.colors.has("proj_1")).toBe(false);
+  });
+
+  it("rejects a colour outside the palette", async () => {
+    const host = setup();
+    await expect(
+      host.call("setProjectColor", { projectId: "proj_1", colorId: "chartreuse" }),
+    ).rejects.toThrow("Unknown project colour");
+    expect(host.colors.size).toBe(0);
   });
 });

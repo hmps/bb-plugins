@@ -1,4 +1,4 @@
-# t3sidebar
+# Better Sidebar
 
 An inbox-style replacement for bb's sidebar thread list, and the reference
 example for `app.slots.experimental_threadList`.
@@ -30,16 +30,20 @@ of in its position, so the sidebar only moves when you act — no row slides
 away under your cursor because an agent finished something.
 
 One setting, off by default, bends that rule: **Needs attention first**
-(Tools → t3sidebar) sorts each shelf by urgency: threads that wait for your
+(Tools → Better Sidebar) sorts each shelf by urgency: threads that wait for your
 input, then unread results, then live work, then everything you have read.
 Inside each tier the order stays newest first.
 
 Four shelves:
 
-- **Inbox** — three-line cards: project and one fixed-width status slot on the
-  first line; title on the second; then branch (or the machine, when a thread
-  has no worktree), activity counts, the pull-request number, and the agent
-  glyph. Pinned threads sit above.
+- **Inbox** — three-line cards: title and one fixed-width status slot on the
+  first line; the project badge on the second; then branch (or the machine,
+  when a thread has no worktree), activity counts, the pull-request number,
+  and the agent glyph. Pinned threads sit above.
+
+  The project reads as a coloured badge. Give each project its own colour in
+  the plugin's settings, under **Project colours**; a project with no colour
+  keeps a neutral badge.
 
   One slot, one marker, one width, so the whole column lines up. The slot
   shows the status glyph while a thread has something to say, and the age
@@ -63,7 +67,7 @@ Four shelves:
 - **Working** — live work that does not need you, folded to one line above
   the inbox. Open it and the threads show as full cards, the same as the inbox. A thread that starts working leaves the inbox for this shelf, and comes
   back the moment it finishes or asks you something. Pinned threads stay
-  pinned. The setting **Working shelf** (Tools → t3sidebar, on by default)
+  pinned. The setting **Working shelf** (Tools → Better Sidebar, on by default)
   turns this off, and working threads then stay in the inbox.
 - **Snoozed** — hidden until a wake time you chose. A snoozed thread comes
   back early if it starts working or asks you something.

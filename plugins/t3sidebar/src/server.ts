@@ -1,4 +1,4 @@
-// bb-plugin-t3sidebar backend — the settled / snoozed store.
+// Better Sidebar (bb-plugin-t3sidebar) backend — the settled / snoozed store.
 //
 // This state lives in the plugin's own SQLite database, never on bb's thread.
 // Putting it on the thread would mean a schema change, a wire change, and a
@@ -12,6 +12,12 @@ import {
   WORKING_SHELF_SETTING,
   type QueueCountSignal,
 } from "./inbox";
+import {
+  isProjectColorId,
+  NEUTRAL_COLOR_ID,
+  PROJECT_COLOR_CHANNEL,
+  type ProjectColorSignal,
+} from "./project-colors";
 
 const migrations = [
   `CREATE TABLE IF NOT EXISTS thread_lifecycle (
@@ -19,6 +25,10 @@ const migrations = [
      settled_at     INTEGER,
      snoozed_until  INTEGER,
      snoozed_at     INTEGER
+   )`,
+  `CREATE TABLE IF NOT EXISTS project_color (
+     project_id TEXT PRIMARY KEY,
+     color_id   TEXT NOT NULL
    )`,
 ];
 
@@ -34,6 +44,18 @@ interface LifecycleDbRow {
   settled_at: number | null;
   snoozed_until: number | null;
   snoozed_at: number | null;
+}
+
+interface ProjectColorDbRow {
+  project_id: string;
+  color_id: string;
+}
+
+/** One row of the project-colour settings list. */
+export interface ProjectColorRow {
+  projectId: string;
+  name: string;
+  colorId: string;
 }
 
 interface SweepThread {
@@ -78,6 +100,32 @@ export const t3sidebarRpcContract = defineRpcContract({
     output: z.object({ ok: z.boolean() }),
   },
   unsnooze: { input: threadIdSchema, output: z.object({ ok: z.boolean() }) },
+  /**
+   * Every project bb knows about, with its stored colour. The settings
+   * section shows all of them, so a project with no colour is a choice the
+   * user can see rather than a row that is missing.
+   */
+  listProjectColors: {
+    input: z.object({}),
+    output: z.object({
+      projects: z.array(
+        z.object({
+          projectId: z.string(),
+          name: z.string(),
+          colorId: z.string(),
+        }),
+      ),
+    }),
+  },
+  setProjectColor: {
+    input: z.object({
+      projectId: z.string().trim().min(1),
+      // Neutral is stored like any other colour; `null` is not a value here,
+      // so the frontend has one way to say "no colour".
+      colorId: z.string().trim().min(1),
+    }),
+    output: z.object({ ok: z.boolean() }),
+  },
   /**
    * Queued-message counts for a set of threads. The sidebar's thread view
    * carries no queue field, so the server reads the queue over the SDK and
@@ -171,6 +219,36 @@ export default function plugin(bb: BbPluginApi) {
     bb.realtime.publish(LIFECYCLE_CHANNEL, { threadId });
   };
 
+  const readProjectColors = (): Map<string, string> =>
+    new Map(
+      (
+        db
+          .prepare(`SELECT project_id, color_id FROM project_color`)
+          .all() as ProjectColorDbRow[]
+      ).map((row) => [row.project_id, row.color_id]),
+    );
+
+  const writeProjectColor = (projectId: string, colorId: string): void => {
+    // Neutral is the absence of a colour, so it is stored as no row at all.
+    // The store then holds only what the user actually chose.
+    if (colorId === NEUTRAL_COLOR_ID) {
+      db.prepare(`DELETE FROM project_color WHERE project_id = ?`).run(
+        projectId,
+      );
+    } else {
+      db.prepare(
+        `INSERT INTO project_color (project_id, color_id)
+         VALUES (?, ?)
+         ON CONFLICT(project_id) DO UPDATE SET color_id = excluded.color_id`,
+      ).run(projectId, colorId);
+    }
+    const signal: ProjectColorSignal = {
+      projectId,
+      colorId: colorId === NEUTRAL_COLOR_ID ? null : colorId,
+    };
+    bb.realtime.publish(PROJECT_COLOR_CHANNEL, signal);
+  };
+
   const runSettledSweep = async (): Promise<void> => {
     const threads: SweepThread[] = [];
     const pageSize = 500;
@@ -252,6 +330,28 @@ export default function plugin(bb: BbPluginApi) {
   bb.rpc.register(t3sidebarRpcContract, {
     async listLifecycle() {
       return { rows: readAll() };
+    },
+    async listProjectColors() {
+      const stored = readProjectColors();
+      const projects = (await bb.sdk.projects.list({
+        includePersonal: true,
+      })) as Array<{ id: string; name: string }>;
+      return {
+        projects: projects.map((project) => ({
+          projectId: project.id,
+          name: project.name,
+          colorId: stored.get(project.id) ?? NEUTRAL_COLOR_ID,
+        })),
+      };
+    },
+    async setProjectColor({ projectId, colorId }) {
+      // The palette is the contract: an unknown id would draw as neutral
+      // anyway, so reject it here instead of storing a value nothing renders.
+      if (!isProjectColorId(colorId)) {
+        throw new Error(`Unknown project colour: ${colorId}`);
+      }
+      writeProjectColor(projectId, colorId);
+      return { ok: true };
     },
     async queueCounts({ threadIds }) {
       const counts = await Promise.all(

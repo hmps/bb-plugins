@@ -19,6 +19,7 @@ import { ThreadCard } from "./ThreadCard";
 import { SlimRow } from "./SlimRow";
 import { useLifecycle } from "./useLifecycle";
 import { useQueueCounts } from "./useQueueCounts";
+import { useProjectColors } from "./useProjectColors";
 import { TRAILING_GLYPH_BOX_CLASS } from "./StatusSlot";
 import {
   ATTENTION_FIRST_SETTING,
@@ -52,6 +53,7 @@ export function ThreadInbox({
   const actions = useSidebarThreadActions();
   const lifecycle = useLifecycle(threads);
   const queueCounts = useQueueCounts(threads);
+  const projectColors = useProjectColors();
   const settings = useSettings();
   const attentionOnTop = settings.values?.[ATTENTION_FIRST_SETTING] === true;
   // On unless the user turns it off: the setting's default lives in server.ts,
@@ -207,6 +209,7 @@ export function ThreadInbox({
                     key={thread.id}
                     thread={thread}
                     projectName={projectNameById.get(thread.projectId) ?? null}
+                    projectColorId={projectColors.get(thread.projectId) ?? null}
                     isActive={thread.id === activeThreadId}
                     canPark={lifecycle.canPark(thread)}
                     onNavigate={onNavigate}
@@ -237,6 +240,7 @@ export function ThreadInbox({
                     key={thread.id}
                     thread={thread}
                     projectName={projectNameById.get(thread.projectId) ?? null}
+                    projectColorId={projectColors.get(thread.projectId) ?? null}
                     isActive={thread.id === activeThreadId}
                     canPark={lifecycle.canPark(thread)}
                     onNavigate={onNavigate}
@@ -260,6 +264,7 @@ export function ThreadInbox({
                     key={thread.id}
                     thread={thread}
                     projectName={projectNameById.get(thread.projectId) ?? null}
+                    projectColorId={projectColors.get(thread.projectId) ?? null}
                     isActive={thread.id === activeThreadId}
                     canPark={lifecycle.canPark(thread)}
                     onNavigate={onNavigate}

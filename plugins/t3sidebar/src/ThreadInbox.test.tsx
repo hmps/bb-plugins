@@ -72,7 +72,10 @@ function render(
     sidebarThreads: { status: "ready", threads, projects },
     // The lifecycle store is the plugin's own backend; an empty one means
     // every thread is active, which is what these list tests are about.
-    rpc: { listLifecycle: () => ({ rows: [] }) },
+    rpc: {
+      listProjectColors: () => ({ projects: [] }),
+      listLifecycle: () => ({ rows: [] }),
+    },
   });
 }
 
@@ -147,7 +150,10 @@ describe("ThreadInbox", () => {
           threads: [thread({ id: "thr_open" })],
           projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
         },
-        rpc: { listLifecycle: () => ({ rows: [] }) },
+        rpc: {
+          listProjectColors: () => ({ projects: [] }),
+          listLifecycle: () => ({ rows: [] }),
+        },
       },
     );
     fireEvent.click(screen.getByRole("link"));
@@ -193,7 +199,10 @@ describe("ThreadInbox", () => {
           ],
           projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
         },
-        rpc: { listLifecycle: () => ({ rows: [] }) },
+        rpc: {
+          listProjectColors: () => ({ projects: [] }),
+          listLifecycle: () => ({ rows: [] }),
+        },
       },
     );
     expect(screen.getAllByRole("listitem")).toHaveLength(1);
@@ -249,6 +258,7 @@ describe("parking threads", () => {
         projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
       },
       rpc: {
+        listProjectColors: () => ({ projects: [] }),
         listLifecycle: () => ({
           rows: [
             {
@@ -292,6 +302,7 @@ describe("parking threads", () => {
       },
       // Settled in the store, but still working: it must stay visible.
       rpc: {
+        listProjectColors: () => ({ projects: [] }),
         listLifecycle: () => ({
           rows: [
             {
@@ -329,6 +340,7 @@ describe("parking threads", () => {
         projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
       },
       rpc: {
+        listProjectColors: () => ({ projects: [] }),
         listLifecycle: () => ({ rows: [] }),
         settle: (input) => {
           settled = (input as { threadId: string }).threadId;
@@ -349,6 +361,7 @@ describe("parking threads", () => {
         projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
       },
       rpc: {
+        listProjectColors: () => ({ projects: [] }),
         listLifecycle: () => ({
           rows: [
             {
@@ -493,6 +506,7 @@ describe("queued messages", () => {
         projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
       },
       rpc: {
+        listProjectColors: () => ({ projects: [] }),
         listLifecycle: () => ({ rows: [] }),
         queueCounts: (input: unknown) => {
           const { threadIds } = input as { threadIds: string[] };
@@ -567,6 +581,7 @@ describe("row context menu", () => {
         projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
       },
       rpc: {
+        listProjectColors: () => ({ projects: [] }),
         listLifecycle: () => ({ rows: [] }),
         settle: (input) => {
           settled = (input as { threadId: string }).threadId;
@@ -589,6 +604,7 @@ describe("row context menu", () => {
         projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
       },
       rpc: {
+        listProjectColors: () => ({ projects: [] }),
         listLifecycle: () => ({ rows: [] }),
         settleAndArchive: (input) => {
           settledAndArchived = (input as { threadId: string }).threadId;
@@ -610,6 +626,7 @@ describe("row context menu", () => {
         projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
       },
       rpc: {
+        listProjectColors: () => ({ projects: [] }),
         listLifecycle: () => ({
           rows: [
             {
@@ -779,7 +796,10 @@ describe("pull request badge", () => {
         threads: [thread({ id: "thr_pr" })],
         projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
       },
-      rpc: { listLifecycle: () => ({ rows: [] }) },
+      rpc: {
+        listProjectColors: () => ({ projects: [] }),
+        listLifecycle: () => ({ rows: [] }),
+      },
       sidebarPullRequests: {
         thr_pr: {
           number: 412,
@@ -793,7 +813,8 @@ describe("pull request badge", () => {
 
   it("links the PR number out to the git host", async () => {
     withPr("none");
-    const badge = await screen.findByRole("link", { name: "#412" });
+    // The icon carries the state, so the badge's name is the number alone.
+    const badge = await screen.findByRole("link", { name: "412" });
     expect(badge.getAttribute("href")).toBe("https://github.com/o/r/pull/412");
     expect(badge.getAttribute("title")).toBe("Fix the flake");
   });
@@ -801,7 +822,7 @@ describe("pull request badge", () => {
   it("shows no badge when the branch has no PR", async () => {
     render([thread({ id: "thr_nopr" })]);
     await screen.findByText("A thread");
-    expect(screen.queryByRole("link", { name: /^#/ })).toBeNull();
+    expect(screen.queryByRole("link", { name: "412" })).toBeNull();
   });
 
   // The attention state is bb's rolled-up "does this need you" signal, so the
@@ -809,13 +830,56 @@ describe("pull request badge", () => {
   it("colors the badge from the attention state", async () => {
     const failing = withPr("checks_failed");
     expect(
-      (await screen.findByRole("link", { name: "#412" })).className,
+      (await screen.findByRole("link", { name: "412" })).className,
     ).toContain("destructive");
     failing.unmount();
 
     withPr("ready_to_merge");
     expect(
-      (await screen.findByRole("link", { name: "#412" })).className,
+      (await screen.findByRole("link", { name: "412" })).className,
     ).toContain("success");
+  });
+});
+
+describe("project badge", () => {
+  const withColors = (
+    projects: Array<{ projectId: string; name: string; colorId: string }>,
+  ) =>
+    renderSlot(inbox, listProps, {
+      sidebarThreads: {
+        status: "ready",
+        threads: [thread({ id: "thr_p", title: "A thread" })],
+        projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
+      },
+      rpc: {
+        listProjectColors: () => ({ projects }),
+        listLifecycle: () => ({ rows: [] }),
+      },
+    });
+
+  // The card's first line is the title now; the project reads under it.
+  it("puts the title above the project", async () => {
+    withColors([]);
+    const title = await screen.findByText("A thread");
+    const project = await screen.findByText("bb");
+    expect(
+      title.compareDocumentPosition(project) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("paints the badge in the project's colour", async () => {
+    withColors([{ projectId: "proj_1", name: "bb", colorId: "violet" }]);
+    await waitFor(() => {
+      expect(screen.getByText("bb").className).toContain("violet");
+    });
+  });
+
+  // No colour is still a badge, just a neutral one, so the row's shape never
+  // depends on whether the user has chosen yet.
+  it("draws a neutral badge for a project with no colour", async () => {
+    withColors([{ projectId: "proj_1", name: "bb", colorId: "neutral" }]);
+    const badge = await screen.findByText("bb");
+    expect(badge.className).toContain("bg-muted");
   });
 });

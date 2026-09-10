@@ -1,5 +1,6 @@
 import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
 import {
+  AlertCircleIcon,
   ArchiveIcon,
   ArrowDown01Icon,
   ArrowLeft01Icon,
@@ -11,6 +12,8 @@ import {
   ComputerTerminal01Icon,
   Edit02Icon,
   GitBranchIcon,
+  GitMergeIcon,
+  GitPullRequestIcon,
   HelpCircleIcon,
   Loading03Icon,
   ChatDelay01Icon,
@@ -22,6 +25,7 @@ import {
 import { cn } from "../lib/utils";
 
 const ICON_MAP = {
+  Alert: AlertCircleIcon,
   Archive: ArchiveIcon,
   ArrowTurnBackward: ArrowTurnBackwardIcon,
   Branch: GitBranchIcon,
@@ -35,6 +39,8 @@ const ICON_MAP = {
   Edit: Edit02Icon,
   ListTodo: CheckListIcon,
   Loading: Loading03Icon,
+  Merge: GitMergeIcon,
+  PullRequest: GitPullRequestIcon,
   Queue: ChatDelay01Icon,
   Target: Target02Icon,
   Terminal: ComputerTerminal01Icon,
