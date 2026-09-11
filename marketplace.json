@@ -191,6 +191,29 @@
           "tagPrefix": "starbase/"
         }
       }
+    },
+    {
+      "id": "quiet-push",
+      "displayName": "Quiet Push",
+      "description": "Gives agents a mute_notification tool. A muted turn ends without a mobile, web, or desktop notification from the builtin Push notifications plugin.",
+      "icon": "BellOff",
+      "tags": [
+        "notifications",
+        "agents",
+        "mobile"
+      ],
+      "author": {
+        "name": "Hampus Persson",
+        "github": "hmps"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/hmps/bb-plugins.git",
+          "subdir": "plugins/quiet-push",
+          "range": "^0.1.0",
+          "tagPrefix": "quiet-push/"
+        }
+      }
     }
   ]
 }

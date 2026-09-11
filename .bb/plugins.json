@@ -38,6 +38,10 @@
     {
       "name": "starbase",
       "source": "./plugins/starbase"
+    },
+    {
+      "name": "quiet-push",
+      "source": "./plugins/quiet-push"
     }
   ]
 }
