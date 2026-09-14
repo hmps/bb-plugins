@@ -55,8 +55,9 @@ these holds:
 - the candidate is at least 20 percentage points less saturated, so a move from
   81% to 79% is never suggested.
 
-A thread created since the last sample is not yet in the snapshot and gets no
-advice. Use `pick_machine` or `bb fanout status` for a fresh read.
+The advice is fixed when the agent session starts. A session that is already
+running keeps the instructions it started with, so it does not see later load
+changes. Use `pick_machine` or `bb fanout status` for a fresh read.
 
 ## What counts as load
 

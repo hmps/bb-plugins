@@ -304,7 +304,7 @@ describe("pickTarget", () => {
     ).toBeNull();
   });
 
-  it("stays quiet for a thread the sampler has not seen", () => {
+  it("stays quiet when the host is unknown", () => {
     expect(
       pickTarget({ ...base, snapshot: snapshotOf(busyTitan()), currentHostId: null }),
     ).toBeNull();

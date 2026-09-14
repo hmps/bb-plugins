@@ -530,16 +530,28 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   // Synchronous and on the thread-start path, so this reads the cached
-  // snapshot only — never the SDK. A thread created since the last sample is
-  // absent from `threadHost` and correctly gets no advice.
-  bb.agents.contributeInstructions(({ threadId, projectId }) => {
+  // snapshot only — never the SDK.
+  //
+  // `configure` rather than `contributeInstructions`: its context names the
+  // thread's host directly. The other hook only passes a thread id, which had
+  // to be looked up in the snapshot — and a thread spawned since the last
+  // sample was not in it yet, so exactly the new threads got no advice.
+  bb.agents.configure((context) => {
+    // `tools` is a selection, not an addition: omitting pick_machine here
+    // would remove it from every session.
+    const selection = { tools: ["pick_machine"], skills: [] };
+
+    // A side chat is a quick question about its parent, not a place that
+    // spawns child threads.
+    if (context.origin.pluginId === "side-chat") return selection;
+
     const advice = pickTarget({
       snapshot,
-      currentHostId: snapshot.threadHost.get(threadId) ?? null,
-      projectId,
+      currentHostId: context.host.id,
+      projectId: context.project.id,
       thresholdPercent,
     });
-    return advice ? renderAdvice(advice) : null;
+    return advice ? { ...selection, instructions: renderAdvice(advice) } : selection;
   });
 
   /**
