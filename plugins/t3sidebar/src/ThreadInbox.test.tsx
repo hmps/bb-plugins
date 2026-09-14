@@ -618,6 +618,38 @@ describe("row context menu", () => {
     await waitFor(() => expect(settledAndArchived).toBe("thr_menu_archive"));
   });
 
+  it("shows progress and blocks a second click while archiving", async () => {
+    let calls = 0;
+    let finish: () => void = () => {};
+    renderSlot(inbox, listProps, {
+      sidebarThreads: {
+        status: "ready",
+        threads: [thread({ id: "thr_slow", title: "Slow archive" })],
+        projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
+      },
+      rpc: {
+        listLifecycle: () => ({ rows: [] }),
+        settleAndArchive: () => {
+          calls += 1;
+          return new Promise((resolve) => {
+            finish = () => resolve({ ok: true });
+          });
+        },
+      },
+    });
+    fireEvent.click(await screen.findByLabelText("Settle and archive thread"));
+    expect(await screen.findByLabelText("Archiving thread")).toBeDefined();
+    expect(screen.queryByLabelText("Settle and archive thread")).toBeNull();
+    expect(
+      screen.getByText("Slow archive").closest("li")?.getAttribute("aria-busy"),
+    ).toBe("true");
+    finish();
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Archiving thread")).toBeNull(),
+    );
+    expect(calls).toBe(1);
+  });
+
   it("offers wake from a snoozed row's context menu", async () => {
     renderSlot(inbox, listProps, {
       sidebarThreads: {

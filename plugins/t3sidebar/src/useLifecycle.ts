@@ -24,6 +24,8 @@ export interface LifecycleApi {
   wakeAtFor(thread: PluginSidebarThread): number | null;
   settle(threadId: string): void;
   settleAndArchive(threadId: string): void;
+  /** True from a settle-and-archive click until its request completes. */
+  isArchiving(threadId: string): boolean;
   unsettle(threadId: string): void;
   snooze(threadId: string, snoozedUntil: number): void;
   unsnooze(threadId: string): void;
@@ -44,6 +46,11 @@ export function useLifecycle(
     () => new Map(),
   );
   const [now, setNow] = useState(() => Date.now());
+  // Archiving a tree can take seconds. Until it completes, the row stays on
+  // its shelf and shows progress, so a second click has nothing to hit.
+  const [archiving, setArchiving] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   // A parent is only as idle as its children: the flat list hides them, so
   // parking one would hide live work behind a row that looks finished.
   const descendants = useMemo(() => descendantSignals(threads), [threads]);
@@ -100,18 +107,38 @@ export function useLifecycle(
     ) => {
       await rpc.call(method, { threadId });
     };
+    const settleAndArchive = async (threadId: string) => {
+      if (archiving.has(threadId)) return;
+      setArchiving((ids) => new Set(ids).add(threadId));
+      try {
+        await mutate("settleAndArchive", threadId);
+      } finally {
+        setArchiving((ids) => {
+          const next = new Set(ids);
+          next.delete(threadId);
+          return next;
+        });
+      }
+    };
     return {
+      // The settle lands before the archive does. Ignoring it meanwhile keeps
+      // the busy row in view instead of dropping it onto a collapsed shelf.
       shelfFor: (thread) =>
-        resolveShelf(rows.get(thread.id), signalsFor(thread), now),
+        resolveShelf(
+          archiving.has(thread.id) ? undefined : rows.get(thread.id),
+          signalsFor(thread),
+          now,
+        ),
       canPark: (thread) => canPark(signalsFor(thread)),
       wakeAtFor: (thread) => rows.get(thread.id)?.snoozedUntil ?? null,
       settle: (threadId) => void mutate("settle", threadId),
-      settleAndArchive: (threadId) => void mutate("settleAndArchive", threadId),
+      settleAndArchive: (threadId) => void settleAndArchive(threadId),
+      isArchiving: (threadId) => archiving.has(threadId),
       unsettle: (threadId) => void mutate("unsettle", threadId),
       unsnooze: (threadId) => void mutate("unsnooze", threadId),
       snooze: (threadId, snoozedUntil) => {
         void rpc.call("snooze", { threadId, snoozedUntil });
       },
     };
-  }, [descendants, now, refresh, rows, rpc]);
+  }, [archiving, descendants, now, refresh, rows, rpc]);
 }

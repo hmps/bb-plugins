@@ -33,6 +33,7 @@ export function ThreadCard({
   onSettle,
   onSettleAndArchive,
   onSnooze,
+  archiving = false,
   now,
   queuedMessages = 0,
   workingChildren = 0,
@@ -49,6 +50,8 @@ export function ThreadCard({
   onSettle: () => void;
   onSettleAndArchive: () => void;
   onSnooze: (snoozedUntil: number) => void;
+  /** A settle-and-archive is in flight: show progress and take no input. */
+  archiving?: boolean;
   /** Quantized clock, so every card in one render agrees on "now". */
   now: number;
   /** Messages waiting in the thread's queue; zero draws nothing. */
@@ -73,7 +76,7 @@ export function ThreadCard({
     <RowContextMenu
       thread={thread}
       shelfItems={
-        canPark
+        canPark && !archiving
           ? [
               { label: "Snooze until tomorrow", onSelect: snoozeUntilTomorrow },
               { label: "Settle", onSelect: onSettle },
@@ -85,7 +88,7 @@ export function ThreadCard({
           : []
       }
     >
-      <li className="list-none">
+      <li className="list-none" aria-busy={archiving || undefined}>
         <div
           className={cn(
             "group/card relative rounded-md px-2.5 py-2 transition-colors",
@@ -93,6 +96,9 @@ export function ThreadCard({
             // A thread open in another pane gets a weaker tint than the active
             // row, so the two states stay distinguishable.
             !isActive && layout !== null && "bg-sidebar-accent/30",
+            // The whole card goes inert, so neither a second archive nor a
+            // navigation to a thread on its way out can land.
+            archiving && "pointer-events-none opacity-60",
           )}
         >
           <a
@@ -101,6 +107,7 @@ export function ThreadCard({
             data-sidebar-thread-id={thread.id}
             href="#"
             aria-label={threadDisplayTitle(thread)}
+            tabIndex={archiving ? -1 : undefined}
             {...splitProps}
             onClick={(event) => {
               event.preventDefault();
@@ -126,7 +133,15 @@ export function ThreadCard({
             {/* Status at rest, park actions on hover. Only the status yields,
                 so the title never shifts. A touch screen has no hover, so
                 there the buttons stay on and the status keeps its slot. */}
-            {canPark ? (
+            {archiving ? (
+              <span className={cn(STATUS_SLOT_CLASS, "relative")}>
+                <Icon
+                  name="Loading"
+                  aria-label="Archiving thread"
+                  className="size-3.5 animate-spin text-muted-foreground"
+                />
+              </span>
+            ) : canPark ? (
               <span className="pointer-events-auto hidden items-center gap-0.5 group-hover/card:flex pointer-coarse:flex">
                 <ParkButton
                   label="Snooze until tomorrow"
@@ -145,19 +160,21 @@ export function ThreadCard({
                 />
               </span>
             ) : null}
-            <span
-              className={cn(
-                STATUS_SLOT_CLASS,
-                canPark && "pointer-fine:group-hover/card:hidden",
-              )}
-            >
-              <StatusOrTime
-                thread={thread}
-                now={now}
-                workingChildren={workingChildren}
-                childrenNeedYou={childrenNeedYou}
-              />
-            </span>
+            {archiving ? null : (
+              <span
+                className={cn(
+                  STATUS_SLOT_CLASS,
+                  canPark && "pointer-fine:group-hover/card:hidden",
+                )}
+              >
+                <StatusOrTime
+                  thread={thread}
+                  now={now}
+                  workingChildren={workingChildren}
+                  childrenNeedYou={childrenNeedYou}
+                />
+              </span>
+            )}
           </div>
           {/* The project, as a badge in the colour the user gave it: the row
               says which project it belongs to before it is read. */}

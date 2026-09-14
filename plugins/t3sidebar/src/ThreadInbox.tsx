@@ -215,6 +215,7 @@ export function ThreadInbox({
                     onNavigate={onNavigate}
                     onSettle={() => lifecycle.settle(thread.id)}
                     onSettleAndArchive={() => lifecycle.settleAndArchive(thread.id)}
+                    archiving={lifecycle.isArchiving(thread.id)}
                     onSnooze={(until) => lifecycle.snooze(thread.id, until)}
                     now={now}
                     queuedMessages={queueCounts.get(thread.id) ?? 0}
@@ -246,6 +247,7 @@ export function ThreadInbox({
                     onNavigate={onNavigate}
                     onSettle={() => lifecycle.settle(thread.id)}
                     onSettleAndArchive={() => lifecycle.settleAndArchive(thread.id)}
+                    archiving={lifecycle.isArchiving(thread.id)}
                     onSnooze={(until) => lifecycle.snooze(thread.id, until)}
                     now={now}
                     queuedMessages={queueCounts.get(thread.id) ?? 0}
@@ -270,6 +272,7 @@ export function ThreadInbox({
                     onNavigate={onNavigate}
                     onSettle={() => lifecycle.settle(thread.id)}
                     onSettleAndArchive={() => lifecycle.settleAndArchive(thread.id)}
+                    archiving={lifecycle.isArchiving(thread.id)}
                     onSnooze={(until) => lifecycle.snooze(thread.id, until)}
                     now={now}
                     queuedMessages={queueCounts.get(thread.id) ?? 0}
