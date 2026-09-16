@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   FIVE_HOUR_MS,
   formatPace,
+  formatUsageProjection,
   windowPace,
   worstPaceStatus,
   WEEK_MS,
@@ -165,6 +166,18 @@ test("formats every pace state", () => {
     formatPace(pace({ status: "unknown", reason: "unavailable" }), "en-US"),
     "Pace unavailable",
   );
+  assert.equal(
+    formatUsageProjection(12, pace({ projectedPercent: 103 }), "en-US"),
+    "12% (103%)",
+  );
+  assert.equal(
+    formatUsageProjection(
+      12,
+      pace({ status: "unknown", reason: "too_early" }),
+      "en-US",
+    ),
+    "12%",
+  );
 });
 
 function claudeProvider(): ProviderUsage {
@@ -175,8 +188,9 @@ function claudeProvider(): ProviderUsage {
     accountEmail: null,
     planLabel: null,
     message: null,
+    resetCreditsAvailable: null,
     windows: [
-      usageWindow("Five-hour limit", 50, resetIn(2.5 * HOUR_MS)),
+      usageWindow("Current session", 50, resetIn(2.5 * HOUR_MS)),
       usageWindow("Weekly limit", 20, resetIn(3.5 * 24 * HOUR_MS)),
       usageWindow("Fable", 50, resetIn(3.5 * 24 * HOUR_MS)),
     ],
@@ -186,8 +200,8 @@ function claudeProvider(): ProviderUsage {
 test("paces the five-hour window over 5 hours and other windows over 7 days", () => {
   const paces = sidebarWindowPaces(claudeProvider(), NOW);
 
-  assert.equal(paces.fiveHour?.pace.elapsedPercent, 50);
-  assert.equal(paces.fiveHour?.pace.projectedPercent, 100);
+  assert.equal(paces.session?.pace.elapsedPercent, 50);
+  assert.equal(paces.session?.pace.projectedPercent, 100);
   assert.equal(paces.weekly?.pace.elapsedPercent, 50);
   assert.equal(paces.weekly?.pace.projectedPercent, 40);
   assert.equal(paces.extras.length, 1);

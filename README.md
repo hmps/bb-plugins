@@ -25,7 +25,7 @@ that `marketplace.json` lists.
 | [ios-composer-touch](plugins/ios-composer-touch) | First-tap send on iOS and larger composer hit areas. |
 | [hide-sidebar-footer-actions](plugins/hide-sidebar-footer-actions) | Hides the Remote access and Report a bug buttons in the sidebar footer. |
 | [t3sidebar](plugins/t3sidebar) | Fork of bb's t3sidebar example with touch support for Snooze and Settle. |
-| [usage-tracker](plugins/usage-tracker) | Fork of MateoCerquetella's usage-tracker (MIT) with model-scoped (Fable) quota rows. |
+| [usage-tracker](plugins/usage-tracker) | Codex and Claude usage pace, Codex reset credits, and model-scoped quota rows such as Fable. |
 | [ios-status-bar](plugins/ios-status-bar) | Paints the iOS Safari status bar area with the app background instead of black. |
 | [mobile-large-editor](plugins/mobile-large-editor) | Adds the "Make prompt box larger" toggle to thread composers on mobile. |
 | [github-plus](plugins/github-plus) | Fork of bb's builtin github plugin with an editable review prompt and provider/model picker before an agent review starts. |

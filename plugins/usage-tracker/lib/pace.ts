@@ -1,4 +1,8 @@
-import { formatWeekdayTime, type UsageWindow } from "./usage.ts";
+import {
+  formatUsedPercent,
+  formatWeekdayTime,
+  type UsageWindow,
+} from "./usage.ts";
 
 export const FIVE_HOUR_MS = 5 * 60 * 60 * 1000;
 export const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -123,4 +127,16 @@ export function formatPace(pace: WindowPace, locale?: string): string {
   return runsOut === null
     ? `At risk · ${projected}`
     : `At risk · ${projected} · runs out ${runsOut}`;
+}
+
+/** Current usage followed by the expected usage at reset. */
+export function formatUsageProjection(
+  usedPercent: number,
+  pace: WindowPace,
+  locale?: string,
+): string {
+  const current = `${formatUsedPercent(usedPercent, locale)}%`;
+  return pace.status === "unknown"
+    ? current
+    : `${current} (${Math.round(pace.projectedPercent)}%)`;
 }

@@ -1,10 +1,13 @@
 import { definePluginApp } from "@get-bb/plugin-sdk/app";
-import { mountSidebarUsageStrip } from "@/lib/sidebar-strip";
+import { UsageDisclosure } from "@/lib/usage-disclosure";
 import "./app.css";
 
 export default definePluginApp((app) => {
-  app.contentScripts.register({
-    id: "sidebar-usage-strip",
-    mount: ({ signal }) => mountSidebarUsageStrip(signal),
+  app.experimental_sidebarFooter.register({
+    kind: "disclosure",
+    id: "usage",
+    label: "Provider usage",
+    icon: "ChartColumn",
+    component: UsageDisclosure,
   });
 });

@@ -2,6 +2,24 @@
 
 All notable changes to Usage Tracker are documented here.
 
+## Unreleased
+
+### Added
+
+- The expanded Codex card shows the number of available full usage resets.
+
+### Changed
+
+- The sidebar now uses BB's native icon-only disclosure, provider tabs, and
+  stacked usage rows.
+- Pace guidance now places expected usage at reset beside current usage.
+- Provider response IDs follow current BB IDs, including `claude-code` and
+  `acp-cursor`.
+- The expanded card shows only the windows that a provider reports. A healthy
+  Codex weekly-only response no longer restores an obsolete five-hour window.
+- Claude throttle errors keep their original message, and last-known session,
+  weekly, and Fable values remain visible through the temporary error.
+
 ## 1.1.0 - 2026-08-19
 
 ### Added

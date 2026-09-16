@@ -40,9 +40,11 @@ export type RawProviderUsage =
     };
 
 export interface RawUsageResponse {
-  codex: RawProviderUsage;
-  claudeCode: RawProviderUsage;
-  cursor: RawProviderUsage;
+  codex?: RawProviderUsage;
+  claudeCode?: RawProviderUsage;
+  "claude-code"?: RawProviderUsage;
+  cursor?: RawProviderUsage;
+  "acp-cursor"?: RawProviderUsage;
 }
 
 export interface UsageWindow {
@@ -61,6 +63,7 @@ export interface ProviderUsage {
   planLabel: string | null;
   message: string | null;
   windows: UsageWindow[];
+  resetCreditsAvailable: number | null;
 }
 
 export interface UsageSnapshot {
@@ -76,12 +79,28 @@ interface ProviderDefinition {
   id: ProviderId;
   name: string;
   loginCommand: string;
+  responseIds: readonly (keyof RawUsageResponse)[];
 }
 
 const PROVIDERS: readonly ProviderDefinition[] = [
-  { id: "codex", name: "Codex", loginCommand: "codex login" },
-  { id: "claudeCode", name: "Claude Code", loginCommand: "claude" },
-  { id: "cursor", name: "Cursor", loginCommand: "cursor-agent login" },
+  {
+    id: "codex",
+    name: "Codex",
+    loginCommand: "codex login",
+    responseIds: ["codex"],
+  },
+  {
+    id: "claudeCode",
+    name: "Claude Code",
+    loginCommand: "claude",
+    responseIds: ["claude-code", "claudeCode"],
+  },
+  {
+    id: "cursor",
+    name: "Cursor",
+    loginCommand: "cursor-agent login",
+    responseIds: ["acp-cursor", "cursor"],
+  },
 ];
 
 export const REQUEST_ERROR_MESSAGE =
@@ -120,6 +139,7 @@ function statusMessage(
 function normalizeProvider(
   definition: ProviderDefinition,
   usage: RawProviderUsage,
+  resetCreditsAvailable: number | null,
 ): ProviderUsage {
   if (usage.status !== "ok") {
     return {
@@ -130,6 +150,7 @@ function normalizeProvider(
       planLabel: usage.status === "error" ? (usage.planLabel ?? null) : null,
       message: statusMessage(definition, usage),
       windows: [],
+      resetCreditsAvailable,
     };
   }
 
@@ -140,6 +161,7 @@ function normalizeProvider(
     accountEmail: usage.accountEmail,
     planLabel: usage.planLabel,
     message: null,
+    resetCreditsAvailable,
     windows: usage.windows.map((window) => ({
       label: window.label,
       usedPercent: finiteNumber(window.usedPercent, "usedPercent"),
@@ -166,13 +188,21 @@ export function normalizeUsage(
   response: RawUsageResponse,
   host: UsageSnapshot["host"],
   fetchedAt = new Date(),
+  codexResetCreditsAvailable: number | null = null,
 ): UsageSnapshot {
   return {
     fetchedAt: fetchedAt.toISOString(),
     host,
-    providers: PROVIDERS.map((provider) =>
-      normalizeProvider(provider, response[provider.id]),
-    ),
+    providers: PROVIDERS.map((provider) => {
+      const usage = provider.responseIds
+        .map((responseId) => response[responseId])
+        .find((candidate) => candidate !== undefined);
+      return normalizeProvider(
+        provider,
+        usage ?? { status: "not_installed" },
+        provider.id === "codex" ? codexResetCreditsAvailable : null,
+      );
+    }),
   };
 }
 

@@ -14,7 +14,7 @@ import {
 } from "./pace.ts";
 
 export interface SidebarUsageWindows {
-  fiveHour: UsageWindow | null;
+  session: UsageWindow | null;
   weekly: UsageWindow | null;
 }
 
@@ -24,12 +24,12 @@ export interface SidebarWindowPace {
 }
 
 export interface SidebarWindowPaces {
-  fiveHour: SidebarWindowPace | null;
+  session: SidebarWindowPace | null;
   weekly: SidebarWindowPace | null;
   extras: SidebarWindowPace[];
 }
 
-function isFiveHourLabel(label: string): boolean {
+function isSessionLabel(label: string): boolean {
   const normalized = label.toLowerCase();
   return (
     normalized.includes("five") ||
@@ -53,8 +53,8 @@ export function sidebarUsageWindows(
   provider: ProviderUsage,
 ): SidebarUsageWindows {
   return {
-    fiveHour:
-      provider.windows.find((window) => isFiveHourLabel(window.label)) ?? null,
+    session:
+      provider.windows.find((window) => isSessionLabel(window.label)) ?? null,
     weekly:
       provider.windows.find((window) => isWeeklyLabel(window.label)) ?? null,
   };
@@ -65,9 +65,9 @@ export function sidebarUsageWindows(
  * (for example a Fable limit). They render as extra rows in the details card.
  */
 export function extraSidebarWindows(provider: ProviderUsage): UsageWindow[] {
-  const { fiveHour, weekly } = sidebarUsageWindows(provider);
+  const { session, weekly } = sidebarUsageWindows(provider);
   return provider.windows.filter(
-    (window) => window !== fiveHour && window !== weekly,
+    (window) => window !== session && window !== weekly,
   );
 }
 
@@ -89,9 +89,9 @@ export function sidebarWindowPaces(
   provider: ProviderUsage,
   now: Date,
 ): SidebarWindowPaces {
-  const { fiveHour, weekly } = sidebarUsageWindows(provider);
+  const { session, weekly } = sidebarUsageWindows(provider);
   return {
-    fiveHour: pacedWindow(fiveHour, FIVE_HOUR_MS, now),
+    session: pacedWindow(session, FIVE_HOUR_MS, now),
     weekly: pacedWindow(weekly, WEEK_MS, now),
     extras: extraSidebarWindows(provider).map((window) => ({
       window,
@@ -107,24 +107,27 @@ export function providerPaceStatus(
 ): PaceStatus {
   const paces = sidebarWindowPaces(provider, now);
   return worstPaceStatus(
-    [paces.fiveHour, paces.weekly, ...paces.extras]
+    [paces.session, paces.weekly, ...paces.extras]
       .filter((entry): entry is SidebarWindowPace => entry !== null)
       .map((entry) => entry.pace),
   );
 }
 
 export function sidebarUsageSummary(provider: ProviderUsage): string {
-  const { fiveHour, weekly } = sidebarUsageWindows(provider);
-  const fiveHourValue =
-    fiveHour === null ? "—" : formatUsedPercent(fiveHour.usedPercent);
-  const weeklyValue =
-    weekly === null ? "—" : formatUsedPercent(weekly.usedPercent);
-  return `${fiveHourValue}% 5h · ${weeklyValue}% wk`;
+  const { session, weekly } = sidebarUsageWindows(provider);
+  const parts: string[] = [];
+  if (session !== null) {
+    parts.push(`${formatUsedPercent(session.usedPercent)}% session`);
+  }
+  if (weekly !== null) {
+    parts.push(`${formatUsedPercent(weekly.usedPercent)}% wk`);
+  }
+  return parts.length === 0 ? "—" : parts.join(" · ");
 }
 
 export function sidebarUsagePrimarySummary(provider: ProviderUsage): string {
-  const { fiveHour, weekly } = sidebarUsageWindows(provider);
-  const primary = fiveHour ?? weekly;
+  const { session, weekly } = sidebarUsageWindows(provider);
+  const primary = session ?? weekly;
   return primary === null ? "—%" : `${formatUsedPercent(primary.usedPercent)}%`;
 }
 
@@ -132,21 +135,20 @@ export function mergeLastKnownWindows(
   current: ProviderUsage,
   previous: ProviderUsage | undefined,
 ): ProviderUsage {
-  if (previous === undefined || previous.windows.length === 0) return current;
-
-  const currentPair = sidebarUsageWindows(current);
-  const previousPair = sidebarUsageWindows(previous);
-  const windows = [...current.windows];
-
-  if (currentPair.fiveHour === null && previousPair.fiveHour !== null) {
-    windows.unshift(previousPair.fiveHour);
-  }
-  if (currentPair.weekly === null && previousPair.weekly !== null) {
-    windows.push(previousPair.weekly);
-  }
-  if (extraSidebarWindows(current).length === 0) {
-    windows.push(...extraSidebarWindows(previous));
+  if (
+    current.status === "ok" ||
+    previous === undefined ||
+    previous.windows.length === 0
+  ) {
+    return current;
   }
 
-  return { ...current, windows };
+  const labels = new Set(current.windows.map((window) => window.label));
+  return {
+    ...current,
+    windows: [
+      ...current.windows,
+      ...previous.windows.filter((window) => !labels.has(window.label)),
+    ],
+  };
 }

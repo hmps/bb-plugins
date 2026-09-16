@@ -52,15 +52,22 @@ export async function loadUsageSnapshot(
   sdk: UsageSdk,
   threadId: string | null,
   fetchedAt = new Date(),
+  loadResetCredits: () => Promise<number | null> = async () => null,
 ): Promise<UsageSnapshot> {
   const hostId =
     threadId === null ? null : await resolveThreadHostId(sdk, threadId);
-  const [response, hostName] = await Promise.all([
+  const [response, hostName, resetCreditsAvailable] = await Promise.all([
     hostId === null
       ? sdk.system.usageLimits()
       : sdk.system.usageLimits({ hostId }),
     resolveHostName(sdk, hostId),
+    hostId === null ? loadResetCredits() : Promise.resolve(null),
   ]);
 
-  return normalizeUsage(response, { id: hostId, name: hostName }, fetchedAt);
+  return normalizeUsage(
+    response,
+    { id: hostId, name: hostName },
+    fetchedAt,
+    resetCreditsAvailable,
+  );
 }

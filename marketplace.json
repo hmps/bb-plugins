@@ -75,8 +75,8 @@
     },
     {
       "id": "usage-tracker",
-      "displayName": "Usage Tracker (Fable rows)",
-      "description": "Compact Codex and Claude usage limits in the sidebar footer. Fork of MateoCerquetella's usage-tracker that also shows model-scoped quotas such as Fable in the expanded card.",
+      "displayName": "Usage Tracker",
+      "description": "Native-style Codex and Claude usage guidance, Codex reset credits, and model-scoped quotas such as Fable in the sidebar footer.",
       "icon": {
         "url": "./plugins/usage-tracker/assets/icon.svg"
       },

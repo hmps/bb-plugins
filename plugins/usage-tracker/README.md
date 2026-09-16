@@ -5,35 +5,35 @@
 <h1 align="center">Usage Tracker for BB</h1>
 
 <p align="center">
-  Codex and Claude Code limits, always visible in BB's sidebar footer.
+  Codex and Claude Code limits in BB's native sidebar disclosure.
 </p>
 
 > Fork of [MateoCerquetella/bb-plugins](https://github.com/MateoCerquetella/bb-plugins) `usage-tracker` (MIT) with
-> model-scoped quota rows, so a Fable limit shows next to the 5-hour and weekly
-> limits in the expanded Claude Code card.
+> model-scoped quota rows, Codex reset-credit counts, and pace signals for each
+> reported usage window.
 
-Usage Tracker adds one compact, live strip beside BB's existing sidebar
-utility icons. Claude Code and Codex each show a progress bar and their current
-usage reading, without adding a navigation item or a separate plugin page.
-
-![Usage Tracker expanded in BB's sidebar](./assets/usage-tracker-sidebar.png)
+Usage Tracker adds one icon beside BB's existing sidebar utility icons. Select
+it to open a native-style card with Claude Code and Codex usage details. It
+does not add a navigation item or a separate plugin page.
 
 ## Features
 
 - Shows Codex and Claude Code subscription usage in BB's sidebar footer.
-- Lets you show or hide Codex and Claude Code independently; the strip
-  compacts for one provider and disappears when both are disabled.
-- Expands either provider to show its five-hour and weekly percentages.
+- Lets you show or hide Codex and Claude Code independently.
+- Shows only the windows each provider reports. Codex currently reports its
+  weekly limit. Claude Code can report its current session, weekly limit, and
+  Fable limit.
+- Shows how many full Codex usage resets are available.
 - Projects each window forward to its reset time and marks it on track,
-  watch, or at risk, in the strip and in the expanded view.
-- Includes reset timing and provider session status in the expanded view.
-- Refreshes automatically every five minutes and whenever a stale BB window
-  becomes active again.
+  watch, or at risk.
+- Shows expected usage at reset beside current usage.
+- Includes reset timing and provider session status in the disclosure.
+- Refreshes automatically every five minutes while the disclosure is open.
 - Provides a manual refresh button for both providers.
 - Preserves last-known limit windows through temporary errors, expired
   sessions, and rate limits.
-- Cleans up its UI on plugin reload, disable, or removal and works alongside a
-  custom thread list such as t3sidebar.
+- Uses BB's managed sidebar footer, including its compact icon and disclosure
+  behavior.
 
 ## Install
 
@@ -44,7 +44,7 @@ bb marketplace add git:https://github.com/hmps/bb-plugins.git@main
 bb plugin install usage-tracker@hmps
 ```
 
-The strip appears in the bottom of the sidebar as soon as the plugin loads.
+The icon appears in the bottom of the sidebar as soon as the plugin loads.
 Both providers are enabled by default. Change them independently under
 **Settings → Plugins → Usage Tracker**.
 
@@ -55,26 +55,25 @@ codex login
 claude
 ```
 
-If a CLI is missing, signed out, or expired, expand that provider in the strip
+If a CLI is missing, signed out, or expired, open that provider in the card
 to see the recovery instruction reported by BB.
 
 ## Use
 
-The collapsed strip is designed for quick scanning:
+The sidebar stays compact until you need the details:
 
-- Select the Claude Code or Codex reading to open its details in place.
-- Review the full **5-hour limit**, **weekly limit**, and their reset times.
-- Read the pace line under each window, for example
-  `At risk · ~130% at reset · runs out Thu 14:00`. The tick in the bar shows
-  how much of the window has already elapsed. A provider reading turns amber
-  or red when one of its windows needs attention.
-- Select the same provider again, use the close button, press <kbd>Esc</kbd>,
-  or click outside the details to collapse it.
+- Select the chart icon to open the usage card.
+- Select the Claude Code or Codex tab.
+- Review each reported usage window and its reset time.
+- Review the available full-reset count in the Codex card.
+- Read current and expected usage on the same line, for example
+  `12% (103%)`. The value in parentheses is the expected usage at reset.
+  The bar and values turn amber or red when the window needs attention.
+- Use the collapse button or BB's standard disclosure behavior to close it.
 - Select the refresh icon to fetch both providers immediately.
 
-Usage Tracker otherwise refreshes in the background every five minutes. It
-also refreshes when the window regains focus or becomes visible after the last
-successful fetch has become stale.
+Usage Tracker refreshes when you open the card. It then refreshes every five
+minutes while the card remains open.
 
 ## Update or remove
 
@@ -93,13 +92,15 @@ bb plugin remove usage-tracker
 
 ## Data and privacy
 
-The plugin reads BB's local `system.usageLimits` data and does not ask for or
-store provider credentials. Its only persistent browser data is the last
-successful usage snapshot in local storage, used to keep useful values visible
-during a temporary provider or network failure.
+The plugin reads BB's local `system.usageLimits` data. It also calls the local
+Codex app server's read-only `account/rateLimits/read` method for the available
+reset-credit count. It never redeems a reset and does not ask for or store
+provider credentials. Its only persistent browser data is the last successful
+usage snapshot in local storage, used to keep useful values visible during a
+temporary provider or network failure.
 
-Usage Tracker runs as a trusted BB frontend content script. Install plugins
-only from sources you trust.
+Usage Tracker runs in BB's managed plugin UI. Install plugins only from sources
+you trust.
 
 ## Develop
 

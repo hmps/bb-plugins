@@ -1,6 +1,7 @@
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { loadUsageSnapshot } from "./lib/load-usage.ts";
+import { loadCodexResetCredits } from "./lib/codex-reset-credits.ts";
 import {
   enabledSidebarProviderIds,
   SIDEBAR_PROVIDER_IDS,
@@ -39,6 +40,7 @@ const providerSchema = z
     planLabel: z.string().nullable(),
     message: z.string().nullable(),
     windows: z.array(usageWindowSchema),
+    resetCreditsAvailable: z.number().int().nonnegative().nullable(),
   })
   .strict();
 
@@ -93,7 +95,12 @@ export default function plugin(bb: BbPluginApi) {
       };
     },
     getUsage({ threadId }) {
-      return loadUsageSnapshot(bb.sdk, threadId);
+      return loadUsageSnapshot(
+        bb.sdk,
+        threadId,
+        new Date(),
+        loadCodexResetCredits,
+      );
     },
   });
 }
