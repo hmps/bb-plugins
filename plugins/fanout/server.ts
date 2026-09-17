@@ -288,7 +288,7 @@ export default async function plugin(bb: BbPluginApi) {
     return { placementPolicy: snapshot.placementPolicy, configRevision: snapshot.configRevision,
       pendingSelection: snapshot.pending, machines, selection,
       statusText: [renderSelection(selection), `Sample state: ${snapshot.failure ?? (snapshot.pending ? "configuration refresh pending" : "sample available")}.`,
-        renderStatus(snapshot, context?.projectId ?? null)].join("\n\n") };
+        renderStatus(snapshot, context?.projectId ?? null, state.now())].join("\n\n") };
   }
 
   function resolveMachine(rows: MachineRow[], query: string, exactName = true): MachineRow | null | "ambiguous" {
@@ -360,7 +360,7 @@ export default async function plugin(bb: BbPluginApi) {
       if (failure) result = { ...result, winner: null, eligibleOrder: [], kind: "unavailable data", reason: failure };
       if (result.policy === "priority") return renderPriorityAdvice(result);
       const legacyStay = result.kind === "suppressed advice" ? "Recommended: stay on the current machine." : "";
-      return [renderSelection(result), renderStatus(fresh, targetProject), legacyStay,
+      return [renderSelection(result), renderStatus(fresh, targetProject, state.now()), legacyStay,
         "Placement is advisory — you still write the spawn command.", REMOTE_WRITE_HANDOFF].filter(Boolean).join("\n\n");
     },
   });
@@ -428,7 +428,7 @@ export default async function plugin(bb: BbPluginApi) {
         const policy: PlacementPolicy = rest[0];
         await state.save(current => ({ ...current, placementPolicy: policy }));
         void sample(ctx.signal).catch(logSampleFailure);
-        return { exitCode: 0, stdout: `Placement policy saved: ${state.config.placementPolicy} (configuration revision ${state.snapshot.configRevision}).\n` };
+        return { exitCode: 0, stdout: `Placement policy saved: ${state.config.placementPolicy} (configuration revision ${state.snapshot.configRevision}). Replacement sample pending; selection is unavailable until it completes.\n` };
       }
 
       if (command === "priority") {
@@ -452,7 +452,7 @@ export default async function plugin(bb: BbPluginApi) {
           enabled: match.enabled, priority,
         } } }));
         void sample(ctx.signal).catch(logSampleFailure);
-        return { exitCode: 0, stdout: `Priority saved: ${match.name} = ${priority} (configuration revision ${state.snapshot.configRevision}).\n` };
+        return { exitCode: 0, stdout: `Priority saved: ${match.name} = ${priority} (configuration revision ${state.snapshot.configRevision}). Replacement sample pending; selection is unavailable until it completes.\n` };
       }
 
       if (command === "enable" || command === "disable") {

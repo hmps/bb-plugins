@@ -153,8 +153,10 @@ describe("E09 cli_policy_priority_validation", () => {
   it("reads and saves controls, then rejects invalid writes without persistence", async () => {
     const h = await setup();
     expect(await h.harness.behavior.runCli(["policy"])).toMatchObject({ exitCode: 0, stdout: expect.stringContaining("priority") });
-    expect(await h.harness.behavior.runCli(["policy", "offload"])).toMatchObject({ exitCode: 0, stdout: expect.stringContaining("revision 1") });
-    expect(await h.harness.behavior.runCli(["priority", "MSI", "7"])).toMatchObject({ exitCode: 0, stdout: expect.stringContaining("MSI = 7") });
+    expect(await h.harness.behavior.runCli(["policy", "offload"])).toMatchObject({ exitCode: 0,
+      stdout: expect.stringContaining("Replacement sample pending; selection is unavailable") });
+    expect(await h.harness.behavior.runCli(["priority", "MSI", "7"])).toMatchObject({ exitCode: 0,
+      stdout: expect.stringContaining("Replacement sample pending; selection is unavailable") });
     const saved = await h.bb.storage.kv.get(PLACEMENT_KEY);
     for (const argv of [["policy", "other"], ["priority", "missing", "1"], ["priority", "MSI", "1.5"], ["priority", "MSI", "1001"]]) {
       expect((await h.harness.behavior.runCli(argv)).exitCode).toBe(1);
@@ -170,6 +172,18 @@ describe("E09 cli_policy_priority_validation", () => {
     const saved = await h.bb.storage.kv.get(PLACEMENT_KEY);
     expect(await h.harness.behavior.runCli(["priority", "MSI", "7"])).toMatchObject({ exitCode: 1, stderr: expect.stringContaining("more than one") });
     expect(await h.bb.storage.kv.get(PLACEMENT_KEY)).toEqual(saved);
+  });
+
+  it("retains priority through CLI disable and enable round trips", async () => {
+    const h = await setup();
+    await h.harness.behavior.runCli(["priority", "MSI", "7"]);
+    expect(await h.harness.behavior.runCli(["disable", "MSI"])).toMatchObject({ exitCode: 0 });
+    expect(await h.harness.behavior.runCli(["enable", "MSI"])).toMatchObject({ exitCode: 0 });
+    expect(await h.bb.storage.kv.get(PLACEMENT_KEY)).toEqual({ placementPolicy: "priority", machines: {
+      ...machines, msi: { ...machines.msi, enabled: true, priority: 7 },
+    } });
+    const listed = await h.harness.behavior.callRpc("listMachines", null) as { machines: Array<{ hostId: string; priority: number }> };
+    expect(listed.machines.find(row => row.hostId === "msi")?.priority).toBe(7);
   });
 });
 

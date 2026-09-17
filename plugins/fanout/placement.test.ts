@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildSnapshot, enabledCapacities, mergeMachineConfig, parsePlacementConfig,
-  renderPriorityAdvice, selectPlacement, type HostRow, type PlacementConfig,
+  renderPriorityAdvice, renderStatus, selectPlacement, type HostRow, type PlacementConfig,
 } from "./placement";
 import { PlacementState } from "./placement-state";
 
@@ -39,7 +39,7 @@ function fixture(initial = config, persist = vi.fn(async (_: PlacementConfig) =>
       selectPlacement(state.snapshot, { currentHostId: origin, projectId: project, now }),
   };
 }
-afterEach(() => vi.useRealTimers());
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("E02 priority_local_remote_and_fallback", () => {
   it("selects first MSI from idle Titan and from MSI itself", async () => {
@@ -254,6 +254,18 @@ describe("E07 priority_advice_expiry_and_single_child", () => {
     wall -= 90_000; mono += 30_000;
     expect(selectPlacement(state.snapshot, { currentHostId: "titan", projectId: "project", now: state.now() }))
       .toMatchObject({ sampleAgeMs: 30_000, winner: null });
+  });
+  it("uses committed monotonic sample-start age for status after a wall-clock change", async () => {
+    let mono = 100; let wall = 100_000;
+    const state = new PlacementState(config, 80, async () => {}, { mono: () => mono, wall: () => wall });
+    vi.spyOn(Date, "now").mockImplementation(() => wall);
+    await state.refresh(async settings => ({
+      hosts,
+      snapshot: buildSnapshot({ hosts, capacity: enabledCapacities(mergeMachineConfig(settings.machines, hosts)),
+        projectHosts: new Map([["project", new Set(hosts.map(host => host.id))]]), now: wall, threads: [] }),
+    }));
+    wall -= 90_000; mono += 1_500;
+    expect(renderStatus(state.snapshot, "project", state.now())).toContain("sampled 2s ago");
   });
   it("requires refresh for one child and explains advisory capacity risk", async () => {
     const f = fixture(); await f.state.refresh(c => f.collect(c));

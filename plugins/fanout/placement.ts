@@ -279,6 +279,7 @@ export function renderAdvice(advice: Advice): string {
 export function renderStatus(
   snapshot: Snapshot | SelectionSnapshot,
   projectId: string | null,
+  now?: number,
 ): string {
   if (snapshot.machines.length === 0) {
     return "No machines sampled yet.";
@@ -302,9 +303,13 @@ export function renderStatus(
       return `  ${formatMachine(machine)}${suffix}`;
     });
 
-  const age = snapshot.sampledAt
-    ? `${Math.round((Date.now() - snapshot.sampledAt) / 1000)}s ago`
-    : "never";
+  // Committed selection snapshots use their monotonic sample start. This keeps
+  // status age equal to selection age when the system clock changes.
+  const sampleStartedMono = "sampleStartedMono" in snapshot ? snapshot.sampleStartedMono : null;
+  const ageMs = sampleStartedMono === null || now === undefined
+    ? snapshot.sampledAt ? Date.now() - snapshot.sampledAt : null
+    : Math.max(0, now - sampleStartedMono);
+  const age = ageMs === null ? "never" : `${Math.round(ageMs / 1000)}s ago`;
   return [`Machine load (sampled ${age}):`, ...lines].join("\n");
 }
 
