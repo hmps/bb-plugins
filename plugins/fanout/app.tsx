@@ -48,6 +48,7 @@ function MachinesSection() {
   const [statusText, setStatusText] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -107,9 +108,12 @@ function MachinesSection() {
       setConfigRevision(result.configRevision);
       setPendingSelection(result.pendingSelection);
       setStatusText(result.statusText);
+      setSaveError(null);
       toast.success(`Machine settings saved (revision ${result.configRevision})`);
     } catch (cause) {
-      toast.error(cause instanceof Error ? cause.message : String(cause));
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setSaveError(message);
+      toast.error(message);
     } finally {
       setSaving(false);
     }
@@ -181,15 +185,16 @@ function MachinesSection() {
                   value={draft.capacity}
                   disabled={!draft.enabled}
                   aria-label={`Max threads on ${row.name}`}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const capacity = event.currentTarget.value;
                     setDrafts((prev) => ({
                       ...prev,
                       [row.hostId]: {
                         ...draft,
-                        capacity: event.currentTarget.value,
+                        capacity,
                       },
-                    }))
-                  }
+                    }));
+                  }}
                   className={`h-7 w-16 rounded border bg-background px-2 text-sm text-foreground disabled:opacity-50 ${
                     badCapacity && draft.enabled
                       ? "border-destructive"
@@ -207,12 +212,13 @@ function MachinesSection() {
                   inputMode="numeric"
                   value={draft.priority}
                   aria-label={`Priority for ${row.name}`}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const priority = event.currentTarget.value;
                     setDrafts((prev) => ({
                       ...prev,
-                      [row.hostId]: { ...draft, priority: event.currentTarget.value },
-                    }))
-                  }
+                      [row.hostId]: { ...draft, priority },
+                    }));
+                  }}
                   className={`h-7 w-16 rounded border bg-background px-2 text-sm text-foreground ${
                     badPriority ? "border-destructive" : "border-input"
                   }`}
@@ -224,15 +230,16 @@ function MachinesSection() {
                   type="checkbox"
                   checked={draft.enabled}
                   aria-label={`Use ${row.name} for fan-out`}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const enabled = event.currentTarget.checked;
                     setDrafts((prev) => ({
                       ...prev,
                       [row.hostId]: {
                         ...draft,
-                        enabled: event.currentTarget.checked,
+                        enabled,
                       },
-                    }))
-                  }
+                    }));
+                  }}
                   className="size-3.5 accent-primary"
                 />
                 <span
@@ -264,7 +271,15 @@ function MachinesSection() {
 
       {pendingSelection ? (
         <p className="text-xs text-muted-foreground">
-          Selection is unavailable while the replacement sample is pending.
+          {placementPolicy === "priority"
+            ? "Priority selection is unavailable while the replacement sample is pending."
+            : "Any cached offload selection remains available while the replacement sample is pending."}
+        </p>
+      ) : null}
+
+      {saveError ? (
+        <p role="alert" className="text-xs text-destructive">
+          Could not save machines: {saveError}
         </p>
       ) : null}
 

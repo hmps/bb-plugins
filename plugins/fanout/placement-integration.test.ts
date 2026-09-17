@@ -154,14 +154,37 @@ describe("E09 cli_policy_priority_validation", () => {
     const h = await setup();
     expect(await h.harness.behavior.runCli(["policy"])).toMatchObject({ exitCode: 0, stdout: expect.stringContaining("priority") });
     expect(await h.harness.behavior.runCli(["policy", "offload"])).toMatchObject({ exitCode: 0,
-      stdout: expect.stringContaining("Replacement sample pending; selection is unavailable") });
+      stdout: expect.stringContaining("cached offload selection remains available") });
     expect(await h.harness.behavior.runCli(["priority", "MSI", "7"])).toMatchObject({ exitCode: 0,
-      stdout: expect.stringContaining("Replacement sample pending; selection is unavailable") });
+      stdout: expect.stringContaining("cached offload selection remains available") });
     const saved = await h.bb.storage.kv.get(PLACEMENT_KEY);
     for (const argv of [["policy", "other"], ["priority", "missing", "1"], ["priority", "MSI", "1.5"], ["priority", "MSI", "1001"]]) {
       expect((await h.harness.behavior.runCli(argv)).exitCode).toBe(1);
       expect(await h.bb.storage.kv.get(PLACEMENT_KEY)).toEqual(saved);
     }
+  });
+
+  it("preserves a concurrent RPC capacity and enabled update during a priority edit", async () => {
+    const h = await setup();
+    const gate = deferred<typeof hosts>();
+    let hostReads = 0;
+    h.harness.inspection.sdk.stub("hosts.list", () => ++hostReads === 1 ? gate.promise : hosts);
+    const priority = h.harness.behavior.runCli(["priority", "MSI", "7"]);
+    await Promise.resolve();
+    await h.harness.behavior.callRpc("saveMachines", {
+      machines: [{ hostId: "msi", enabled: false, capacity: 12 }],
+    });
+    gate.resolve(hosts);
+    await expect(priority).resolves.toMatchObject({ exitCode: 0 });
+    expect(await h.bb.storage.kv.get(PLACEMENT_KEY)).toEqual({ placementPolicy: "priority", machines: {
+      ...machines, msi: { ...machines.msi, enabled: false, capacity: 12, priority: 7 },
+    } });
+  });
+
+  it("waits for a replacement sample only for priority", async () => {
+    const h = await setup();
+    expect(await h.harness.behavior.runCli(["priority", "MSI", "7"])).toMatchObject({ exitCode: 0,
+      stdout: expect.stringContaining("priority selection is unavailable") });
   });
 
   it("rejects an ambiguous exact name without a write", async () => {

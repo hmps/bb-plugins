@@ -291,6 +291,12 @@ export default async function plugin(bb: BbPluginApi) {
         renderStatus(snapshot, context?.projectId ?? null, state.now())].join("\n\n") };
   }
 
+  function replacementSampleMessage(policy: PlacementPolicy): string {
+    return policy === "priority"
+      ? "Replacement sample pending; priority selection is unavailable until it completes."
+      : "Replacement sample pending; any cached offload selection remains available until it completes.";
+  }
+
   function resolveMachine(rows: MachineRow[], query: string, exactName = true): MachineRow | null | "ambiguous" {
     const matches = rows.filter(row =>
       row.hostId === query || (exactName ? row.name === query : row.name.toLowerCase() === query.toLowerCase()));
@@ -428,7 +434,7 @@ export default async function plugin(bb: BbPluginApi) {
         const policy: PlacementPolicy = rest[0];
         await state.save(current => ({ ...current, placementPolicy: policy }));
         void sample(ctx.signal).catch(logSampleFailure);
-        return { exitCode: 0, stdout: `Placement policy saved: ${state.config.placementPolicy} (configuration revision ${state.snapshot.configRevision}). Replacement sample pending; selection is unavailable until it completes.\n` };
+        return { exitCode: 0, stdout: `Placement policy saved: ${state.config.placementPolicy} (configuration revision ${state.snapshot.configRevision}). ${replacementSampleMessage(state.config.placementPolicy)}\n` };
       }
 
       if (command === "priority") {
@@ -447,12 +453,18 @@ export default async function plugin(bb: BbPluginApi) {
         if (match === "ambiguous") {
           return { exitCode: 1, stderr: `"${query}" matches more than one machine; use the host id.\n` };
         }
-        await state.save(current => ({ ...current, machines: { ...current.machines, [match.hostId]: {
-          ...current.machines[match.hostId], name: match.name, capacity: match.capacity,
-          enabled: match.enabled, priority,
-        } } }));
+        await state.save(current => {
+          const configured = current.machines[match.hostId];
+          return { ...current, machines: { ...current.machines, [match.hostId]: {
+            ...configured,
+            name: configured?.name ?? match.name,
+            capacity: configured?.capacity ?? match.capacity,
+            enabled: configured?.enabled ?? match.enabled,
+            priority,
+          } } };
+        });
         void sample(ctx.signal).catch(logSampleFailure);
-        return { exitCode: 0, stdout: `Priority saved: ${match.name} = ${priority} (configuration revision ${state.snapshot.configRevision}). Replacement sample pending; selection is unavailable until it completes.\n` };
+        return { exitCode: 0, stdout: `Priority saved: ${match.name} = ${priority} (configuration revision ${state.snapshot.configRevision}). ${replacementSampleMessage(state.config.placementPolicy)}\n` };
       }
 
       if (command === "enable" || command === "disable") {

@@ -24,6 +24,7 @@
     "server.ts",
     "app.tsx",
     "*.test.ts",
+    "*.test.tsx",
     "vitest.config.ts"
   ]
 }
