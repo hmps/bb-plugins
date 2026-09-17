@@ -13,13 +13,14 @@ import type { MachineRow, rpcContract } from "./server";
 type Draft = {
   capacity: string;
   enabled: boolean;
+  priority: string;
 };
 
 function draftsOf(rows: MachineRow[]): Record<string, Draft> {
   return Object.fromEntries(
     rows.map((row) => [
       row.hostId,
-      { capacity: String(row.capacity), enabled: row.enabled },
+      { capacity: String(row.capacity), enabled: row.enabled, priority: String(row.priority) },
     ]),
   );
 }
@@ -30,10 +31,20 @@ function parseCapacity(raw: string): number | null {
   return value;
 }
 
+function parsePriority(raw: string): number | null {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > 1000) return null;
+  return value;
+}
+
 function MachinesSection() {
   const rpc = useRpc<typeof rpcContract>();
   const [rows, setRows] = useState<MachineRow[] | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  const [placementPolicy, setPlacementPolicy] = useState<"offload" | "priority">("offload");
+  const [savedPolicy, setSavedPolicy] = useState<"offload" | "priority">("offload");
+  const [configRevision, setConfigRevision] = useState(0);
+  const [pendingSelection, setPendingSelection] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -42,6 +53,10 @@ function MachinesSection() {
       const result = await rpc.call("listMachines", null);
       setRows(result.machines);
       setDrafts(draftsOf(result.machines));
+      setPlacementPolicy(result.placementPolicy);
+      setSavedPolicy(result.placementPolicy);
+      setConfigRevision(result.configRevision);
+      setPendingSelection(result.pendingSelection);
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -52,18 +67,17 @@ function MachinesSection() {
     void load();
   }, [load]);
 
-  const dirty =
-    rows !== null &&
-    rows.some((row) => {
+  const dirty = placementPolicy !== savedPolicy || (rows !== null && rows.some((row) => {
       const draft = drafts[row.hostId];
       if (!draft) return false;
       return (
-        draft.enabled !== row.enabled || draft.capacity !== String(row.capacity)
+        draft.enabled !== row.enabled || draft.capacity !== String(row.capacity) ||
+        draft.priority !== String(row.priority)
       );
-    });
+    }));
 
   const invalid = Object.values(drafts).some(
-    (draft) => parseCapacity(draft.capacity) === null,
+    (draft) => parseCapacity(draft.capacity) === null || parsePriority(draft.priority) === null,
   );
 
   async function save() {
@@ -71,6 +85,7 @@ function MachinesSection() {
     setSaving(true);
     try {
       const result = await rpc.call("saveMachines", {
+        placementPolicy,
         machines: rows.map((row) => {
           const draft = drafts[row.hostId];
           return {
@@ -79,12 +94,17 @@ function MachinesSection() {
             // it exists so the type stays a number without a non-null assertion.
             capacity: parseCapacity(draft?.capacity ?? "") ?? row.capacity,
             enabled: draft?.enabled ?? row.enabled,
+            priority: parsePriority(draft?.priority ?? "") ?? row.priority,
           };
         }),
       });
       setRows(result.machines);
       setDrafts(draftsOf(result.machines));
-      toast.success("Machine settings saved");
+      setPlacementPolicy(result.placementPolicy);
+      setSavedPolicy(result.placementPolicy);
+      setConfigRevision(result.configRevision);
+      setPendingSelection(result.pendingSelection);
+      toast.success(`Machine settings saved (revision ${result.configRevision})`);
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -109,12 +129,31 @@ function MachinesSection() {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-col divide-y divide-border rounded-md border border-border">
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2.5">
+          <label className="text-xs font-medium" htmlFor="fanout-placement-policy">
+            Placement policy
+          </label>
+          <select
+            id="fanout-placement-policy"
+            value={placementPolicy}
+            onChange={(event) => setPlacementPolicy(event.currentTarget.value as "offload" | "priority")}
+            className="h-7 rounded border border-input bg-background px-2 text-xs"
+          >
+            <option value="offload">Offload</option>
+            <option value="priority">Priority</option>
+          </select>
+          <span className="text-xs text-muted-foreground">
+            Configuration revision {configRevision}
+          </span>
+        </div>
         {rows.map((row) => {
           const draft = drafts[row.hostId] ?? {
             capacity: String(row.capacity),
             enabled: row.enabled,
+            priority: String(row.priority),
           };
           const badCapacity = parseCapacity(draft.capacity) === null;
+          const badPriority = parsePriority(draft.priority) === null;
 
           return (
             <div
@@ -152,6 +191,27 @@ function MachinesSection() {
                     badCapacity && draft.enabled
                       ? "border-destructive"
                       : "border-input"
+                  }`}
+                />
+              </label>
+
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                Priority
+                <input
+                  type="number"
+                  min={1}
+                  max={1000}
+                  inputMode="numeric"
+                  value={draft.priority}
+                  aria-label={`Priority for ${row.name}`}
+                  onChange={(event) =>
+                    setDrafts((prev) => ({
+                      ...prev,
+                      [row.hostId]: { ...draft, priority: event.currentTarget.value },
+                    }))
+                  }
+                  className={`h-7 w-16 rounded border bg-background px-2 text-sm text-foreground ${
+                    badPriority ? "border-destructive" : "border-input"
                   }`}
                 />
               </label>
@@ -197,6 +257,12 @@ function MachinesSection() {
         </p>
       )}
 
+      {pendingSelection ? (
+        <p className="text-xs text-muted-foreground">
+          Selection is unavailable while the replacement sample is pending.
+        </p>
+      ) : null}
+
       <div className="flex items-center gap-2">
         <button
           type="button"
@@ -208,7 +274,7 @@ function MachinesSection() {
         </button>
         {invalid ? (
           <span className="text-xs text-destructive">
-            Max threads must be a whole number between 1 and 1000.
+            Max threads and priority must be whole numbers between 1 and 1000.
           </span>
         ) : null}
       </div>

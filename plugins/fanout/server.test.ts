@@ -165,8 +165,8 @@ describe("enabledCapacities", () => {
 describe("renderMachines", () => {
   it("shows a disabled machine as a decision, not an omission", () => {
     const text = renderMachines([
-      { hostId: TITAN, name: "Ethereal-Titan", connected: true, running: 4, capacity: 8, enabled: true },
-      { hostId: LAPTOP, name: "Silicon Knight", connected: true, running: 1, capacity: 10, enabled: false },
+      { hostId: TITAN, name: "Ethereal-Titan", connected: true, running: 4, capacity: 8, enabled: true, priority: 100 },
+      { hostId: LAPTOP, name: "Silicon Knight", connected: true, running: 1, capacity: 10, enabled: false, priority: 100 },
     ]);
     expect(text).toContain("Ethereal-Titan  enabled  4/8");
     expect(text).toContain("Silicon Knight  disabled");
@@ -174,14 +174,14 @@ describe("renderMachines", () => {
 
   it("warns when nothing is enabled", () => {
     const text = renderMachines([
-      { hostId: MSI, name: "MSI", connected: true, running: 0, capacity: 12, enabled: false },
+      { hostId: MSI, name: "MSI", connected: true, running: 0, capacity: 12, enabled: false, priority: 100 },
     ]);
     expect(text).toContain("No machine is enabled");
   });
 
   it("flags a disconnected machine", () => {
     const text = renderMachines([
-      { hostId: MSI, name: "MSI", connected: false, running: 0, capacity: 12, enabled: true },
+      { hostId: MSI, name: "MSI", connected: false, running: 0, capacity: 12, enabled: true, priority: 100 },
     ]);
     expect(text).toContain("(disconnected)");
   });

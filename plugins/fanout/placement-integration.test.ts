@@ -125,3 +125,50 @@ describe("E05/E06/E07 registered server boundary", () => {
     expect(String(await h.tool())).toContain("Recommended: --machine Titan");
   });
 });
+
+describe("E08 settings_legacy_partial_save_roundtrip", () => {
+  it("retains omitted policy, priority, and hosts across legacy and partial RPC saves", async () => {
+    const h = await setup();
+    const before = await h.harness.behavior.callRpc("listMachines", null) as { placementPolicy: string; machines: Array<{ hostId: string; priority: number }> };
+    expect(before.placementPolicy).toBe("priority");
+    expect(before.machines.find(row => row.hostId === "msi")?.priority).toBe(1);
+    const saved = await h.harness.behavior.callRpc("saveMachines", {
+      machines: [{ hostId: "titan", enabled: false, capacity: 12 }],
+    }) as { placementPolicy: string; configRevision: number; machines: Array<{ hostId: string; enabled: boolean; priority: number }> };
+    expect(saved.placementPolicy).toBe("priority");
+    expect(saved.configRevision).toBe(1);
+    expect(saved.machines).toEqual(expect.arrayContaining([
+      expect.objectContaining({ hostId: "titan", enabled: false, priority: 20 }),
+      expect.objectContaining({ hostId: "msi", enabled: true, priority: 1 }),
+    ]));
+    const restarted = await h.harness.lifecycle.reload(plugin);
+    cleanups.push(() => restarted.harness.lifecycle.dispose());
+    expect(await restarted.bb.storage.kv.get(PLACEMENT_KEY)).toEqual({ placementPolicy: "priority", machines: {
+      titan: { ...machines.titan, enabled: false, capacity: 12 }, msi: machines.msi,
+    } });
+  });
+});
+
+describe("E09 cli_policy_priority_validation", () => {
+  it("reads and saves controls, then rejects invalid writes without persistence", async () => {
+    const h = await setup();
+    expect(await h.harness.behavior.runCli(["policy"])).toMatchObject({ exitCode: 0, stdout: expect.stringContaining("priority") });
+    expect(await h.harness.behavior.runCli(["policy", "offload"])).toMatchObject({ exitCode: 0, stdout: expect.stringContaining("revision 1") });
+    expect(await h.harness.behavior.runCli(["priority", "MSI", "7"])).toMatchObject({ exitCode: 0, stdout: expect.stringContaining("MSI = 7") });
+    const saved = await h.bb.storage.kv.get(PLACEMENT_KEY);
+    for (const argv of [["policy", "other"], ["priority", "missing", "1"], ["priority", "MSI", "1.5"], ["priority", "MSI", "1001"]]) {
+      expect((await h.harness.behavior.runCli(argv)).exitCode).toBe(1);
+      expect(await h.bb.storage.kv.get(PLACEMENT_KEY)).toEqual(saved);
+    }
+  });
+
+  it("rejects an ambiguous exact name without a write", async () => {
+    const h = await setup();
+    h.harness.inspection.sdk.stub("hosts.list", async () => [
+      ...hosts, { id: "msi-2", name: "MSI", status: "connected" },
+    ]);
+    const saved = await h.bb.storage.kv.get(PLACEMENT_KEY);
+    expect(await h.harness.behavior.runCli(["priority", "MSI", "7"])).toMatchObject({ exitCode: 1, stderr: expect.stringContaining("more than one") });
+    expect(await h.bb.storage.kv.get(PLACEMENT_KEY)).toEqual(saved);
+  });
+});

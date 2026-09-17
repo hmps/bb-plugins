@@ -19,7 +19,8 @@ import {
   DEFAULT_CAPACITY, DEFAULT_THRESHOLD_PERCENT, parseThresholdPercent,
   mergeMachineConfig, countRunningByHost, buildSnapshot,
   enabledCapacities, renderAdvice, renderStatus, selectPlacement,
-  renderPriorityAdvice, parsePlacementConfig, type PlacementConfig, type HostRow, type ThreadRow, type MachineConfigMap,
+  renderPriorityAdvice, parsePlacementConfig, parsePriority,
+  type PlacementConfig, type PlacementPolicy, type HostRow, type ThreadRow, type MachineConfigMap,
 } from "./placement";
 import { PLACEMENT_KEY, PlacementState } from "./placement-state";
 
@@ -36,6 +37,7 @@ const machineRowSchema = z.object({
   running: z.number().int().min(0),
   capacity: z.number().int().min(1),
   enabled: z.boolean(),
+  priority: z.number().int().min(1).max(1000),
 });
 
 export type MachineRow = z.infer<typeof machineRowSchema>;
@@ -43,19 +45,21 @@ export type MachineRow = z.infer<typeof machineRowSchema>;
 export const rpcContract = defineRpcContract({
   listMachines: {
     input: z.null(),
-    output: z.object({ machines: z.array(machineRowSchema) }),
+    output: z.object({ placementPolicy: z.enum(["offload", "priority"]), configRevision: z.number().int().min(0), pendingSelection: z.boolean(), machines: z.array(machineRowSchema) }),
   },
   saveMachines: {
     input: z.object({
+      placementPolicy: z.enum(["offload", "priority"]).optional(),
       machines: z.array(
         z.object({
           hostId: z.string().trim().min(1),
           capacity: z.number().int().min(1).max(1000),
           enabled: z.boolean(),
+          priority: z.number().int().min(1).max(1000).optional(),
         }),
       ),
     }),
-    output: z.object({ machines: z.array(machineRowSchema) }),
+    output: z.object({ placementPolicy: z.enum(["offload", "priority"]), configRevision: z.number().int().min(0), pendingSelection: z.boolean(), machines: z.array(machineRowSchema) }),
   },
 });
 
@@ -251,15 +255,27 @@ export default async function plugin(bb: BbPluginApi) {
       running: running.get(host.id) ?? 0,
       capacity: config[host.id]?.capacity ?? DEFAULT_CAPACITY,
       enabled: config[host.id]?.enabled ?? false,
+      priority: parsePriority(config[host.id]?.priority),
     }));
+  }
+
+  async function controlState(signal?: AbortSignal) {
+    return { placementPolicy: state.config.placementPolicy, configRevision: state.snapshot.configRevision,
+      pendingSelection: state.snapshot.pending, machines: await machineRows(signal) };
+  }
+
+  function resolveMachine(rows: MachineRow[], query: string, exactName = true): MachineRow | null | "ambiguous" {
+    const matches = rows.filter(row =>
+      row.hostId === query || (exactName ? row.name === query : row.name.toLowerCase() === query.toLowerCase()));
+    return matches.length === 1 ? matches[0]! : matches.length === 0 ? null : "ambiguous";
   }
 
   bb.rpc.register(rpcContract, {
     async listMachines() {
-      return { machines: await machineRows() };
+      return controlState();
     },
 
-    async saveMachines({ machines }) {
+    async saveMachines({ placementPolicy, machines }) {
       const hosts = (await bb.sdk.hosts.list()) as unknown as HostRow[];
       const byId = new Map(hosts.map((host) => [host.id, host]));
       await state.save(current => {
@@ -269,12 +285,13 @@ export default async function plugin(bb: BbPluginApi) {
           if (!host) continue;
           next[row.hostId] = {
             ...next[row.hostId], name: host.name, capacity: row.capacity, enabled: row.enabled,
+            priority: row.priority ?? next[row.hostId]?.priority,
           };
         }
-        return { ...current, machines: next };
+        return { placementPolicy: placementPolicy ?? current.placementPolicy, machines: next };
       });
       void sample().catch(logSampleFailure);
-      return { machines: await machineRows() };
+      return controlState();
     },
   });
 
@@ -346,6 +363,16 @@ export default async function plugin(bb: BbPluginApi) {
         summary: "Stop offering a machine as a fan-out target",
         usage: "bb fanout disable <machine>",
       },
+      {
+        name: "policy",
+        summary: "Show or set the fan-out placement policy",
+        usage: "bb fanout policy [offload|priority]",
+      },
+      {
+        name: "priority",
+        summary: "Set a machine priority for priority placement",
+        usage: "bb fanout priority <machine> <1-1000>",
+      },
     ],
     async run(argv, ctx) {
       const [command, ...rest] = argv;
@@ -363,6 +390,43 @@ export default async function plugin(bb: BbPluginApi) {
         return { exitCode: 0, stdout: `${renderMachines(rows)}\n` };
       }
 
+      if (command === "policy") {
+        if (rest.length === 0) {
+          return { exitCode: 0, stdout: `Placement policy: ${state.config.placementPolicy} (configuration revision ${state.snapshot.configRevision})\n` };
+        }
+        if (rest.length !== 1 || (rest[0] !== "offload" && rest[0] !== "priority")) {
+          return { exitCode: 1, stderr: "Policy must be offload or priority.\n" };
+        }
+        const policy: PlacementPolicy = rest[0];
+        await state.save(current => ({ ...current, placementPolicy: policy }));
+        void sample(ctx.signal).catch(logSampleFailure);
+        return { exitCode: 0, stdout: `Placement policy saved: ${state.config.placementPolicy} (configuration revision ${state.snapshot.configRevision}).\n` };
+      }
+
+      if (command === "priority") {
+        const [query, rawPriority, ...extra] = rest;
+        if (!query || rawPriority === undefined || extra.length > 0) {
+          return { exitCode: 1, stderr: "usage: bb fanout priority <machine> <1-1000>\n" };
+        }
+        const priority = Number(rawPriority);
+        if (!Number.isInteger(priority) || priority < 1 || priority > 1000) {
+          return { exitCode: 1, stderr: "Priority must be a whole number between 1 and 1000.\n" };
+        }
+        const match = resolveMachine(await machineRows(ctx.signal), query);
+        if (match === null) {
+          return { exitCode: 1, stderr: `No machine matches "${query}". Run \`bb fanout machines\`.\n` };
+        }
+        if (match === "ambiguous") {
+          return { exitCode: 1, stderr: `"${query}" matches more than one machine; use the host id.\n` };
+        }
+        await state.save(current => ({ ...current, machines: { ...current.machines, [match.hostId]: {
+          ...current.machines[match.hostId], name: match.name, capacity: match.capacity,
+          enabled: match.enabled, priority,
+        } } }));
+        void sample(ctx.signal).catch(logSampleFailure);
+        return { exitCode: 0, stdout: `Priority saved: ${match.name} = ${priority} (configuration revision ${state.snapshot.configRevision}).\n` };
+      }
+
       if (command === "enable" || command === "disable") {
         const query = rest[0];
         if (!query) {
@@ -372,25 +436,20 @@ export default async function plugin(bb: BbPluginApi) {
           };
         }
 
-        const rows = await machineRows(ctx.signal);
-        const matches = rows.filter(
-          (row) =>
-            row.hostId === query ||
-            row.name.toLowerCase() === query.toLowerCase(),
-        );
-        if (matches.length === 0) {
+        const match = resolveMachine(await machineRows(ctx.signal), query, false);
+        if (match === null) {
           return {
             exitCode: 1,
             stderr: `No machine matches "${query}". Run \`bb fanout machines\`.\n`,
           };
         }
-        if (matches.length > 1) {
+        if (match === "ambiguous") {
           return {
             exitCode: 1,
             stderr: `"${query}" matches more than one machine; use the host id.\n`,
           };
         }
-        const row = matches[0]!;
+        const row = match;
 
         let capacity = row.capacity;
         if (command === "enable" && rest[1] !== undefined) {
@@ -421,7 +480,7 @@ export default async function plugin(bb: BbPluginApi) {
       return {
         exitCode: 1,
         stderr:
-          "usage: bb fanout <status|machines|enable|disable> [...]\n",
+          "usage: bb fanout <status|machines|enable|disable|policy|priority> [...]\n",
       };
     },
   });
