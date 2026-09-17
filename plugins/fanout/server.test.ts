@@ -103,7 +103,7 @@ describe("parseMachineConfig", () => {
       parseMachineConfig({
         [MSI]: { name: "MSI", capacity: 12, enabled: true },
       }),
-    ).toEqual({ [MSI]: { name: "MSI", capacity: 12, enabled: true } });
+    ).toEqual({ [MSI]: { name: "MSI", capacity: 12, enabled: true, priority: 100 } });
   });
 
   it("treats a missing enabled flag as disabled", () => {
@@ -138,6 +138,7 @@ describe("mergeMachineConfig", () => {
       name: "MSI",
       capacity: DEFAULT_CAPACITY,
       enabled: false,
+      priority: 100,
     });
   });
 
@@ -146,7 +147,7 @@ describe("mergeMachineConfig", () => {
       { [MSI]: { name: "Old name", capacity: 12, enabled: true } },
       HOSTS,
     );
-    expect(merged[MSI]).toEqual({ name: "MSI", capacity: 12, enabled: true });
+    expect(merged[MSI]).toEqual({ name: "MSI", capacity: 12, enabled: true, priority: 100 });
   });
 });
 

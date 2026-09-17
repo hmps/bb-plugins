@@ -25,3 +25,6 @@
 - A parent-id forest built straight from `parentId` drops a self-parented node and makes a 2-node cycle recurse forever in the renderer. Detach a parent link that closes a cycle while building the tree.
 - Headless checks: the vaam-main playwright-core may want a chromium build that is not in `~/Library/Caches/ms-playwright`. Launch with `channel: "chrome"` to use the installed Google Chrome. Script template: `/tmp/vaamcheck/check.mjs`.
 - `bd list --json` starts an embedded database on every run: 2-8 s normally, 70 s under lock contention, and the earlier plugin stats showed calls hitting the 30 s timeout. Never run `bd` on the request path. Cache the full `bd list` rows, serve stale at once and refresh in the background, warm at load, and answer `show`-type lookups from the list cache.
+
+- fanout: Run package checks in a separate tool call with an explicit package working directory. Keep repository-root edits separate.
+- fanout: A threshold notification must suppress priority advice synchronously, even while a configuration save holds the commit queue.
