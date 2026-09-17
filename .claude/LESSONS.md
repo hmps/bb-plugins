@@ -25,6 +25,10 @@
 - A parent-id forest built straight from `parentId` drops a self-parented node and makes a 2-node cycle recurse forever in the renderer. Detach a parent link that closes a cycle while building the tree.
 - Headless checks: the vaam-main playwright-core may want a chromium build that is not in `~/Library/Caches/ms-playwright`. Launch with `channel: "chrome"` to use the installed Google Chrome. Script template: `/tmp/vaamcheck/check.mjs`.
 - `bd list --json` starts an embedded database on every run: 2-8 s normally, 70 s under lock contention, and the earlier plugin stats showed calls hitting the 30 s timeout. Never run `bd` on the request path. Cache the full `bd list` rows, serve stale at once and refresh in the background, warm at load, and answer `show`-type lookups from the list cache.
+- `system.usageLimits()` can omit providers that are unavailable on the selected host, despite older SDK types that require fixed provider keys. Normalize missing providers before reading `status`.
+- Current BB usage responses use provider IDs such as `claude-code` and `acp-cursor`; accept those wire IDs and keep legacy aliases only for compatibility.
+- Codex reset credits are not in BB's `system.usageLimits()` result. Codex app-server 0.149 exposes the read-only count at `account/rateLimits/read` → `rateLimitResetCredits.availableCount`; never call the separate consume method while displaying it.
+- Use `experimental_sidebarFooter.register({ kind: "disclosure" })` for an icon-only sidebar utility. The host then owns the button, disclosure, and compact-sidebar behavior.
 
 - fanout: Run package checks in a separate tool call with an explicit package working directory. Keep repository-root edits separate.
 - fanout: A threshold notification must suppress priority advice synchronously, even while a configuration save holds the commit queue.
