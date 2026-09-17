@@ -19,7 +19,7 @@ import {
   DEFAULT_CAPACITY, DEFAULT_THRESHOLD_PERCENT, parseThresholdPercent,
   mergeMachineConfig, countRunningByHost, buildSnapshot,
   enabledCapacities, renderAdvice, renderStatus, selectPlacement,
-  renderPriorityAdvice, parsePlacementConfig, parsePriority,
+  renderPriorityAdvice, renderSelection, REMOTE_WRITE_HANDOFF, parsePlacementConfig, parsePriority,
   type PlacementConfig, type PlacementPolicy, type HostRow, type ThreadRow, type MachineConfigMap,
 } from "./placement";
 import { PLACEMENT_KEY, PlacementState } from "./placement-state";
@@ -42,10 +42,26 @@ const machineRowSchema = z.object({
 
 export type MachineRow = z.infer<typeof machineRowSchema>;
 
+const selectionSchema = z.object({
+  policy: z.enum(["offload", "priority"]), thresholdPercent: z.number(), snapshotVersion: z.string(),
+  configRevision: z.number(), sampleRevision: z.number(), originHostId: z.string().nullable(),
+  projectId: z.string().nullable(), sampleAgeMs: z.number().nullable(), observedAt: z.number().nullable(),
+  expiresAt: z.number().nullable(), configuredOrder: z.array(z.string()), eligibleOrder: z.array(z.string()),
+  exclusions: z.record(z.string(), z.string()),
+  kind: z.enum(["local", "remote", "no eligible capacity", "unavailable data", "suppressed advice"]),
+  winner: z.object({ hostId: z.string(), name: z.string(), connected: z.boolean(), running: z.number(),
+    capacity: z.number().nullable(), saturation: z.number().nullable() }).nullable(), reason: z.string(),
+});
+const controlSchema = z.object({
+  placementPolicy: z.enum(["offload", "priority"]), configRevision: z.number().int().min(0),
+  pendingSelection: z.boolean(), machines: z.array(machineRowSchema),
+  selection: selectionSchema, statusText: z.string(),
+});
+
 export const rpcContract = defineRpcContract({
   listMachines: {
-    input: z.null(),
-    output: z.object({ placementPolicy: z.enum(["offload", "priority"]), configRevision: z.number().int().min(0), pendingSelection: z.boolean(), machines: z.array(machineRowSchema) }),
+    input: z.object({ originHostId: z.string().nullable().optional(), projectId: z.string().nullable().optional() }).nullable(),
+    output: controlSchema,
   },
   saveMachines: {
     input: z.object({
@@ -59,7 +75,7 @@ export const rpcContract = defineRpcContract({
         }),
       ),
     }),
-    output: z.object({ placementPolicy: z.enum(["offload", "priority"]), configRevision: z.number().int().min(0), pendingSelection: z.boolean(), machines: z.array(machineRowSchema) }),
+    output: controlSchema,
   },
 });
 
@@ -233,7 +249,7 @@ export default async function plugin(bb: BbPluginApi) {
     if (result.policy === "priority") return { ...selection, instructions: renderPriorityAdvice(result) };
     const current = snapshot.machines.find(m => m.hostId === context.host.id);
     return current && result.winner
-      ? { ...selection, instructions: renderAdvice({ current, target: result.winner }) } : selection;
+      ? { ...selection, instructions: [renderSelection(result), renderAdvice({ current, target: result.winner }), REMOTE_WRITE_HANDOFF].join("\n\n") } : selection;
   });
 
   /**
@@ -259,9 +275,20 @@ export default async function plugin(bb: BbPluginApi) {
     }));
   }
 
-  async function controlState(signal?: AbortSignal) {
-    return { placementPolicy: state.config.placementPolicy, configRevision: state.snapshot.configRevision,
-      pendingSelection: state.snapshot.pending, machines: await machineRows(signal) };
+  function controlState(context?: { originHostId?: string | null; projectId?: string | null } | null) {
+    const snapshot = state.snapshot;
+    const selection = selectPlacement(snapshot, { currentHostId: context?.originHostId ?? null,
+      projectId: context?.projectId ?? null, now: state.now() });
+    const machines = snapshot.machines.map(machine => ({
+      hostId: machine.hostId, name: machine.name, connected: machine.connected, running: machine.running,
+      capacity: snapshot.config[machine.hostId]?.capacity ?? DEFAULT_CAPACITY,
+      enabled: snapshot.config[machine.hostId]?.enabled ?? false,
+      priority: parsePriority(snapshot.config[machine.hostId]?.priority),
+    }));
+    return { placementPolicy: snapshot.placementPolicy, configRevision: snapshot.configRevision,
+      pendingSelection: snapshot.pending, machines, selection,
+      statusText: [renderSelection(selection), `Sample state: ${snapshot.failure ?? (snapshot.pending ? "configuration refresh pending" : "sample available")}.`,
+        renderStatus(snapshot, context?.projectId ?? null)].join("\n\n") };
   }
 
   function resolveMachine(rows: MachineRow[], query: string, exactName = true): MachineRow | null | "ambiguous" {
@@ -271,8 +298,9 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   bb.rpc.register(rpcContract, {
-    async listMachines() {
-      return controlState();
+    async listMachines(context) {
+      if (state.snapshot.sampleStartedAt === null) await sample().catch(logSampleFailure);
+      return controlState(context);
     },
 
     async saveMachines({ placementPolicy, machines }) {
@@ -300,7 +328,7 @@ export default async function plugin(bb: BbPluginApi) {
     description:
       "Report how loaded each BB machine is and which one has room to run a child thread for a project. Advisory only: it does not spawn anything.",
     instructions:
-      "In priority mode, call pick_machine immediately before each child spawn, including a single child. Use each answer once. Defer when no winner is available. In offload mode, call before spawning several children.",
+      "In priority mode, call pick_machine immediately before each child spawn, including a single child. Use each answer once. Defer when no winner is available. In offload mode, call before spawning several children. " + REMOTE_WRITE_HANDOFF,
     presentation: {
       label: {
         pending: "Checking machine load",
@@ -331,11 +359,9 @@ export default async function plugin(bb: BbPluginApi) {
       });
       if (failure) result = { ...result, winner: null, eligibleOrder: [], kind: "unavailable data", reason: failure };
       if (result.policy === "priority") return renderPriorityAdvice(result);
-      const recommendation = result.winner
-        ? `Recommended: --machine ${result.winner.name}`
-        : "Recommended: stay on the current machine. Nothing is over threshold, or no eligible machine has room and a source for this project.";
-      return [renderStatus(fresh, targetProject), "", recommendation,
-        "Placement is advisory — you still write the spawn command."].join("\n");
+      const legacyStay = result.kind === "suppressed advice" ? "Recommended: stay on the current machine." : "";
+      return [renderSelection(result), renderStatus(fresh, targetProject), legacyStay,
+        "Placement is advisory — you still write the spawn command.", REMOTE_WRITE_HANDOFF].filter(Boolean).join("\n\n");
     },
   });
 
@@ -346,7 +372,7 @@ export default async function plugin(bb: BbPluginApi) {
       {
         name: "status",
         summary: "Show running threads and spare capacity per machine",
-        usage: "bb fanout status [--project <id>]",
+        usage: "bb fanout status [--project <id>] [--origin <host-id>]",
       },
       {
         name: "machines",
@@ -381,8 +407,10 @@ export default async function plugin(bb: BbPluginApi) {
         const flagIndex = rest.indexOf("--project");
         const projectId =
           flagIndex >= 0 ? (rest[flagIndex + 1] ?? null) : (ctx.projectId ?? null);
-        const fresh = await sample(ctx.signal).catch(() => state.snapshot);
-        return { exitCode: 0, stdout: `${renderStatus(fresh, projectId)}\n` };
+        const originIndex = rest.indexOf("--origin");
+        const originHostId = originIndex >= 0 ? rest[originIndex + 1] ?? null : null;
+        if (state.snapshot.sampleStartedAt === null) await sample(ctx.signal).catch(logSampleFailure);
+        return { exitCode: 0, stdout: `${controlState({ originHostId, projectId }).statusText}\n` };
       }
 
       if (command === "machines") {

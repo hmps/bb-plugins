@@ -45,6 +45,7 @@ function MachinesSection() {
   const [savedPolicy, setSavedPolicy] = useState<"offload" | "priority">("offload");
   const [configRevision, setConfigRevision] = useState(0);
   const [pendingSelection, setPendingSelection] = useState(false);
+  const [statusText, setStatusText] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,6 +58,7 @@ function MachinesSection() {
       setSavedPolicy(result.placementPolicy);
       setConfigRevision(result.configRevision);
       setPendingSelection(result.pendingSelection);
+      setStatusText(result.statusText);
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -104,6 +106,7 @@ function MachinesSection() {
       setSavedPolicy(result.placementPolicy);
       setConfigRevision(result.configRevision);
       setPendingSelection(result.pendingSelection);
+      setStatusText(result.statusText);
       toast.success(`Machine settings saved (revision ${result.configRevision})`);
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : String(cause));
@@ -257,6 +260,8 @@ function MachinesSection() {
         </p>
       )}
 
+      <pre aria-label="Placement status" className="whitespace-pre-wrap text-xs text-muted-foreground">{statusText}</pre>
+
       {pendingSelection ? (
         <p className="text-xs text-muted-foreground">
           Selection is unavailable while the replacement sample is pending.
@@ -264,6 +269,14 @@ function MachinesSection() {
       ) : null}
 
       <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => void load()}
+          disabled={dirty || saving}
+          className="h-7 rounded-md border border-input px-3 text-xs disabled:opacity-50"
+        >
+          Refresh status
+        </button>
         <button
           type="button"
           onClick={() => void save()}

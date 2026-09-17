@@ -28,3 +28,4 @@
 
 - fanout: Run package checks in a separate tool call with an explicit package working directory. Keep repository-root edits separate.
 - fanout: A threshold notification must suppress priority advice synchronously, even while a configuration save holds the commit queue.
+- fanout: Offload can return null instructions when no target qualifies. Normalize null before text assertions.

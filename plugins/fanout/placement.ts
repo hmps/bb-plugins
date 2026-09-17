@@ -438,17 +438,37 @@ export function selectPlacement(snapshot: SelectionSnapshot, context: PlacementC
       : "no eligible machine has room and a project source" };
 }
 
-export function renderPriorityAdvice(result: PlacementResult): string {
+/** The same selection summary is used by RPC, UI, CLI, tools, and instructions. */
+export function renderSelection(result: PlacementResult): string {
   return [
     `Placement policy: ${result.policy}; threshold: ${result.thresholdPercent}%; snapshot: ${result.snapshotVersion}.`,
-    `Configured order: ${result.configuredOrder.join(", ") || "none"}. Eligible order: ${result.eligibleOrder.join(", ") || "none"}.`,
+    `Configured order${result.policy === "offload" ? " (priority configuration)" : ""}: ${result.configuredOrder.join(", ") || "none"}. Eligible order: ${result.kind === "unavailable data" ? `unavailable: ${result.reason}` : result.eligibleOrder.join(", ") || "none"}.`,
     `Observed at: ${result.observedAt ?? "never"}; expires at: ${result.expiresAt ?? "unavailable"}; age: ${result.sampleAgeMs ?? "unknown"}ms.`,
-    result.winner ? `Recommended: --machine ${result.winner.name} (${result.kind}).`
+    ...Object.entries(result.exclusions).map(([host, reason]) => `Excluded ${host}: ${reason}.`),
+    result.winner ? `Recommended: --machine ${result.winner.name} (${result.kind}). Reason: ${result.reason}.`
       : `${result.kind}: ${result.reason}. Defer the spawn; inspect status or retry.`,
+  ].join("\n");
+}
+
+export const REMOTE_WRITE_HANDOFF = [
+  "Placement advice does not authorize remote writes. Read-only work needs no write handoff.",
+  "Before remote writes, the parent supplies repository identity, expected full base commit, target host ID, exact checkout/worktree path, intended branch or detached-HEAD state, bounded file scope, and one named write owner.",
+  "Use the task's accepted base commit, not a branch name or an assumed remote default.",
+  "Before the first write, the named worker checks repository identity, target host, exact path, HEAD against the expected base, branch state, and tracked plus untracked local changes.",
+  "Report these observations to the parent. The parent must confirm that no other writer owns the checkout.",
+  "Only a verified handoff permits writes. Stop before writing on a wrong base, unexpected local changes, shared write ownership, or any unverified state.",
+  "Report the mismatch and request a corrected handoff. Do not reset, clean, stash, checkout, merge, or otherwise repair Git state automatically.",
+  "The parent resolves the mismatch or supplies a verified separate worktree and a new handoff. Repeat all checks after any handoff change.",
+].join("\n");
+
+export function renderPriorityAdvice(result: PlacementResult): string {
+  return [
+    renderSelection(result),
     "Call pick_machine immediately before each child spawn, including a single child. Use each answer for one spawn only.",
     "Check expiry before spawning. Refresh after expiry or any intervening configuration change.",
     "Capacity can change before expiry and cause contention, delay, or start failure. Advice does not reserve capacity.",
     "Thirty seconds bounds observation age; it is an accepted advisory exposure, not a capacity guarantee or measured safety limit.",
     "Check each spawn result and child progress. On capacity-related failure or contention, defer further placement and request fresh advice.",
+    REMOTE_WRITE_HANDOFF,
   ].join("\n");
 }

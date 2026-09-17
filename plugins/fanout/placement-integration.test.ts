@@ -172,3 +172,129 @@ describe("E09 cli_policy_priority_validation", () => {
     expect(await h.bb.storage.kv.get(PLACEMENT_KEY)).toEqual(saved);
   });
 });
+
+// Status reads the committed sample. Only the tool requests fresh advice.
+async function status(h: Awaited<ReturnType<typeof setup>>, originHostId: string | null = "titan", projectId: string | null = "project") {
+  return await h.harness.behavior.callRpc("listMachines", { originHostId, projectId }) as {
+    statusText: string; configRevision: number;
+    selection: import("./placement").PlacementResult;
+  };
+}
+
+describe("E11 surface_policy_order_reason_parity", () => {
+  it("uses the same version/context for RPC, CLI, tool, and instructions; UI receives no-context status", async () => {
+    vi.useFakeTimers({ toFake: ["performance", "Date", "setTimeout", "clearTimeout"] });
+    const h = await setup();
+    h.harness.inspection.sdk.stub("hosts.list", async () => [...hosts, { id: "away", name: "Away", status: "disconnected" }]);
+    const tool = String(await h.tool());
+    const rpc = await status(h);
+    expect(rpc.selection.configuredOrder).toEqual(["msi", "titan", "away"]);
+    expect(rpc.selection.eligibleOrder).toEqual(["msi", "titan"]);
+    expect(rpc.selection.exclusions.away).toBe("disconnected");
+    expect(tool).toContain(rpc.statusText.split("\n\n")[0]);
+    expect((await h.instructions()).instructions).toBe(tool);
+    expect(await h.harness.behavior.runCli(["status", "--origin", "titan", "--project", "project"]))
+      .toMatchObject({ stdout: `${rpc.statusText}\n` });
+    const ui = await h.harness.behavior.callRpc("listMachines", null) as typeof rpc;
+    expect(ui.selection.winner).toBeNull();
+    expect(ui.selection.configuredOrder).toEqual(rpc.selection.configuredOrder);
+    expect(ui.statusText).toContain("unavailable: origin/project context required");
+    expect((await status(h, "msi")).selection.kind).toBe("local");
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect((await status(h)).selection.winner).toBeNull();
+    expect((await h.harness.behavior.runCli(["status", "--origin", "titan", "--project", "project"])).stdout).toContain("observations expired");
+  });
+
+  it.each(["priority", "offload"])("keeps %s callers consistent across threshold commits and pending samples", async policy => {
+    vi.useFakeTimers({ toFake: ["performance", "Date", "setTimeout", "clearTimeout"] });
+    const h = await setup(policy);
+    const busy = [...threads,
+      ...Array.from({ length: 10 }, (_, i) => ({ ...threads[0], id: `t${i}`, status: "active" })),
+      ...Array.from({ length: 7 }, (_, i) => ({ ...threads[0], id: `m${i}`, environmentHostId: "msi", status: "active" })),
+    ];
+    h.harness.inspection.sdk.stub("threads.list", async () => busy);
+    await h.tool();
+    expect((await status(h)).selection.winner?.hostId).toBe("msi");
+    const gate = deferred<typeof threads>();
+    h.harness.inspection.sdk.stub("threads.list", () => gate.promise);
+    await h.harness.behavior.setSettings({ thresholdPercent: 70 });
+    const pending = await status(h);
+    expect(pending.selection.thresholdPercent).toBe(70);
+    expect(pending.selection.winner).toBeNull();
+    expect(pending.statusText).toContain(policy === "priority" ? "refresh pending" : "no eligible capacity");
+    expect((await h.harness.behavior.runCli(["status", "--origin", "titan", "--project", "project"])).stdout).toBe(`${pending.statusText}\n`);
+    expect((await h.instructions()).instructions ?? "").not.toContain("Recommended:");
+    gate.resolve(busy);
+    const answer = String(await h.tool());
+    const fresh = await status(h);
+    expect(fresh.selection.thresholdPercent).toBe(70);
+    expect(fresh.selection.winner).toBeNull();
+    expect(answer).toContain("Defer the spawn");
+    expect(fresh.selection.exclusions.msi).toBe("at or above threshold");
+    expect(answer).toContain(fresh.statusText.split("\n\n")[0]);
+    if (policy === "priority") expect((await h.instructions()).instructions).toBe(answer);
+    await h.harness.behavior.setSettings({ thresholdPercent: 80 });
+    await h.tool();
+    expect((await status(h)).selection.winner?.hostId).toBe("msi");
+  });
+
+  it("reports disabled origins and current refresh failure without a winner", async () => {
+    const h = await setup(); await h.tool();
+    await h.harness.behavior.callRpc("saveMachines", { machines: [{ hostId: "titan", capacity: 10, enabled: false }] });
+    await h.tool();
+    expect((await status(h)).selection).toMatchObject({ winner: null, reason: "origin disabled" });
+    h.harness.inspection.sdk.stub("hosts.list", async () => { throw new Error("offline"); });
+    await h.tool();
+    expect((await status(h, "msi")).selection).toMatchObject({ winner: null, reason: "refresh failed: offline" });
+    expect((await status(h, null, null)).statusText).toContain("Sample state: refresh failed: offline");
+  });
+});
+
+describe("E12 side_chat_instruction_exclusion", () => {
+  it.each(["priority", "offload"])("excludes side chat under %s", async policy => {
+    const h = await setup(policy); await h.tool();
+    expect((await h.instructions(true)).instructions).toBeNull();
+    if (policy === "priority") {
+      const text = (await h.instructions()).instructions;
+      for (const field of ["Placement policy: priority", "snapshot:", "expires at:", "including a single child", "one spawn only"])
+        expect(text).toContain(field);
+    }
+  });
+});
+
+describe("E13 remote_write_handoff_contract_inspection", () => {
+  it("publishes the full handoff and stop rules through tool and normal instructions", async () => {
+    const h = await setup(); const text = String(await h.tool());
+    for (const field of ["repository identity", "expected full base commit", "target host ID", "exact checkout/worktree path",
+      "intended branch or detached-HEAD state", "bounded file scope", "one named write owner", "tracked plus untracked",
+      "HEAD against the expected base", "parent must confirm", "wrong base", "unexpected local changes", "shared write ownership",
+      "any unverified state", "Do not reset, clean, stash, checkout, merge", "Repeat all checks after any handoff change",
+      "Read-only work needs no write handoff", "Only a verified handoff permits writes"])
+      expect(text).toContain(field);
+    expect((await h.instructions()).instructions).toContain("Only a verified handoff permits writes");
+  });
+});
+
+describe("E14 placement_advice_has_no_side_effects", () => {
+  it("allows competing callers to receive the same remaining capacity without acquiring or releasing slots", async () => {
+    vi.useFakeTimers({ toFake: ["performance", "Date", "setTimeout", "clearTimeout"] });
+    const h = await setup();
+    await h.harness.behavior.callRpc("saveMachines", { machines: [{ hostId: "msi", capacity: 1, enabled: true }] });
+    const saved = await h.bb.storage.kv.get(PLACEMENT_KEY);
+    const answers = await Promise.all([h.tool(), h.tool()]);
+    for (const answer of answers) {
+      const text = String(answer);
+      for (const phrase of ["Recommended: --machine MSI", "contention, delay, or start failure", "does not reserve capacity",
+        "accepted advisory exposure", "Check each spawn result and child progress", "defer further placement"])
+        expect(text).toContain(phrase);
+    }
+    expect((await status(h)).selection.winner).toMatchObject({ running: 0, capacity: 1 });
+    await h.instructions();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect((await status(h)).selection.winner).toBeNull();
+    expect(String(await h.tool())).toContain("Recommended: --machine MSI");
+    expect(await h.bb.storage.kv.get(PLACEMENT_KEY)).toEqual(saved);
+    expect([...new Set(h.harness.inspection.sdk.calls.map(call => call.path))].sort())
+      .toEqual(["hosts.list", "projects.get", "threads.list"]);
+  });
+});

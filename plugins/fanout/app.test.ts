@@ -14,3 +14,15 @@ describe("E10 ui_policy_priority_save_inspection", () => {
     expect(app).toContain("toast.error");
   });
 });
+
+
+describe("E11 UI projection inspection", () => {
+  it("renders the server status without a separate selector", async () => {
+    const app = await readFile(new URL("./app.tsx", import.meta.url), "utf8");
+    expect(app).toContain('rpc.call("listMachines", null)');
+    expect(app).toContain("setStatusText(result.statusText)");
+    expect(app).toContain('aria-label="Placement status"');
+    expect(app).toContain("{statusText}</pre>");
+    expect(app).not.toContain("selectPlacement");
+  });
+});
