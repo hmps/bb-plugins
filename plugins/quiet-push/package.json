@@ -1,0 +1,39 @@
+{
+  "name": "bb-plugin-quiet-push",
+  "version": "0.1.0",
+  "description": "Lets an agent mute the push notification for the turn it is about to end.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "bb": ">=0.39",
+    "bbPluginSdk": ">=0.4.47"
+  },
+  "bb": {
+    "name": "Quiet Push",
+    "description": "Gives agents a mute_notification tool. A muted turn ends without a push, web, or desktop notification from the builtin Push notifications plugin.",
+    "branding": {
+      "icon": "BellOff"
+    },
+    "server": "./server.ts"
+  },
+  "keywords": [
+    "bb-plugin"
+  ],
+  "scripts": {
+    "build": "bb plugin build",
+    "test": "vitest run --config vitest.config.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.4.47",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "better-sqlite3": "^12.11.1",
+    "cron-parser": "^5.10.0",
+    "hono": "^4.13.3",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.11",
+    "zod": "^4.3.6"
+  }
+}

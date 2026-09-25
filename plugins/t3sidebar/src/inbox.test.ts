@@ -126,6 +126,27 @@ describe("attentionFirst", () => {
     const list = [thread({ id: "a" }), thread({ id: "b" })];
     expect(attentionFirst(list)).toEqual(list);
   });
+
+  it("keeps a held thread in its held tier after it is read", () => {
+    const list = [thread({ id: "newer" }), thread({ id: "opened" })];
+    expect(
+      attentionFirst(list, undefined, { threadId: "opened", rank: 1 }).map(
+        (t) => t.id,
+      ),
+    ).toEqual(["opened", "newer"]);
+  });
+
+  it("lets a held thread rise above its held tier", () => {
+    const list = [
+      thread({ id: "unread", isUnread: true }),
+      thread({ id: "opened", hasPendingInteraction: true }),
+    ];
+    expect(
+      attentionFirst(list, undefined, { threadId: "opened", rank: 3 }).map(
+        (t) => t.id,
+      ),
+    ).toEqual(["opened", "unread"]);
+  });
 });
 
 describe("threadDisplayTitle", () => {

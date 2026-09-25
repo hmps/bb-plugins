@@ -33,3 +33,7 @@
 - fanout: Run package checks in a separate tool call with an explicit package working directory. Keep repository-root edits separate.
 - fanout: A threshold notification must suppress priority advice synchronously, even while a configuration save holds the commit queue.
 - fanout: Offload can return null instructions when no target qualifies. Normalize null before text assertions.
+- The builtin push-notifications plugin has no filter hook. It waits 2 s after `thread.idle`, re-reads the thread, and skips the send when `lastReadAt >= latestAttentionAt` and `>= eventAt`. `bb.sdk.threads.markRead` stamps `Date.now()`, so a companion plugin can mute all channels by marking the thread read (quiet-push).
+- `bb.sdk` calls from plugin event handlers fail intermittently with a bare `fetch failed` (seen in starbase and quiet-push). Retry once and log `error.cause`.
+- Deploy a plugin from the Linux checkout to the Mac server: `bb file write <mac-path> --stdin --create-parents --host host_rzz55t2j3g`, then `bb plugin install <mac-path> --yes`. Staging dir: `/Users/hmps/.bb/local-plugins/<id>`. Keep runtime imports to zero (the staged copy has no node_modules).
+- `bun install` works in a plugin dir when `npm install` fails with `Cannot read properties of null (reading 'edgesOut')`.

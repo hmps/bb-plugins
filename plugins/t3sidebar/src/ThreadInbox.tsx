@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   experimental_useSidebarThreadActions as useSidebarThreadActions,
   experimental_useSidebarThreads as useSidebarThreads,
@@ -24,7 +24,9 @@ import { TRAILING_GLYPH_BOX_CLASS } from "./StatusSlot";
 import {
   ATTENTION_FIRST_SETTING,
   WORKING_SHELF_SETTING,
+  type HeldRank,
   attentionFirst,
+  attentionRank,
   descendantSignals,
   filterByProject,
   hideChildrenOfVisibleParents,
@@ -87,6 +89,34 @@ export function ThreadInbox({
   // another project still works for the parent this list shows.
   const descendants = useMemo(() => descendantSignals(threads), [threads]);
 
+  // Each thread's tier as of the last committed render. Opening a thread can
+  // mark it read in the same update that makes it active, so the hold must
+  // come from the render before, not this one.
+  const committedRanks = useRef<ReadonlyMap<string, number>>(new Map());
+  useEffect(() => {
+    committedRanks.current = new Map(
+      threads.map((thread) => [thread.id, attentionRank(thread, descendants)]),
+    );
+  }, [threads, descendants]);
+  const heldRef = useRef<{ activeId: string | null; held: HeldRank | null }>({
+    activeId: null,
+    held: null,
+  });
+  if (heldRef.current.activeId !== activeThreadId) {
+    const rank =
+      activeThreadId === null
+        ? undefined
+        : committedRanks.current.get(activeThreadId);
+    heldRef.current = {
+      activeId: activeThreadId,
+      held:
+        activeThreadId === null || rank === undefined
+          ? null
+          : { threadId: activeThreadId, rank },
+    };
+  }
+  const held = heldRef.current.held;
+
   const { pinned, inbox, working, snoozed, settled } = useMemo(() => {
     const scoped = filterByProject(
       visibleInboxThreads(threads),
@@ -121,7 +151,7 @@ export function ThreadInbox({
     // newest first inside every tier.
     const order = (list: typeof matched) =>
       attentionOnTop
-        ? attentionFirst(sortByCreatedAtDescending(list), descendants)
+        ? attentionFirst(sortByCreatedAtDescending(list), descendants, held)
         : sortByCreatedAtDescending(list);
     return {
       pinned: order(split.pinned),
@@ -137,6 +167,7 @@ export function ThreadInbox({
   }, [
     attentionOnTop,
     descendants,
+    held,
     lifecycle,
     scope,
     searchQuery,
