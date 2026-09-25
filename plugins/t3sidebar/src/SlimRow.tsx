@@ -6,6 +6,7 @@ import { Icon } from "./components/Icon";
 import { cn } from "./lib/utils";
 import { RowContextMenu } from "./RowContextMenu";
 import { STATUS_SLOT_CLASS, StatusOrTime } from "./StatusSlot";
+import { UnreadBar } from "./StatusGlyph";
 import { SHORTCUT_HINT_CLASS, useThreadShortcutHint } from "./useShortcutHints";
 import { threadDisplayTitle } from "./inbox";
 import { snoozeWakeLabel } from "./lifecycle";
@@ -73,6 +74,7 @@ export function SlimRow({
             }}
             className="absolute inset-0 cursor-pointer"
           />
+          <UnreadBar indicator={thread.indicator} label={thread.indicatorLabel} />
           <span
             className={cn(
               "pointer-events-none relative min-w-0 flex-1 truncate",

@@ -953,7 +953,6 @@ describe("attention states", () => {
   const states = [
     ["waiting-for-input", "Thread needs user input"],
     ["unread-error", "Unread thread failed"],
-    ["unread-success", "Unread thread succeeded"],
   ] as const;
 
   for (const [indicator, label] of states) {
@@ -970,6 +969,23 @@ describe("attention states", () => {
       expect(screen.queryByText("3h")).toBeNull();
     });
   }
+
+  // A finished, unread thread gets a bar on the row's left edge, so the
+  // slot keeps the age.
+  it("marks an unread result with a bar and keeps the age", async () => {
+    render([
+      thread({
+        id: "thr_done",
+        isUnread: true,
+        indicator: "unread-success",
+        indicatorLabel: "Unread thread succeeded",
+        updatedAt: Date.now() - (3 * 3_600_000 + 60_000),
+      }),
+    ]);
+    const bar = await screen.findByLabelText("Unread thread succeeded");
+    expect(bar.className).toContain("left-0");
+    expect(screen.getByText("3h")).toBeDefined();
+  });
 
   // Running work is the one state the user does NOT have to act on, so it gets
   // the neutral spinner and no notification dot.

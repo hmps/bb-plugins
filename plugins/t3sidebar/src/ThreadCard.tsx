@@ -11,6 +11,7 @@ import { cn } from "./lib/utils";
 import { RowContextMenu } from "./RowContextMenu";
 import { ProviderGlyph } from "./ProviderGlyph";
 import { STATUS_SLOT_CLASS, StatusOrTime } from "./StatusSlot";
+import { UnreadBar } from "./StatusGlyph";
 import { threadDisplayTitle } from "./inbox";
 import { resolveSnoozePresets } from "./lifecycle";
 import { useSwipeReveal } from "./useSwipeReveal";
@@ -193,6 +194,10 @@ export function ThreadCard({
                 onNavigate();
               }}
               className="absolute inset-0 cursor-pointer"
+            />
+            <UnreadBar
+              indicator={thread.indicator}
+              label={thread.indicatorLabel}
             />
             <div className="pointer-events-none relative flex min-h-5 items-center gap-1.5">
               <span

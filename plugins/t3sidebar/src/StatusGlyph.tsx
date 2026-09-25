@@ -12,6 +12,10 @@ import { cn } from "./lib/utils";
  * the two lists sit in the same window, and a user who switches between them
  * should not have to learn a second vocabulary.
  *
+ * One exception: a finished thread you have not read gets a bar on the
+ * row's left edge (`UnreadBar`), not a dot in the status slot, so the slot
+ * keeps the age.
+ *
  * An unrecognized indicator draws nothing: bb adds kinds over time, and a
  * plugin built today must not break on a kind shipped tomorrow.
  */
@@ -30,7 +34,6 @@ export function hasStatusGlyph(
   switch (indicator) {
     case "unread-error":
     case "waiting-for-input":
-    case "unread-success":
     case "runtime":
     case "workflow":
     case "background-agent":
@@ -104,6 +107,9 @@ export function StatusGlyph({
         />
       );
     case "unread-success":
+      // Sidebar rows draw `UnreadBar` instead; the dot stays for compact
+      // lists such as the subagents popover.
+      //
       // The notification dot, in a box the size of every other glyph, the way
       // bb centers its own trailing indicators. Right-aligned on its own, a
       // 5px dot would sit ~4px off the column the icons share.
@@ -140,6 +146,29 @@ function ShineIcon({
       name={name}
       aria-label={label}
       className={cn("animate-shine-icon text-muted-foreground/50", className)}
+    />
+  );
+}
+
+/**
+ * The notification for a finished thread you have not read: a blue bar on
+ * the row's left edge. The row must be positioned. Vivid on purpose: this is
+ * the one mark that says "come back here", and it has to pull the eye across
+ * a long list.
+ */
+export function UnreadBar({
+  indicator,
+  label,
+}: {
+  indicator: PluginSidebarThreadIndicator;
+  label: string | null;
+}) {
+  if (indicator !== "unread-success") return null;
+  return (
+    <span
+      role="img"
+      aria-label={label ?? undefined}
+      className="pointer-events-none absolute inset-y-2.5 left-0 w-[3px] rounded-r-full bg-[oklch(0.68_0.2_262)]"
     />
   );
 }
