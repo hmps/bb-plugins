@@ -8,13 +8,18 @@ import {
   within,
 } from "@testing-library/react";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
-import type { PluginSidebarThread } from "@get-bb/plugin-sdk";
+import type {
+  PluginSidebarThread,
+  PluginThreadListProps,
+} from "@get-bb/plugin-sdk";
 
 // Load through the harness so the plugin's `@get-bb/plugin-sdk/app` import binds
 // to the test runtime; importing the component directly would bind it to an
 // empty runtime first.
 const app = await loadPluginApp(() => import("../app"));
 const inbox = app.threadLists[0]!;
+// Imported after the harness so the hook binds to the test runtime.
+const sdk = await import("@get-bb/plugin-sdk/app");
 
 function thread(
   overrides: Partial<PluginSidebarThread> = {},
@@ -110,6 +115,36 @@ describe("attention first setting", () => {
   it("lifts the waiting thread when on", () => {
     render(threads(), undefined, { attentionFirst: true });
     expect(titles()).toEqual(["Old waiting", "New quiet"]);
+  });
+
+  it("keeps an opened unread thread in place until another opens", () => {
+    const unread = thread({
+      id: "old",
+      title: "Old waiting",
+      createdAt: 1,
+      isUnread: true,
+    });
+    const quiet = thread({ id: "new", title: "New quiet", createdAt: 2 });
+    const Inbox = inbox.component;
+    // The harness hands the hook one state object; swapping its threads and
+    // rerendering stands in for the host marking the thread read.
+    let state: { threads: readonly PluginSidebarThread[] } | undefined;
+    function Probe(props: PluginThreadListProps) {
+      state = sdk.experimental_useSidebarThreads() as unknown as typeof state;
+      return <Inbox {...props} />;
+    }
+    const slot = render([unread, quiet], undefined, { attentionFirst: true });
+    slot.rerender(<Probe {...listProps} />);
+    expect(titles()).toEqual(["Old waiting", "New quiet"]);
+
+    // Opening the thread marks it read in the same update.
+    state!.threads = [{ ...unread, isUnread: false }, quiet];
+    slot.rerender(<Probe {...listProps} activeThreadId="old" />);
+    expect(titles()).toEqual(["Old waiting", "New quiet"]);
+
+    // Opening another thread releases the hold.
+    slot.rerender(<Probe {...listProps} activeThreadId="new" />);
+    expect(titles()).toEqual(["New quiet", "Old waiting"]);
   });
 });
 

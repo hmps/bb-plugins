@@ -155,20 +155,39 @@ export function attentionRank(
 }
 
 /**
+ * The tier the open thread had when you opened it. Opening an unread thread
+ * marks it read, and without this it would drop out from under the cursor to
+ * the read tier, often out of view.
+ */
+export interface HeldRank {
+  threadId: string;
+  rank: number;
+}
+
+/**
  * The one opt-in exception to the static order: sort by urgency tier and keep
  * the incoming order inside each tier. With the static sort applied first
  * this is newest-first inside every tier.
+ *
+ * A `held` thread never sorts below its held tier, so it stays put while you
+ * read it and moves only once you open another thread. It can still rise: a
+ * raised hand outranks the hold.
  */
 export function attentionFirst(
   threads: readonly PluginSidebarThread[],
   signals?: ReadonlyMap<string, DescendantSignal>,
+  held?: HeldRank | null,
 ): PluginSidebarThread[] {
   return threads
-    .map((thread, index) => ({
-      thread,
-      index,
-      rank: attentionRank(thread, signals),
-    }))
+    .map((thread, index) => {
+      const rank = attentionRank(thread, signals);
+      return {
+        thread,
+        index,
+        rank:
+          thread.id === held?.threadId ? Math.min(rank, held.rank) : rank,
+      };
+    })
     .sort((left, right) => left.rank - right.rank || left.index - right.index)
     .map((entry) => entry.thread);
 }
