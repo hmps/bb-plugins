@@ -8,7 +8,7 @@ product
 
 ## Users
 
-Hampus (solo developer, bb power user) opens the bb homepage many times a day to start agent threads. The section sits under the composer, so the reader is mid-task and scans it in seconds.
+Hampus (solo developer, bb power user) opens the **Vaam releases** sidebar page to see which web builds wait for release. The reader scans it in seconds.
 
 ## Product Purpose
 

@@ -190,7 +190,29 @@ describe("startBuild", () => {
       "vaam-286504",
       "--quiet",
       "--format=json",
+      "--account=local-agents@vaam-286504.iam.gserviceaccount.com",
     ]);
+  });
+
+  it("runs every gcloud call as the configured account, and as the active account when blank", async () => {
+    const gcloudCalls = () =>
+      execFileMock.mock.calls.filter(([bin]: [string]) => bin.endsWith("gcloud"));
+
+    installRunner();
+    const configured = await setup({ gcpAccount: "bot@p.iam.gserviceaccount.com" });
+    await configured.harness.behavior.callRpc("startBuild", { sha: TARGET_SHA });
+    expect(gcloudCalls().length).toBeGreaterThan(1);
+    for (const [, args] of gcloudCalls()) {
+      expect(args.at(-1)).toBe("--account=bot@p.iam.gserviceaccount.com");
+    }
+
+    installRunner();
+    const blank = await setup({ gcpAccount: "" });
+    await blank.harness.behavior.callRpc("startBuild", { sha: TARGET_SHA });
+    expect(gcloudCalls().length).toBeGreaterThan(1);
+    for (const [, args] of gcloudCalls()) {
+      expect(args.some((arg: string) => arg.startsWith("--account"))).toBe(false);
+    }
   });
 
   it("uses the configured trigger region independently of the build region", async () => {

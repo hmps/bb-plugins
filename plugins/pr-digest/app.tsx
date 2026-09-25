@@ -1,13 +1,26 @@
 // bb-plugin-pr-digest — frontend entry.
 //
-// Two homepage sections:
-//   - Pull requests: PRs merged yesterday and every open PR across the user's
-//     bb project repos, grouped by repo.
+// One sidebar page, "Vaam releases", with two sections:
 //   - Release: the commit that is live on Cloud Run, the builds that wait, and
 //     the commits on main that are not released.
+//   - Pull requests: PRs merged yesterday and every open PR across the user's
+//     bb project repos, grouped by repo.
 // Both use the host type scale (text-sm / text-xs) and tokens only.
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { definePluginApp, useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+import {
+  definePluginApp,
+  useRealtime,
+  useRpc,
+  type PluginNavPanelProps,
+} from "@get-bb/plugin-sdk/app";
 import type { MouseEvent } from "react";
 import { toast } from "sonner";
 import type {
@@ -87,19 +100,6 @@ function navigateInApp(event: MouseEvent<HTMLAnchorElement>, path: string) {
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
-/**
- * The host centres homepage sections in a 760px column inside the
- * `@container/page` scroll area. On large screens a section can use more of
- * that area: grow to the page container width (minus a gutter, capped) and
- * stay centred with a negative margin. On narrow screens `max(100%, ...)`
- * keeps the normal column width, so no media query is needed.
- */
-const WIDE_WIDTH = "max(100%, min(1360px, 100cqw - 2rem))";
-const wideStyle = {
-  width: WIDE_WIDTH,
-  marginLeft: `calc(50% - (${WIDE_WIDTH}) / 2)`,
-} as const;
-
 const PRESS =
   "transition-[background-color,color,transform] duration-150 ease-out motion-reduce:transition-none active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
@@ -130,25 +130,49 @@ function useCappedList<T>(items: T[], limit: number | undefined) {
 
 // ------------------------------------------------------------ primitives
 
+/**
+ * State colours come from host tokens, so they follow the bb theme in light
+ * and dark: green for done, orange for in progress or waiting on you, red
+ * for broken, violet for merge, blue for the next release step.
+ */
+type Tone = "success" | "warning" | "danger" | "merged" | "info" | "muted";
+
+const TONE_TEXT: Record<Tone, string> = {
+  success: "text-(--success)",
+  warning: "text-(--warning-text)",
+  danger: "text-(--destructive-text)",
+  merged: "text-(--pr-merged)",
+  info: "text-(--timeline-accent)",
+  muted: "text-muted-foreground",
+};
+
+const TONE_PILL: Record<Tone, string> = {
+  success: "bg-(--success)/12",
+  warning: "bg-(--warning)/12",
+  danger: "bg-(--destructive)/15",
+  merged: "bg-(--pr-merged)/14",
+  info: "bg-(--timeline-accent)/14",
+  muted: "border border-border",
+};
+
 function Pill({
   tone,
   icon,
   children,
 }: {
-  tone: "accent" | "danger" | "muted";
+  tone: Tone;
   icon?: IconName;
   children: ReactNode;
 }) {
   return (
     <span
       className={cn(
-        "inline-flex h-5 shrink-0 items-center gap-1 rounded-full px-1.5 text-xs font-medium leading-none",
-        tone === "accent" && "bg-primary/10 text-primary",
-        tone === "danger" && "bg-destructive/10 text-destructive",
-        tone === "muted" && "border border-border text-muted-foreground",
+        "inline-flex h-5.5 shrink-0 items-center gap-1 rounded-full px-2 text-xs font-medium leading-none",
+        TONE_PILL[tone],
+        TONE_TEXT[tone],
       )}
     >
-      {icon ? <Icon name={icon} className="size-3" aria-hidden /> : null}
+      {icon ? <Icon name={icon} className="size-3.5" aria-hidden /> : null}
       {children}
     </span>
   );
@@ -232,14 +256,14 @@ function RefreshControl({
 function statePill(pr: PullRequest): ReactNode {
   if (pr.reviewRequested) {
     return (
-      <Pill tone="accent" icon="UserRound">
+      <Pill tone="warning" icon="UserRound">
         review requested
       </Pill>
     );
   }
   if (pr.reviewDecision === "APPROVED") {
     return (
-      <Pill tone="accent" icon="Check">
+      <Pill tone="success" icon="Check">
         approved
       </Pill>
     );
@@ -265,14 +289,14 @@ function ciPill(pr: PullRequest): ReactNode {
   }
   if (pr.ci === "pending") {
     return (
-      <Pill tone="muted" icon="Clock">
+      <Pill tone="warning" icon="Clock">
         CI running
       </Pill>
     );
   }
   if (pr.ci === "passing") {
     return (
-      <Pill tone="accent" icon="CircleCheck">
+      <Pill tone="success" icon="CircleCheck">
         CI green
       </Pill>
     );
@@ -294,7 +318,7 @@ function openPrPills(pr: PullRequest): ReactNode {
           conflicts
         </Pill>
       ) : ready ? (
-        <Pill tone="accent" icon="GitMerge">
+        <Pill tone="merged" icon="GitMerge">
           ready to merge
         </Pill>
       ) : null}
@@ -339,8 +363,8 @@ function PrRow({
           name={statusIcon(pr, kind)}
           aria-hidden
           className={cn(
-            "mt-1 size-3.5 shrink-0",
-            kind === "merged" ? "text-primary" : "text-muted-foreground",
+            "mt-1 size-4 shrink-0",
+            kind === "merged" ? TONE_TEXT.merged : TONE_TEXT.success,
             pr.isDraft && "text-muted-foreground/70",
           )}
         />
@@ -353,12 +377,13 @@ function PrRow({
           >
             {pr.title}
           </span>
-          <span className="flex min-w-0 items-center gap-x-2 text-xs leading-4 text-muted-foreground">
+          <span className="flex min-w-0 items-center gap-x-2 text-xs leading-5 text-muted-foreground">
             <span className="font-mono tabular-nums">#{pr.number}</span>
             {showAuthor ? <span className="truncate">{pr.author}</span> : null}
             <span className="font-mono tabular-nums">{timeAgo(pr.at, now)}</span>
             <span className="font-mono tabular-nums">
-              +{pr.additions} −{pr.deletions}
+              <span className="text-(--diff-added)">+{pr.additions}</span>{" "}
+              <span className="text-(--diff-removed)">−{pr.deletions}</span>
             </span>
             {pills ? (
               <span className="ml-auto flex shrink-0 items-center gap-1">
@@ -464,8 +489,8 @@ function Column({
 
   return (
     <div className="min-w-0">
-      <div className="mb-3 flex h-8 items-center gap-2 border-b border-border">
-        <h3 className="text-sm font-medium text-foreground">{heading}</h3>
+      <div className="mb-3 flex h-9 items-center gap-2 border-b border-border">
+        <h3 className="text-base font-medium text-foreground">{heading}</h3>
         {!loading ? (
           <span className="font-mono text-xs tabular-nums text-muted-foreground">
             {items.length}
@@ -553,9 +578,9 @@ function PrDigestSection() {
   );
 
   return (
-    <div className="space-y-4" style={wideStyle}>
+    <div className="space-y-4">
       {failure ? (
-        <p className="flex items-center gap-2 text-xs text-destructive">
+        <p className="flex items-center gap-2 text-xs text-(--destructive-text)">
           <Icon name="AlertCircle" className="size-3.5 shrink-0" aria-hidden />
           Could not load pull requests: {failure}
         </p>
@@ -563,7 +588,7 @@ function PrDigestSection() {
       {digest?.errors.map((e) => (
         <p
           key={e.repo}
-          className="flex items-center gap-2 text-xs text-destructive"
+          className="flex items-center gap-2 text-xs text-(--destructive-text)"
         >
           <Icon name="AlertCircle" className="size-3.5 shrink-0" aria-hidden />
           <span className="font-mono">{e.repo}</span>
@@ -616,13 +641,12 @@ const FAILED_STATUS = new Set(["FAILURE", "TIMEOUT", "CANCELLED", "EXPIRED"]);
 const OPTIMISTIC_BUILD_COOLDOWN_MS = 2 * 60_000;
 const OPTIMISTIC_REFRESH_DELAY_MS = 5_000;
 
-const STATE_TONE: Record<ReleaseCommit["state"], "accent" | "danger" | "muted"> =
-  {
-    built: "accent",
-    building: "muted",
-    failed: "danger",
-    "not built": "muted",
-  };
+const STATE_TONE: Record<ReleaseCommit["state"], Tone> = {
+  built: "success",
+  building: "warning",
+  failed: "danger",
+  "not built": "muted",
+};
 
 function commitUrl(repo: string, sha: string): string {
   return `https://github.com/${repo}/commit/${sha}`;
@@ -695,13 +719,13 @@ function visibleBuilds(release: Release): ReleaseBuild[] {
 
 function buildStatus(build: ReleaseBuild): {
   label: string;
-  tone: "accent" | "danger" | "muted";
+  tone: Tone;
 } {
-  if (RUNNING_STATUS.has(build.status)) return { label: "building", tone: "muted" };
+  if (RUNNING_STATUS.has(build.status)) return { label: "building", tone: "warning" };
   if (FAILED_STATUS.has(build.status)) {
     return { label: build.status.toLowerCase(), tone: "danger" };
   }
-  if (build.status === "SUCCESS") return { label: "built", tone: "accent" };
+  if (build.status === "SUCCESS") return { label: "built", tone: "success" };
   return { label: build.status.toLowerCase(), tone: "muted" };
 }
 
@@ -743,7 +767,7 @@ function BuildRow({
           <Icon
             name="RotateCcw"
             aria-hidden
-            className="size-3 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
+            className="size-3.5 shrink-0 animate-spin text-(--warning-text) motion-reduce:animate-none"
           />
         ) : null}
         <a
@@ -766,7 +790,7 @@ function BuildRow({
           <Pill tone={status.tone}>{status.label}</Pill>
         </span>
       </span>
-      <span className="flex min-w-0 items-center gap-x-2 text-xs leading-4 text-muted-foreground">
+      <span className="flex min-w-0 items-center gap-x-2 text-xs leading-5 text-muted-foreground">
         <ShaLink repo={repo} sha={build.sha} />
         {at ? (
           <span className="font-mono tabular-nums">
@@ -819,7 +843,7 @@ function CommitRow({
       >
         {commit.message}
       </a>
-      <span className="flex min-w-0 items-center gap-x-2 text-xs leading-4 text-muted-foreground">
+      <span className="flex min-w-0 items-center gap-x-2 text-xs leading-5 text-muted-foreground">
         <ShaLink repo={repo} sha={commit.sha} />
         <span className="truncate">{commit.author}</span>
         {commit.date ? (
@@ -836,7 +860,7 @@ function CommitRow({
           disabled={starting || optimisticBuilding}
           aria-label={`Start build for ${commit.shortSha}`}
           className={cn(
-            "inline-flex min-h-8 shrink-0 items-center rounded-sm px-1.5 text-xs text-primary underline-offset-2 hover:text-foreground hover:underline disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50 max-md:pointer-coarse:min-h-11 max-md:pointer-coarse:px-2",
+            "inline-flex min-h-8 shrink-0 items-center rounded-sm px-1.5 text-xs font-medium text-(--timeline-accent) underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50 max-md:pointer-coarse:min-h-11 max-md:pointer-coarse:px-2",
             PRESS,
           )}
         >
@@ -885,7 +909,7 @@ function WaitingRow({
           {title}
         </a>
       )}
-      <span className="flex min-w-0 items-center gap-x-2 text-xs leading-4 text-muted-foreground">
+      <span className="flex min-w-0 items-center gap-x-2 text-xs leading-5 text-muted-foreground">
         {item.sha ? <ShaLink repo={repo} sha={item.sha} /> : null}
         {item.author ? <span className="truncate">{item.author}</span> : null}
         <span className="font-mono tabular-nums">
@@ -895,12 +919,12 @@ function WaitingRow({
           <span>{plural(item.commitCount, "commit")} since live</span>
         ) : null}
         <span className="ml-auto">
-          <Pill tone="accent">ready</Pill>
+          <Pill tone="info" icon="ArrowUp">ready</Pill>
         </span>
       </span>
       {item.body ? (
         <span
-          className="mt-1 line-clamp-2 text-xs leading-4 text-muted-foreground"
+          className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground"
           title={item.body}
         >
           {item.body}
@@ -1087,9 +1111,9 @@ function ReleaseSection() {
   const live = release?.live ?? null;
 
   return (
-    <div className="space-y-4" style={wideStyle}>
-      <div className="flex h-8 items-center gap-2 border-b border-border">
-        <h3 className="text-sm font-medium text-foreground">
+    <div className="space-y-4">
+      <div className="flex h-9 items-center gap-2 border-b border-border">
+        <h3 className="text-base font-medium text-foreground">
           {release?.service ?? "Release"}
         </h3>
         {release ? (
@@ -1115,16 +1139,17 @@ function ReleaseSection() {
       </div>
 
       {failure ? (
-        <p className="flex items-center gap-2 text-xs text-destructive">
+        <p className="flex items-center gap-2 text-xs text-(--destructive-text)">
           <Icon name="AlertCircle" className="size-3.5 shrink-0" aria-hidden />
           Could not load the release state: {failure}
         </p>
       ) : null}
       {release?.authRequired ? (
         <p className="flex items-center gap-2 rounded-md border border-dashed border-border px-3 py-2 text-sm text-foreground">
-          <Icon name="AlertCircle" className="size-4 shrink-0 text-destructive" aria-hidden />
+          <Icon name="AlertCircle" className="size-4 shrink-0 text-(--destructive-text)" aria-hidden />
           <span>
-            Google Cloud needs you to sign in again. Run{" "}
+            Google Cloud could not sign in. Check the Google Cloud account
+            setting, or run{" "}
             <code className="rounded-sm bg-muted px-1 font-mono text-xs">
               gcloud auth login
             </code>{" "}
@@ -1135,7 +1160,7 @@ function ReleaseSection() {
       {release?.errors.map((message) => (
         <p
           key={message}
-          className="flex items-center gap-2 text-xs text-destructive"
+          className="flex items-center gap-2 text-xs text-(--destructive-text)"
         >
           <Icon name="AlertCircle" className="size-3.5 shrink-0" aria-hidden />
           <span className="truncate">{message}</span>
@@ -1149,11 +1174,11 @@ function ReleaseSection() {
           <div className="min-w-0 space-y-4">
           {live ? (
             <p className="flex min-w-0 items-center gap-2 text-sm leading-5">
-              <span
-                className="size-2 shrink-0 rounded-full bg-primary"
-                aria-hidden
-              />
-              <span className="shrink-0 text-foreground">Live</span>
+              <span className="relative flex size-2.5 shrink-0" aria-hidden>
+                <span className="absolute inset-0 animate-ping rounded-full bg-(--success) opacity-50 motion-reduce:hidden" />
+                <span className="relative size-2.5 rounded-full bg-(--success)" />
+              </span>
+              <span className="shrink-0 font-medium text-(--success)">Live</span>
               {live.sha ? (
                 <ShaLink repo={repo} sha={live.sha} className="shrink-0 text-foreground" />
               ) : (
@@ -1182,8 +1207,8 @@ function ReleaseSection() {
           )}
 
           {release && release.waiting.length > 0 ? (
-            <div>
-              <p className="flex items-center gap-3 text-sm text-foreground">
+            <div className="border-l-2 border-(--timeline-accent) pl-3">
+              <p className="flex items-center gap-3 text-sm font-medium text-(--timeline-accent)">
                 <span>{summary}</span>
                 <ConsoleLink href={revisionsUrl(release)}>
                   Deploy in Cloud Run
@@ -1202,7 +1227,7 @@ function ReleaseSection() {
               <div className="flex items-center gap-2">
                 <h4 className="text-sm font-medium text-foreground">Builds</h4>
                 {latestFailed ? (
-                  <span className="flex items-center gap-1 text-xs text-destructive">
+                  <span className="flex items-center gap-1 text-xs text-(--destructive-text)">
                     <Icon name="AlertCircle" className="size-3.5" aria-hidden />
                     latest build failed
                   </span>
@@ -1225,9 +1250,9 @@ function ReleaseSection() {
               <h4 className="text-sm font-medium text-foreground">
                 Not yet released
               </h4>
-              <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                {unreleased.length}
-              </span>
+              {unreleased.length > 0 ? (
+                <Pill tone="warning">{unreleased.length}</Pill>
+              ) : null}
             </div>
             {unreleased.length === 0 ? (
               <Empty icon="Check">Everything on main is live.</Empty>
@@ -1262,15 +1287,55 @@ function ReleaseSection() {
   );
 }
 
+// ----------------------------------------------------------------- page
+
+/**
+ * The host type scale (12px / 13px) is denser than the rest of the bb UI,
+ * where sidebar rows and chat text read at 13-14px. The page steps each
+ * utility up one size, so every `text-xs` / `text-sm` / `text-base` below
+ * follows without a per-row override.
+ */
+const PAGE_TYPE_SCALE = {
+  "--text-xs": "0.8125rem",
+  "--text-xs--line-height": "1.25rem",
+  "--text-sm": "0.875rem",
+  "--text-sm--line-height": "1.375rem",
+  "--text-base": "0.9375rem",
+  "--text-base--line-height": "1.5rem",
+} as CSSProperties;
+
+function ReleasesPage(_props: PluginNavPanelProps) {
+  return (
+    <div className="@container/page h-full overflow-y-auto" style={PAGE_TYPE_SCALE}>
+      <div className="mx-auto w-full max-w-[1360px] space-y-10 px-4 py-6 md:px-8">
+        <section aria-label="Release">
+          <ReleaseSection />
+        </section>
+        <section aria-labelledby="pr-digest-heading" className="space-y-3">
+          <h2
+            id="pr-digest-heading"
+            className="flex items-center gap-2 text-base font-medium text-foreground"
+          >
+            <Icon
+              name="GitPullRequest"
+              className={cn("size-4", TONE_TEXT.merged)}
+              aria-hidden
+            />
+            Pull requests
+          </h2>
+          <PrDigestSection />
+        </section>
+      </div>
+    </div>
+  );
+}
+
 export default definePluginApp((app) => {
-  app.slots.homepageSection({
-    id: "pr-digest",
-    title: "Pull requests",
-    component: PrDigestSection,
-  });
-  app.slots.homepageSection({
-    id: "release",
-    title: "Release",
-    component: ReleaseSection,
+  app.slots.navPanel({
+    id: "releases",
+    title: "Vaam releases",
+    icon: "GitPullRequest",
+    path: "releases",
+    component: ReleasesPage,
   });
 });

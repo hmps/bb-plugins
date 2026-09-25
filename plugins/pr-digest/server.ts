@@ -415,12 +415,18 @@ export function isGcloudAuthError(message: string): boolean {
   return GCLOUD_AUTH_PATTERNS.some((re) => re.test(message));
 }
 
-function gcloud(args: string[]): Promise<string> {
+/**
+ * Runs gcloud as `account` when it is set. A service account whose key is
+ * activated in gcloud does not expire like a user login, and `--account` keeps
+ * the user's active gcloud account unchanged.
+ */
+function gcloud(args: string[], account: string): Promise<string> {
   gcloudBin ??= resolveBin("gcloud");
+  const as = account.trim();
   return new Promise((resolve, reject) => {
     execFile(
       gcloudBin as string,
-      args,
+      as ? [...args, `--account=${as}`] : args,
       { maxBuffer: 8 * 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error) {
@@ -468,6 +474,7 @@ interface CloudBuild {
 }
 
 interface ReleaseBuildSettings {
+  gcpAccount: string;
   gcpProject: string;
   runRegion: string;
   runService: string;
@@ -669,6 +676,13 @@ export default async function plugin(bb: BbPluginApi) {
       description: "Show only other people's open pull requests.",
       default: false,
     },
+    gcpAccount: {
+      type: "string",
+      label: "Google Cloud account",
+      description:
+        "Account that gcloud runs as. Use a service account whose key is activated with `gcloud auth activate-service-account`. Leave blank to use the active gcloud account.",
+      default: "local-agents@vaam-286504.iam.gserviceaccount.com",
+    },
     gcpProject: {
       type: "string",
       label: "Google Cloud project",
@@ -795,7 +809,7 @@ export default async function plugin(bb: BbPluginApi) {
    * Stale-while-revalidate cache. A call returns the stored payload at once
    * (even past its TTL) and refreshes in the background when it is stale;
    * `force` waits for a fresh fetch. Every finished refresh is stored and
-   * announced on the realtime channel so open homepages refetch.
+   * announced on the realtime channel so open pages refetch.
    */
   function cached<T extends { fetchedAt: number }>(opts: {
     key: string;
@@ -858,8 +872,14 @@ export default async function plugin(bb: BbPluginApi) {
   async function fetchReleaseForSettings(
     releaseSettings: ReleaseBuildSettings,
   ): Promise<{ release: Release; inferredTriggerId: string | null }> {
-    const { gcpProject, runRegion, runService, buildRegion, releaseRepo } =
-      releaseSettings;
+    const {
+      gcpAccount,
+      gcpProject,
+      runRegion,
+      runService,
+      buildRegion,
+      releaseRepo,
+    } = releaseSettings;
     const fetchedAt = Date.now();
     const errors: string[] = [];
     let buildListSucceeded = false;
@@ -888,7 +908,7 @@ export default async function plugin(bb: BbPluginApi) {
           ...buildArgs,
           "--format",
           "json",
-        ]);
+        ], gcpAccount);
         return JSON.parse(out) as CloudBuild;
       } catch (error) {
         note(`gcloud builds describe ${id}`, error);
@@ -905,7 +925,7 @@ export default async function plugin(bb: BbPluginApi) {
         ...runArgs,
         "--format",
         "json",
-      ])
+      ], gcpAccount)
         .then((out) => JSON.parse(out) as RunService)
         .catch((error: unknown) => {
           note("gcloud run services describe", error);
@@ -922,7 +942,7 @@ export default async function plugin(bb: BbPluginApi) {
         String(RUN_REVISION_LIMIT),
         "--format",
         "json",
-      ])
+      ], gcpAccount)
         .then((out) => JSON.parse(out) as RunRevision[])
         .catch((error: unknown) => {
           note("gcloud run revisions list", error);
@@ -938,7 +958,7 @@ export default async function plugin(bb: BbPluginApi) {
         String(BUILD_LIMIT),
         "--format",
         "json",
-      ])
+      ], gcpAccount)
         .then((out) => {
           const builds = JSON.parse(out) as CloudBuild[];
           const deployBuilds = builds.filter((b) =>
@@ -1270,7 +1290,7 @@ export default async function plugin(bb: BbPluginApi) {
       snapshot.gcpProject,
       "--quiet",
       "--format=json",
-    ]);
+    ], snapshot.gcpAccount);
 
     // Do not wait for Cloud Build to finish. The next completed cache refresh
     // announces the new build to all open release sections.
@@ -1306,7 +1326,7 @@ export default async function plugin(bb: BbPluginApi) {
     return pending;
   }
 
-  // Keep both caches warm so the homepage renders from storage at once.
+  // Keep both caches warm so the page renders from storage at once.
   bb.background.service("refresh", {
     async start(signal) {
       while (!signal.aborted) {
@@ -1374,7 +1394,7 @@ export default async function plugin(bb: BbPluginApi) {
         const out: string[] = [];
         if (release.authRequired) {
           out.push(
-            "gcloud needs you to sign in again. Run `gcloud auth login`, then retry.",
+            "gcloud could not sign in. Check the Google Cloud account setting, or run `gcloud auth login`, then retry.",
           );
         }
         for (const e of release.errors) out.push(`error ${e}`);

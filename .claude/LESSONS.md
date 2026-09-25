@@ -37,3 +37,4 @@
 - `bb.sdk` calls from plugin event handlers fail intermittently with a bare `fetch failed` (seen in starbase and quiet-push). Retry once and log `error.cause`.
 - Deploy a plugin from the Linux checkout to the Mac server: `bb file write <mac-path> --stdin --create-parents --host host_rzz55t2j3g`, then `bb plugin install <mac-path> --yes`. Staging dir: `/Users/hmps/.bb/local-plugins/<id>`. Keep runtime imports to zero (the staged copy has no node_modules).
 - `bun install` works in a plugin dir when `npm install` fails with `Cannot read properties of null (reading 'edgesOut')`.
+- `rm` is interactive in the Bash tool, like `cp`: it prompts and hangs. Use `/bin/rm -f`.

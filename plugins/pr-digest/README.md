@@ -1,6 +1,8 @@
 # PR Digest
 
-A bb plugin that adds a **Pull requests** homepage section:
+A bb plugin that adds a **Vaam releases** page to the sidebar. The page is at `/plugins/pr-digest/releases`. It has two sections: **Release** first, then **Pull requests**.
+
+The **Pull requests** section shows:
 
 - **Merged yesterday** — pull requests merged on the previous calendar day.
 - **Open pull requests** — every open PR, grouped by repo, with review state, draft flag, labels, and diff size.
@@ -11,7 +13,7 @@ Each row opens the pull request in the bb GitHub plugin (`/plugins/github/github
 
 ## Release
 
-A second homepage section shows the release state of one Cloud Run service:
+The **Release** section shows the release state of one Cloud Run service:
 
 - **Live** — the revision that serves 100% of the traffic, with its commit and the time since deployment.
 - **Built, not live** — revisions that are ready but hold no traffic, plus builds that run or failed.
@@ -26,7 +28,7 @@ Data comes from the `gcloud` CLI and the `gh` CLI:
 - `gcloud builds describe <id>` and `gcloud builds list` — the commit behind each revision, plus build status and log links.
 - `gh api repos/<repo>/compare/<live sha>...main` — the commits that are not released.
 
-The plugin reads the Cloud Build id from the revision name (`<service>-build-<build id>`), then reads `COMMIT_SHA` from the build. Log in with `gcloud auth login` first.
+The plugin reads the Cloud Build id from the revision name (`<service>-build-<build id>`), then reads `COMMIT_SHA` from the build. The plugin runs `gcloud` as the **Google Cloud account** setting (see Settings).
 
 Rows with a pull request number open in the bb GitHub plugin. Other rows open the commit on GitHub.
 
@@ -34,6 +36,7 @@ Rows with a pull request number open in the bb GitHub plugin. Other rows open th
 
 - **Extra repositories** — comma-separated `owner/name` repos to include beside your bb projects.
 - **Hide my own open PRs** — show only other people's open PRs.
+- **Google Cloud account** — account that `gcloud` runs as, passed as `--account`. The default is the `local-agents@vaam-286504.iam.gserviceaccount.com` service account. A service account key does not expire like a user login. Activate a key once with `gcloud auth activate-service-account --key-file=<key.json>`. Leave the setting blank to use the active gcloud account.
 - **Google Cloud project** — project that holds the Cloud Run service and the builds.
 - **Cloud Run region** — region of the Cloud Run service.
 - **Cloud Run service** — name of the Cloud Run service to report on.
