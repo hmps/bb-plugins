@@ -92,6 +92,18 @@ export function projectColor(colorId: string | null | undefined): ProjectColor {
   return BY_ID.get(colorId) ?? BY_ID.get(NEUTRAL_COLOR_ID)!;
 }
 
+/** Realtime channel: a project's badge label changed. */
+export const PROJECT_LABEL_CHANNEL = "project-labels";
+
+/** A badge label is a short name, not a description. */
+export const MAX_PROJECT_LABEL_LENGTH = 32;
+
+/** Realtime payload: one project's label changed; `null` is the bb name. */
+export interface ProjectLabelSignal {
+  projectId: string;
+  label: string | null;
+}
+
 /** Realtime payload: one project's colour changed. */
 export interface ProjectColorSignal {
   projectId: string;

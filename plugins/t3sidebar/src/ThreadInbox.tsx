@@ -19,7 +19,12 @@ import { ThreadCard } from "./ThreadCard";
 import { SlimRow } from "./SlimRow";
 import { useLifecycle } from "./useLifecycle";
 import { useQueueCounts } from "./useQueueCounts";
-import { useProjectColors } from "./useProjectColors";
+import { useProjectBadges } from "./useProjectBadges";
+import {
+  readThreadShortcuts,
+  ThreadShortcutHints,
+  useShortcutHintsVisible,
+} from "./useShortcutHints";
 import { TRAILING_GLYPH_BOX_CLASS } from "./StatusSlot";
 import {
   ATTENTION_FIRST_SETTING,
@@ -56,7 +61,7 @@ export function ThreadInbox({
   const actions = useSidebarThreadActions();
   const lifecycle = useLifecycle(threads);
   const queueCounts = useQueueCounts(threads);
-  const projectColors = useProjectColors();
+  const { colors: projectColors, labels: projectLabels } = useProjectBadges();
   const settings = useSettings();
   const attentionOnTop = settings.values?.[ATTENTION_FIRST_SETTING] === true;
   // On unless the user turns it off: the setting's default lives in server.ts,
@@ -177,6 +182,21 @@ export function ThreadInbox({
     workingShelfOn,
   ]);
 
+  // Held Command numbers the rows bb's Command-1..9 would open. The list is
+  // read at the moment the hints show, the way bb reads it on the key press.
+  const listRef = useRef<HTMLDivElement>(null);
+  const hintsVisible = useShortcutHintsVisible();
+  const [shortcutHints, setShortcutHints] = useState<
+    ReadonlyMap<string, string>
+  >(() => new Map());
+  useEffect(() => {
+    setShortcutHints(
+      hintsVisible && listRef.current
+        ? readThreadShortcuts(listRef.current)
+        : new Map(),
+    );
+  }, [hintsVisible]);
+
   const scopeLabel =
     scope === ALL_PROJECTS
       ? "All projects"
@@ -213,136 +233,150 @@ export function ThreadInbox({
         </Select>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
-        {status === "loading" ? null : status === "error" ? (
-          <p
-            role="status"
-            className="px-2 py-6 text-center text-xs text-muted-foreground"
-          >
-            Could not load threads.
-          </p>
-        ) : pinned.length +
-            inbox.length +
-            working.length +
-            snoozed.length +
-            settled.length ===
-          0 ? (
-          <p
-            role="status"
-            className="px-2 py-6 text-center text-xs text-muted-foreground"
-          >
-            {searchQuery.trim() ? "No threads found" : "No threads yet"}
-          </p>
-        ) : (
-          <>
-            {pinned.length > 0 ? (
-              <Shelf label="Pinned">
-                {pinned.map((thread) => (
-                  <ThreadCard
-                    key={thread.id}
-                    thread={thread}
-                    projectName={projectNameById.get(thread.projectId) ?? null}
-                    projectColorId={projectColors.get(thread.projectId) ?? null}
-                    isActive={thread.id === activeThreadId}
-                    canPark={lifecycle.canPark(thread)}
-                    onNavigate={onNavigate}
-                    onSettle={() => lifecycle.settle(thread.id)}
-                    onSettleAndArchive={() => lifecycle.settleAndArchive(thread.id)}
-                    archiving={lifecycle.isArchiving(thread.id)}
-                    onSnooze={(until) => lifecycle.snooze(thread.id, until)}
-                    now={now}
-                    queuedMessages={queueCounts.get(thread.id) ?? 0}
-                    workingChildren={descendants.get(thread.id)?.working ?? 0}
-                    childrenNeedYou={descendants.get(thread.id)?.needsYou ?? 0}
-                    spawnedChildren={spawnedChildren.get(thread.id) ?? 0}
-                  />
-                ))}
-              </Shelf>
-            ) : null}
-            {/* Above the inbox, collapsed: one line says how much is
-                running, and the cards that may need you start right below. */}
-            {working.length > 0 ? (
-              <CollapsibleShelf
-                label="Working"
-                count={working.length}
-                expanded={showWorking}
-                onToggle={() => setShowWorking((open) => !open)}
-              >
-                {/* Full cards, not slim rows: a working thread is still
-                    current work, and its branch, counts, and PR matter. */}
-                {working.map((thread) => (
-                  <ThreadCard
-                    key={thread.id}
-                    thread={thread}
-                    projectName={projectNameById.get(thread.projectId) ?? null}
-                    projectColorId={projectColors.get(thread.projectId) ?? null}
-                    isActive={thread.id === activeThreadId}
-                    canPark={lifecycle.canPark(thread)}
-                    onNavigate={onNavigate}
-                    onSettle={() => lifecycle.settle(thread.id)}
-                    onSettleAndArchive={() => lifecycle.settleAndArchive(thread.id)}
-                    archiving={lifecycle.isArchiving(thread.id)}
-                    onSnooze={(until) => lifecycle.snooze(thread.id, until)}
-                    now={now}
-                    queuedMessages={queueCounts.get(thread.id) ?? 0}
-                    workingChildren={descendants.get(thread.id)?.working ?? 0}
-                    childrenNeedYou={descendants.get(thread.id)?.needsYou ?? 0}
-                    spawnedChildren={spawnedChildren.get(thread.id) ?? 0}
-                  />
-                ))}
-              </CollapsibleShelf>
-            ) : null}
-            {inbox.length > 0 ? (
-              <Shelf
-                label={pinned.length > 0 || working.length > 0 ? "Inbox" : null}
-              >
-                {inbox.map((thread) => (
-                  <ThreadCard
-                    key={thread.id}
-                    thread={thread}
-                    projectName={projectNameById.get(thread.projectId) ?? null}
-                    projectColorId={projectColors.get(thread.projectId) ?? null}
-                    isActive={thread.id === activeThreadId}
-                    canPark={lifecycle.canPark(thread)}
-                    onNavigate={onNavigate}
-                    onSettle={() => lifecycle.settle(thread.id)}
-                    onSettleAndArchive={() => lifecycle.settleAndArchive(thread.id)}
-                    archiving={lifecycle.isArchiving(thread.id)}
-                    onSnooze={(until) => lifecycle.snooze(thread.id, until)}
-                    now={now}
-                    queuedMessages={queueCounts.get(thread.id) ?? 0}
-                    workingChildren={descendants.get(thread.id)?.working ?? 0}
-                    childrenNeedYou={descendants.get(thread.id)?.needsYou ?? 0}
-                    spawnedChildren={spawnedChildren.get(thread.id) ?? 0}
-                  />
-                ))}
-              </Shelf>
-            ) : null}
-            <ParkedShelf
-              label="Snoozed"
-              icon="Clock"
-              threads={snoozed}
-              expanded={showSnoozed}
-              onToggle={() => setShowSnoozed((open) => !open)}
-              shelf="snoozed"
-              activeThreadId={activeThreadId}
-              lifecycle={lifecycle}
-              onNavigate={onNavigate}
-            />
-            <ParkedShelf
-              label="Settled"
-              icon="Check"
-              threads={settled}
-              expanded={showSettled}
-              onToggle={() => setShowSettled((open) => !open)}
-              shelf="settled"
-              activeThreadId={activeThreadId}
-              lifecycle={lifecycle}
-              onNavigate={onNavigate}
-            />
-          </>
-        )}
-      </div>
+      <ThreadShortcutHints.Provider value={shortcutHints}>
+        <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
+          {status === "loading" ? null : status === "error" ? (
+            <p
+              role="status"
+              className="px-2 py-6 text-center text-xs text-muted-foreground"
+            >
+              Could not load threads.
+            </p>
+          ) : pinned.length +
+              inbox.length +
+              working.length +
+              snoozed.length +
+              settled.length ===
+            0 ? (
+            <p
+              role="status"
+              className="px-2 py-6 text-center text-xs text-muted-foreground"
+            >
+              {searchQuery.trim() ? "No threads found" : "No threads yet"}
+            </p>
+          ) : (
+            <>
+              {pinned.length > 0 ? (
+                <Shelf label="Pinned">
+                  {pinned.map((thread) => (
+                    <ThreadCard
+                      key={thread.id}
+                      thread={thread}
+                      projectName={
+                        projectLabels.get(thread.projectId) ??
+                        projectNameById.get(thread.projectId) ??
+                        null
+                      }
+                      projectColorId={projectColors.get(thread.projectId) ?? null}
+                      isActive={thread.id === activeThreadId}
+                      canPark={lifecycle.canPark(thread)}
+                      onNavigate={onNavigate}
+                      onSettle={() => lifecycle.settle(thread.id)}
+                      onSettleAndArchive={() => lifecycle.settleAndArchive(thread.id)}
+                      archiving={lifecycle.isArchiving(thread.id)}
+                      onSnooze={(until) => lifecycle.snooze(thread.id, until)}
+                      now={now}
+                      queuedMessages={queueCounts.get(thread.id) ?? 0}
+                      workingChildren={descendants.get(thread.id)?.working ?? 0}
+                      childrenNeedYou={descendants.get(thread.id)?.needsYou ?? 0}
+                      spawnedChildren={spawnedChildren.get(thread.id) ?? 0}
+                    />
+                  ))}
+                </Shelf>
+              ) : null}
+              {/* Above the inbox, collapsed: one line says how much is
+                  running, and the cards that may need you start right below. */}
+              {working.length > 0 ? (
+                <CollapsibleShelf
+                  label="Working"
+                  count={working.length}
+                  expanded={showWorking}
+                  onToggle={() => setShowWorking((open) => !open)}
+                >
+                  {/* Full cards, not slim rows: a working thread is still
+                      current work, and its branch, counts, and PR matter. */}
+                  {working.map((thread) => (
+                    <ThreadCard
+                      key={thread.id}
+                      thread={thread}
+                      projectName={
+                        projectLabels.get(thread.projectId) ??
+                        projectNameById.get(thread.projectId) ??
+                        null
+                      }
+                      projectColorId={projectColors.get(thread.projectId) ?? null}
+                      isActive={thread.id === activeThreadId}
+                      canPark={lifecycle.canPark(thread)}
+                      onNavigate={onNavigate}
+                      onSettle={() => lifecycle.settle(thread.id)}
+                      onSettleAndArchive={() => lifecycle.settleAndArchive(thread.id)}
+                      archiving={lifecycle.isArchiving(thread.id)}
+                      onSnooze={(until) => lifecycle.snooze(thread.id, until)}
+                      now={now}
+                      queuedMessages={queueCounts.get(thread.id) ?? 0}
+                      workingChildren={descendants.get(thread.id)?.working ?? 0}
+                      childrenNeedYou={descendants.get(thread.id)?.needsYou ?? 0}
+                      spawnedChildren={spawnedChildren.get(thread.id) ?? 0}
+                    />
+                  ))}
+                </CollapsibleShelf>
+              ) : null}
+              {inbox.length > 0 ? (
+                <Shelf
+                  label={pinned.length > 0 || working.length > 0 ? "Inbox" : null}
+                >
+                  {inbox.map((thread) => (
+                    <ThreadCard
+                      key={thread.id}
+                      thread={thread}
+                      projectName={
+                        projectLabels.get(thread.projectId) ??
+                        projectNameById.get(thread.projectId) ??
+                        null
+                      }
+                      projectColorId={projectColors.get(thread.projectId) ?? null}
+                      isActive={thread.id === activeThreadId}
+                      canPark={lifecycle.canPark(thread)}
+                      onNavigate={onNavigate}
+                      onSettle={() => lifecycle.settle(thread.id)}
+                      onSettleAndArchive={() => lifecycle.settleAndArchive(thread.id)}
+                      archiving={lifecycle.isArchiving(thread.id)}
+                      onSnooze={(until) => lifecycle.snooze(thread.id, until)}
+                      now={now}
+                      queuedMessages={queueCounts.get(thread.id) ?? 0}
+                      workingChildren={descendants.get(thread.id)?.working ?? 0}
+                      childrenNeedYou={descendants.get(thread.id)?.needsYou ?? 0}
+                      spawnedChildren={spawnedChildren.get(thread.id) ?? 0}
+                    />
+                  ))}
+                </Shelf>
+              ) : null}
+              <ParkedShelf
+                label="Snoozed"
+                icon="Clock"
+                threads={snoozed}
+                expanded={showSnoozed}
+                onToggle={() => setShowSnoozed((open) => !open)}
+                shelf="snoozed"
+                activeThreadId={activeThreadId}
+                lifecycle={lifecycle}
+                onNavigate={onNavigate}
+              />
+              <ParkedShelf
+                label="Settled"
+                icon="Check"
+                threads={settled}
+                expanded={showSettled}
+                onToggle={() => setShowSettled((open) => !open)}
+                shelf="settled"
+                activeThreadId={activeThreadId}
+                lifecycle={lifecycle}
+                onNavigate={onNavigate}
+              />
+            </>
+          )}
+        </div>
+      </ThreadShortcutHints.Provider>
     </div>
   );
 }

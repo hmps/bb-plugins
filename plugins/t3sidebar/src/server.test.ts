@@ -43,10 +43,28 @@ function setup(
   let handlers: LifecycleHandlers = {};
 
   const colors = new Map<string, string>();
+  const labels = new Map<string, string>();
   const projects: Array<{ id: string; name: string }> = [];
 
   const db = {
     prepare(sql: string) {
+      if (sql.includes("project_label")) {
+        if (sql.includes("SELECT")) {
+          return {
+            all: () =>
+              [...labels.entries()].map(([projectId, label]) => ({
+                project_id: projectId,
+                label,
+              })),
+          };
+        }
+        if (sql.includes("DELETE")) {
+          return { run: (projectId: string) => labels.delete(projectId) };
+        }
+        return {
+          run: (projectId: string, label: string) => labels.set(projectId, label),
+        };
+      }
       if (sql.includes("project_color")) {
         if (sql.includes("SELECT")) {
           return {
@@ -137,6 +155,7 @@ function setup(
   return {
     archiveCalls,
     colors,
+    labels,
     projects,
     rows,
     threadById,
@@ -269,8 +288,8 @@ describe("project colours", () => {
 
     await expect(host.call("listProjectColors", {})).resolves.toEqual({
       projects: [
-        { projectId: "proj_1", name: "bb", colorId: "neutral" },
-        { projectId: "proj_2", name: "vaam", colorId: "violet" },
+        { projectId: "proj_1", name: "bb", colorId: "neutral", label: null },
+        { projectId: "proj_2", name: "vaam", colorId: "violet", label: null },
       ],
     });
   });
@@ -283,6 +302,27 @@ describe("project colours", () => {
 
     await host.call("setProjectColor", { projectId: "proj_1", colorId: "neutral" });
     expect(host.colors.has("proj_1")).toBe(false);
+  });
+
+  it("stores a trimmed label and lists it with the project", async () => {
+    const host = setup();
+    host.projects.push({ id: "proj_1", name: "vaam-main" });
+    await host.call("setProjectLabel", { projectId: "proj_1", label: "  vaam " });
+
+    expect(host.labels.get("proj_1")).toBe("vaam");
+    await expect(host.call("listProjectColors", {})).resolves.toEqual({
+      projects: [
+        { projectId: "proj_1", name: "vaam-main", colorId: "neutral", label: "vaam" },
+      ],
+    });
+  });
+
+  // Like neutral for colour: a blank label is no label, and no row.
+  it("clears the label when it goes blank", async () => {
+    const host = setup();
+    await host.call("setProjectLabel", { projectId: "proj_1", label: "vaam" });
+    await host.call("setProjectLabel", { projectId: "proj_1", label: "   " });
+    expect(host.labels.has("proj_1")).toBe(false);
   });
 
   it("rejects a colour outside the palette", async () => {

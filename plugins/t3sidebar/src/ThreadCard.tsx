@@ -14,6 +14,7 @@ import { STATUS_SLOT_CLASS, StatusOrTime } from "./StatusSlot";
 import { threadDisplayTitle } from "./inbox";
 import { resolveSnoozePresets } from "./lifecycle";
 import { useSwipeReveal } from "./useSwipeReveal";
+import { SHORTCUT_HINT_CLASS, useThreadShortcutHint } from "./useShortcutHints";
 
 /** One look for every badge on the card's second line — project, counts,
     and PR — so the line reads as one set. Tabular digits keep counts from
@@ -88,6 +89,8 @@ export function ThreadCard({
     onSnooze(resolveSnoozePresets(new Date())[2]!.snoozedUntil);
   // Touch screens have no hover: the park actions hide behind a left swipe.
   const swipe = useSwipeReveal(SWIPE_TRAY_WIDTH, canPark && !archiving);
+  // While the shortcut modifier is held, the key that opens this card.
+  const shortcutHint = useThreadShortcutHint(thread.id);
 
   return (
     <RowContextMenu
@@ -164,7 +167,7 @@ export function ThreadCard({
             className={cn(
               // Each card is a box in the shelf's grid: a rule below every card, and
               // the shelf draws the outer edge.
-              "group/card relative border-b border-sidebar-border px-4 py-3 transition-colors",
+              "group/card relative border-b border-sidebar-border/60 px-4 py-3.5 transition-colors",
               isActive ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/60",
               // A thread open in another pane gets a weaker tint than the active
               // row, so the two states stay distinguishable.
@@ -206,7 +209,13 @@ export function ThreadCard({
               {/* Status at rest, park actions on hover. Only the status yields,
                   so the title never shifts. A touch screen has no hover: there
                   the actions sit behind a left swipe instead. */}
-              {archiving ? (
+              {/* A held modifier shows the card's shortcut in place of its
+                  status, the way bb labels its own rows. */}
+              {shortcutHint ? (
+                <kbd aria-hidden="true" className={SHORTCUT_HINT_CLASS}>
+                  {shortcutHint}
+                </kbd>
+              ) : archiving ? (
                 <span className={cn(STATUS_SLOT_CLASS, "relative")}>
                   <Icon
                     name="Loading"
@@ -233,7 +242,7 @@ export function ThreadCard({
                   />
                 </span>
               ) : null}
-              {archiving ? null : (
+              {archiving || shortcutHint ? null : (
                 <span
                   className={cn(
                     STATUS_SLOT_CLASS,

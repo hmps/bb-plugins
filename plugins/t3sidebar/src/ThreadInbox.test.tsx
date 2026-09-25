@@ -387,6 +387,40 @@ describe("parking threads", () => {
     await waitFor(() => expect(settled).toBe("thr_park"));
   });
 
+  // A held modifier numbers the rows bb's modifier+1..9 open, top down.
+  // jsdom is not a Mac, so the modifier is Control.
+  it("shows each row's shortcut while the modifier is held", async () => {
+    render([
+      thread({ id: "thr_a", title: "First", updatedAt: Date.now() }),
+      thread({ id: "thr_b", title: "Second", updatedAt: Date.now() - 60_000 }),
+    ]);
+    await screen.findByLabelText("First");
+    expect(screen.queryByText("Ctrl + 1")).toBeNull();
+
+    fireEvent.keyDown(window, { key: "Control" });
+    const first = await screen.findByText("Ctrl + 1", {}, { timeout: 2_000 });
+    const second = screen.getByText("Ctrl + 2");
+    // Top down: the first card holds the first key.
+    expect(
+      first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      screen.getByLabelText("First").closest("li")?.contains(first),
+    ).toBe(true);
+
+    fireEvent.keyUp(window, { key: "Control" });
+    await waitFor(() => expect(screen.queryByText("Ctrl + 1")).toBeNull());
+  });
+
+  it("keeps the hints hidden when another key joins the modifier", async () => {
+    render([thread({ id: "thr_a", title: "First" })]);
+    await screen.findByLabelText("First");
+    fireEvent.keyDown(window, { key: "Control" });
+    fireEvent.keyDown(window, { key: "c", ctrlKey: true });
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    expect(screen.queryByText("Ctrl + 1")).toBeNull();
+  });
+
   // Touch screens have no hover: the park actions hide behind a left swipe.
   describe("swipe to reveal", () => {
     const drag = (
@@ -846,6 +880,27 @@ describe("card metadata", () => {
     expect(badge.closest("div")?.contains(glyph)).toBe(true);
     expect(screen.queryByText("bb/feature")).toBeNull();
     expect(screen.queryByText("Sawyer's MacBook")).toBeNull();
+  });
+
+  // A renamed project shows its label on the badge, not its bb name.
+  it("shows the project's label on the badge", async () => {
+    renderSlot(inbox, listProps, {
+      sidebarThreads: {
+        status: "ready",
+        threads: [thread({ id: "thr_l" })],
+        projects: [{ id: "proj_1", name: "vaam-main", isPersonal: false }],
+      },
+      rpc: {
+        listProjectColors: () => ({
+          projects: [
+            { projectId: "proj_1", name: "vaam-main", colorId: "blue", label: "vaam" },
+          ],
+        }),
+        listLifecycle: () => ({ rows: [] }),
+      },
+    });
+    expect(await screen.findByText("vaam", { selector: "span.rounded" })).toBeDefined();
+    expect(screen.queryByText("vaam-main")).toBeNull();
   });
 
   // Not exactly 3h: the card's clock is quantized to the minute, so a

@@ -14,9 +14,12 @@ import {
 } from "./inbox";
 import {
   isProjectColorId,
+  MAX_PROJECT_LABEL_LENGTH,
   NEUTRAL_COLOR_ID,
   PROJECT_COLOR_CHANNEL,
+  PROJECT_LABEL_CHANNEL,
   type ProjectColorSignal,
+  type ProjectLabelSignal,
 } from "./project-colors";
 
 const migrations = [
@@ -29,6 +32,10 @@ const migrations = [
   `CREATE TABLE IF NOT EXISTS project_color (
      project_id TEXT PRIMARY KEY,
      color_id   TEXT NOT NULL
+   )`,
+  `CREATE TABLE IF NOT EXISTS project_label (
+     project_id TEXT PRIMARY KEY,
+     label      TEXT NOT NULL
    )`,
 ];
 
@@ -51,11 +58,18 @@ interface ProjectColorDbRow {
   color_id: string;
 }
 
-/** One row of the project-colour settings list. */
+interface ProjectLabelDbRow {
+  project_id: string;
+  label: string;
+}
+
+/** One row of the project settings list: the badge's colour and label. */
 export interface ProjectColorRow {
   projectId: string;
   name: string;
   colorId: string;
+  /** The badge's text in place of `name`; `null` shows `name`. */
+  label: string | null;
 }
 
 interface SweepThread {
@@ -101,9 +115,9 @@ export const t3sidebarRpcContract = defineRpcContract({
   },
   unsnooze: { input: threadIdSchema, output: z.object({ ok: z.boolean() }) },
   /**
-   * Every project bb knows about, with its stored colour. The settings
-   * section shows all of them, so a project with no colour is a choice the
-   * user can see rather than a row that is missing.
+   * Every project bb knows about, with its stored colour and label. The
+   * settings section shows all of them, so a project with no colour is a
+   * choice the user can see rather than a row that is missing.
    */
   listProjectColors: {
     input: z.object({}),
@@ -113,9 +127,18 @@ export const t3sidebarRpcContract = defineRpcContract({
           projectId: z.string(),
           name: z.string(),
           colorId: z.string(),
+          label: z.string().nullable(),
         }),
       ),
     }),
+  },
+  /** A blank label clears it, and the badge goes back to the bb name. */
+  setProjectLabel: {
+    input: z.object({
+      projectId: z.string().trim().min(1),
+      label: z.string().trim().max(MAX_PROJECT_LABEL_LENGTH),
+    }),
+    output: z.object({ ok: z.boolean() }),
   },
   setProjectColor: {
     input: z.object({
@@ -249,6 +272,35 @@ export default function plugin(bb: BbPluginApi) {
     bb.realtime.publish(PROJECT_COLOR_CHANNEL, signal);
   };
 
+  const readProjectLabels = (): Map<string, string> =>
+    new Map(
+      (
+        db
+          .prepare(`SELECT project_id, label FROM project_label`)
+          .all() as ProjectLabelDbRow[]
+      ).map((row) => [row.project_id, row.label]),
+    );
+
+  const writeProjectLabel = (projectId: string, label: string): void => {
+    // Like neutral for colour: no label is no row, not an empty string.
+    if (label === "") {
+      db.prepare(`DELETE FROM project_label WHERE project_id = ?`).run(
+        projectId,
+      );
+    } else {
+      db.prepare(
+        `INSERT INTO project_label (project_id, label)
+         VALUES (?, ?)
+         ON CONFLICT(project_id) DO UPDATE SET label = excluded.label`,
+      ).run(projectId, label);
+    }
+    const signal: ProjectLabelSignal = {
+      projectId,
+      label: label === "" ? null : label,
+    };
+    bb.realtime.publish(PROJECT_LABEL_CHANNEL, signal);
+  };
+
   const runSettledSweep = async (): Promise<void> => {
     const threads: SweepThread[] = [];
     const pageSize = 500;
@@ -333,6 +385,7 @@ export default function plugin(bb: BbPluginApi) {
     },
     async listProjectColors() {
       const stored = readProjectColors();
+      const labels = readProjectLabels();
       const projects = (await bb.sdk.projects.list({
         includePersonal: true,
       })) as Array<{ id: string; name: string }>;
@@ -341,6 +394,7 @@ export default function plugin(bb: BbPluginApi) {
           projectId: project.id,
           name: project.name,
           colorId: stored.get(project.id) ?? NEUTRAL_COLOR_ID,
+          label: labels.get(project.id) ?? null,
         })),
       };
     },
@@ -351,6 +405,11 @@ export default function plugin(bb: BbPluginApi) {
         throw new Error(`Unknown project colour: ${colorId}`);
       }
       writeProjectColor(projectId, colorId);
+      return { ok: true };
+    },
+    async setProjectLabel({ projectId, label }) {
+      // The schema trims too; trimming here keeps "  " from storing a blank.
+      writeProjectLabel(projectId, label.trim());
       return { ok: true };
     },
     async queueCounts({ threadIds }) {

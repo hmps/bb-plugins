@@ -3,14 +3,18 @@ import { useRpc } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import type { ProjectColorRow, t3sidebarRpcContract } from "./server";
 import { cn } from "./lib/utils";
-import { PROJECT_COLORS, projectColor } from "./project-colors";
+import {
+  MAX_PROJECT_LABEL_LENGTH,
+  PROJECT_COLORS,
+  projectColor,
+} from "./project-colors";
 
 /**
- * The colour picker for project badges: every project bb knows about, each
- * with one row of swatches.
+ * The badge editor: every project bb knows about, each with a label field
+ * and one row of colour swatches.
  *
- * A click saves at once — one project, one colour, nothing to confirm — so
- * the section has no Save button and no draft state to keep in step.
+ * A click on a swatch saves at once, and a label saves when the field loses
+ * focus or on Enter — nothing to confirm — so the section has no Save button.
  */
 export function ProjectColorsSection() {
   const rpc = useRpc<typeof t3sidebarRpcContract>();
@@ -49,6 +53,27 @@ export function ProjectColorsSection() {
     }
   }
 
+  async function rename(projectId: string, input: string) {
+    const label = input.trim();
+    const previous = rows;
+    const current = previous?.find((row) => row.projectId === projectId);
+    if (!current || (current.label ?? "") === label) return;
+    setRows(
+      (list) =>
+        list?.map((row) =>
+          row.projectId === projectId
+            ? { ...row, label: label === "" ? null : label }
+            : row,
+        ) ?? list,
+    );
+    try {
+      await rpc.call("setProjectLabel", { projectId, label });
+    } catch (cause) {
+      setRows(previous);
+      toast.error(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
   if (error) {
     return (
       <p className="text-sm text-destructive">Could not load projects: {error}</p>
@@ -70,13 +95,33 @@ export function ProjectColorsSection() {
           key={row.projectId}
           className="flex items-center gap-3 px-3 py-2"
         >
+          {/* The bb name in a fixed column, so every field lines up and a
+              renamed project still says which project it is. */}
+          <span className="w-36 shrink-0 truncate text-sm" title={row.name}>
+            {row.name}
+          </span>
+          <input
+            // Keyed by the stored label, so a saved or reverted value resets
+            // the field instead of leaving a stale draft.
+            key={row.label ?? ""}
+            type="text"
+            aria-label={`Label for ${row.name}`}
+            defaultValue={row.label ?? ""}
+            placeholder={row.name}
+            maxLength={MAX_PROJECT_LABEL_LENGTH}
+            onBlur={(event) => void rename(row.projectId, event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") event.currentTarget.blur();
+            }}
+            className="h-7 w-32 min-w-0 rounded-md border border-border bg-transparent px-2 text-xs text-foreground placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          />
           <span
             className={cn(
               "min-w-0 max-w-[12rem] shrink-0 truncate rounded px-1 text-2xs font-medium",
               projectColor(row.colorId).badgeClass,
             )}
           >
-            {row.name}
+            {row.label ?? row.name}
           </span>
           <span className="flex flex-1 flex-wrap items-center justify-end gap-1">
             {PROJECT_COLORS.map((color) => (

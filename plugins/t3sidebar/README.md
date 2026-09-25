@@ -41,9 +41,10 @@ Four shelves:
   pull-request number, the child-agent count, and the agent glyph on the
   right. Pinned threads sit above.
 
-  The project reads as a coloured badge. Give each project its own colour in
-  the plugin's settings, under **Project colours**; a project with no colour
-  keeps a neutral badge.
+  The project reads as a coloured badge. Give each project its own colour and,
+  if its bb name is long, a short label in the plugin's settings, under
+  **Project badges**. A project with no colour keeps a neutral badge, and one
+  with no label shows its bb name.
 
   One slot, one marker, one width, so the whole column lines up. The slot
   shows the status glyph while a thread has something to say, and the age

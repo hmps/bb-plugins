@@ -19,11 +19,13 @@ export default definePluginApp((app) => {
   });
 
   // The badge under each card title reads as a project only if the colour is
-  // the user's own choice, so the palette lives in settings.
+  // the user's own choice, so the palette lives in settings. So does a short
+  // label, for projects whose bb name is longer than the badge needs.
   app.slots.settingsSection({
     id: "project-colors",
-    title: "Project colours",
-    description: "The badge colour each project gets in the sidebar.",
+    title: "Project badges",
+    description:
+      "The label and colour each project's badge gets in the sidebar. Leave the label blank to use the project name.",
     component: ProjectColorsSection,
   });
 

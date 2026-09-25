@@ -6,6 +6,7 @@ import { Icon } from "./components/Icon";
 import { cn } from "./lib/utils";
 import { RowContextMenu } from "./RowContextMenu";
 import { STATUS_SLOT_CLASS, StatusOrTime } from "./StatusSlot";
+import { SHORTCUT_HINT_CLASS, useThreadShortcutHint } from "./useShortcutHints";
 import { threadDisplayTitle } from "./inbox";
 import { snoozeWakeLabel } from "./lifecycle";
 
@@ -34,6 +35,8 @@ export function SlimRow({
   onRestore: () => void;
 }) {
   const actions = useSidebarThreadActions();
+  // While the shortcut modifier is held, the key that opens this row.
+  const shortcutHint = useThreadShortcutHint(thread.id);
   const title = threadDisplayTitle(thread);
 
   const restoreLabel =
@@ -52,7 +55,7 @@ export function SlimRow({
       <li className="list-none">
         <div
           className={cn(
-            "group/slim relative flex h-8 items-center gap-2 border-b border-sidebar-border px-4 text-xs",
+            "group/slim relative flex h-8 items-center gap-2 border-b border-sidebar-border/60 px-4 text-xs",
             isActive ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/60",
           )}
         >
@@ -79,6 +82,11 @@ export function SlimRow({
           >
             {title}
           </span>
+          {shortcutHint ? (
+            <kbd aria-hidden="true" className={SHORTCUT_HINT_CLASS}>
+              {shortcutHint}
+            </kbd>
+          ) : null}
           {/* The same slot as a card, so a shelf keeps the card's column. A
               snoozed row spends it on the wake time: when the thread comes
               BACK is that shelf's whole question, and it outranks an age the
@@ -92,6 +100,7 @@ export function SlimRow({
             className={cn(
               STATUS_SLOT_CLASS,
               "pointer-events-none relative tabular-nums text-2xs text-muted-foreground/60",
+              shortcutHint && "hidden",
             )}
           >
             <span className="flex items-center group-hover/slim:opacity-0 pointer-coarse:opacity-0">
