@@ -39,6 +39,9 @@ that `marketplace.json` lists.
 - `.bb/plugins.json` — collection index. It enables
   `bb plugin install git:https://github.com/hmps/bb-plugins.git@main --plugin <name>`.
 - `plugins/<name>/` — one plugin per directory with its own `package.json`.
+- `themes/<id>/theme.css` — a copy of a custom bb theme. bb reads the live
+  file from `~/.bb/theme/<id>/`. To apply one, copy it there and run
+  `bb theme set <id>`.
 
 ## Release a plugin
 

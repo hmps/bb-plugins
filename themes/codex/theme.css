@@ -1,0 +1,149 @@
+/*
+ * codex — typography modeled on the ChatGPT/Codex desktop app.
+ *
+ * Codex uses the platform system font (SF Pro on Apple devices),
+ * grayscale antialiasing, and 14px chat text with a 1.625 line height.
+ * Colors stay on the default bb palette.
+ */
+
+:root,
+.light {
+  /* SF Pro on macOS/iOS; Inter everywhere else. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Inter Variable", Inter,
+    sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", monospace;
+  /*
+   * Terminal: "BB Terminal" (below) first, for a larger size. Then the
+   * plain families. Silicon Knight has the non-Mono JetBrainsMono Nerd Font
+   * only; bb's default asks for the Mono variant, so it fell through to Menlo.
+   */
+  --font-terminal: "BB Terminal", "JetBrainsMono Nerd Font Mono", "JetBrainsMono Nerd Font", "JetBrainsMono NF", "JetBrains Mono", "Symbols Nerd Font Mono", Menlo, monospace;
+}
+
+/*
+ * bb hard-codes the terminal at 12px (xterm fontSize: 12). size-adjust
+ * scales the glyphs and the cell metrics, so xterm renders 13px text
+ * natively (12 * 1.0833). local() needs full face names, not families.
+ * bb re-measures and repaints on document.fonts "loadingdone".
+ */
+@font-face {
+  font-family: "BB Terminal";
+  font-weight: 400;
+  size-adjust: 108.33%;
+  src: local("JetBrainsMono NFM Regular"), local("JetBrainsMonoNFM-Regular"),
+    local("JetBrainsMono NF Regular"), local("JetBrainsMonoNF-Regular"),
+    local("JetBrains Mono Regular"), local("JetBrainsMono-Regular"),
+    local("Menlo Regular"), local("Menlo-Regular");
+}
+@font-face {
+  font-family: "BB Terminal";
+  font-weight: 700;
+  size-adjust: 108.33%;
+  src: local("JetBrainsMono NFM Bold"), local("JetBrainsMonoNFM-Bold"),
+    local("JetBrainsMono NF Bold"), local("JetBrainsMonoNF-Bold"),
+    local("JetBrains Mono Bold"), local("JetBrainsMono-Bold"),
+    local("Menlo Bold"), local("Menlo-Bold");
+}
+
+/* Thinner, crisper text, most visible for light text on dark. */
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/*
+ * Chat messages: 13px -> 14px. The line height is relative
+ * (leading-relaxed), so it follows to about 22.75px. The composer and
+ * the expanded thinking body match the messages.
+ * Targets internal bb class names; a bb update can change them.
+ */
+.group\/message.text-sm,
+.group\/message .text-sm.leading-relaxed,
+.border-border-seam.whitespace-pre-wrap.text-sm,
+[data-promptbox-editor-scroll] {
+  font-size: 14px;
+}
+
+/*
+ * Chat column: 740px of text like Codex. bb's 760px column loses 48px to
+ * padding (px-4 column + px-2 message), so 740 + 48 = 788px. The composer
+ * shares the column width.
+ */
+.scroll-bottom-anchor-content.max-w-\[760px\],
+.chat-prompt-box.max-w-\[760px\] {
+  max-width: 788px;
+}
+
+/*
+ * Composer: a solid, lifted fill with a near-invisible edge, like Codex
+ * (dark: page #0f0f11, fill #29292b, edge #2e2e30, 22px radius, no shadow).
+ * The fill is ink mixed into the canvas, so it tracks light and dark.
+ */
+form[data-promptbox] {
+  background-color: color-mix(in oklch, var(--ink) 15%, var(--canvas));
+  border-color: color-mix(in oklch, var(--ink) 18%, var(--canvas));
+  border-radius: 22px;
+  box-shadow: none;
+}
+
+/*
+ * Composer controls row as a drawer tucked under the composer, like Codex
+ * (dark: fill #18181a between page and composer, no edge, inset 22px so it
+ * sits inside the composer's 22px corners, square top, rounded bottom). New thread page: the div after the form. Threads: the
+ * follow-up footer; bb hides it by height and opacity, so only the
+ * expanded state (max-h-6) grows.
+ */
+[data-promptbox-shell] > form[data-promptbox] + div,
+[data-follow-up-composer-footer] {
+  margin-inline: 22px;
+  margin-top: 0;
+  padding-inline: 10px;
+  background-color: color-mix(in oklch, var(--ink) 5%, var(--canvas));
+  border-radius: 0 0 18px 18px;
+}
+[data-promptbox-shell] > form[data-promptbox] + div {
+  padding-block: 4px;
+}
+[data-follow-up-composer-footer].max-h-6 {
+  min-height: 36px;
+  max-height: 36px;
+}
+
+/*
+ * Better Sidebar (t3sidebar) cards: more air between rows, bolder titles.
+ * The plugin marks unread with weight alone, so unread steps up to 700.
+ */
+ul:has(> li > .group\/card) {
+  gap: 4px;
+}
+.group\/card span.truncate.text-sm {
+  font-size: 13px;
+  font-weight: 600;
+}
+.group\/card span.truncate.text-sm.font-medium {
+  font-weight: 700;
+}
+
+/*
+ * New thread page: composer in the middle of the page, like Codex. bb
+ * uses this layout itself only when there are no threads at all
+ * ("min-h-full flex-1 justify-center pb-12" in place of "pt-14").
+ * Phones keep the top layout: they list recent threads below it.
+ */
+@media (width >= 48rem) {
+  .mx-auto.flex-col.max-w-\[760px\].pt-14 {
+    min-height: 100%;
+    flex: 1;
+    justify-content: center;
+    padding-top: 0;
+    padding-bottom: 3rem;
+  }
+}
+
+/* Keep bb's 16px composer on phones: iOS zooms in on inputs under 16px. */
+@media (width < 48rem) and (pointer: coarse) {
+  [data-promptbox-editor-scroll] {
+    font-size: 1rem;
+  }
+}
