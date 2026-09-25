@@ -352,6 +352,18 @@ export function ThreadInbox({
  * the count is the whole footprint when collapsed — and the caller hides the
  * shelf entirely at zero.
  */
+/*
+ * Full bleed: shelf headers and lists cancel the scroller's px-1.5, so the
+ * sidebar's own edges close every row's sides. No box within a box. A header
+ * is a band with a rule below it; each row draws its own rule below, so the
+ * lines never double.
+ */
+const SHELF_HEADER_CLASS =
+  "-mx-1.5 flex h-8 items-center gap-2 border-b border-sidebar-border px-4";
+const SHELF_LABEL_CLASS =
+  "text-2xs font-medium uppercase tracking-wider text-muted-foreground/70";
+const SHELF_LIST_CLASS = "-mx-1.5 flex flex-col";
+
 function CollapsibleShelf({
   label,
   icon,
@@ -375,13 +387,12 @@ function CollapsibleShelf({
         aria-expanded={expanded}
         // Padded like a card, so the chevron ends on the same right edge as
         // every row's status and provider glyph.
-        className="mt-3 flex w-full items-center gap-2 px-2.5 pb-1 text-left"
+        className={cn(SHELF_HEADER_CLASS, "w-[calc(100%+0.75rem)] text-left")}
       >
         {icon ? <Icon name={icon} className="size-3 text-muted-foreground/70" /> : null}
-        <span className="text-2xs font-medium text-muted-foreground/70">
+        <span className={cn(SHELF_LABEL_CLASS, "flex-1")}>
           {expanded ? label : `${label} (${count})`}
         </span>
-        <span className="h-px flex-1 bg-sidebar-border" />
         <span className={TRAILING_GLYPH_BOX_CLASS}>
           <Icon
             name="ChevronDown"
@@ -392,7 +403,7 @@ function CollapsibleShelf({
           />
         </span>
       </button>
-      {expanded ? <ul className="flex flex-col gap-px">{children}</ul> : null}
+      {expanded ? <ul className={SHELF_LIST_CLASS}>{children}</ul> : null}
     </section>
   );
 }
@@ -464,14 +475,19 @@ function Shelf({
     // which is exactly right for the single unlabelled inbox list.
     <section {...(label ? { "aria-label": label } : {})}>
       {label ? (
-        <h2 className={cn("flex items-center gap-2 px-2.5 pb-1 pt-3")}>
-          <span className="text-2xs font-medium text-muted-foreground/70">
-            {label}
-          </span>
-          <span className="h-px flex-1 bg-sidebar-border" />
+        <h2 className={SHELF_HEADER_CLASS}>
+          <span className={SHELF_LABEL_CLASS}>{label}</span>
         </h2>
       ) : null}
-      <ul className="flex flex-col gap-px">{children}</ul>
+      {/* Without a header, the list draws its own top edge. */}
+      <ul
+        className={cn(
+          SHELF_LIST_CLASS,
+          !label && "border-t border-sidebar-border",
+        )}
+      >
+        {children}
+      </ul>
     </section>
   );
 }

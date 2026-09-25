@@ -52,7 +52,7 @@ export function SlimRow({
       <li className="list-none">
         <div
           className={cn(
-            "group/slim relative flex h-8 items-center gap-2 rounded-md px-2.5 text-xs",
+            "group/slim relative flex h-8 items-center gap-2 border-b border-sidebar-border px-4 text-xs",
             isActive ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/60",
           )}
         >
@@ -68,7 +68,7 @@ export function SlimRow({
               });
               onNavigate();
             }}
-            className="absolute inset-0 cursor-pointer rounded-md"
+            className="absolute inset-0 cursor-pointer"
           />
           <span
             className={cn(

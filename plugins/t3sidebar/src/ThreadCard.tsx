@@ -14,6 +14,12 @@ import { STATUS_SLOT_CLASS, StatusOrTime } from "./StatusSlot";
 import { threadDisplayTitle } from "./inbox";
 import { resolveSnoozePresets } from "./lifecycle";
 
+/** One look for every badge on the card's second line — project, counts,
+    and PR — so the line reads as one set. Tabular digits keep counts from
+    changing width as they tick. */
+const BADGE_CLASS =
+  "rounded px-1.5 text-[11px] leading-4 font-medium tabular-nums";
+
 /**
  * One thread as a two-line card: title and status, then the project badge
  * and activity. The card is the whole point of this sidebar — status lives in the
@@ -95,7 +101,9 @@ export function ThreadCard({
       <li className="list-none" aria-busy={archiving || undefined}>
         <div
           className={cn(
-            "group/card relative rounded-md px-2.5 py-2 transition-colors",
+            // Each card is a box in the shelf's grid: a rule below every card, and
+            // the shelf draws the outer edge.
+            "group/card relative border-b border-sidebar-border px-4 py-3 transition-colors",
             isActive ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/60",
             // A thread open in another pane gets a weaker tint than the active
             // row, so the two states stay distinguishable.
@@ -120,7 +128,7 @@ export function ThreadCard({
               });
               onNavigate();
             }}
-            className="absolute inset-0 cursor-pointer rounded-md"
+            className="absolute inset-0 cursor-pointer"
           />
           <div className="pointer-events-none relative flex min-h-5 items-center gap-1.5">
             <span
@@ -189,7 +197,8 @@ export function ThreadCard({
               {projectName ? (
                 <span
                   className={cn(
-                    "max-w-full truncate rounded px-1 font-medium",
+                    BADGE_CLASS,
+                    "max-w-full truncate",
                     projectColor(projectColorId).badgeClass,
                   )}
                 >
@@ -270,9 +279,9 @@ function ActivityCount({
   return (
     <span
       aria-label={`${count} ${label}`}
-      className="flex shrink-0 items-center gap-0.5 rounded bg-muted px-1 font-mono text-2xs text-muted-foreground"
+      className={cn(BADGE_CLASS, "flex shrink-0 items-center gap-0.5 bg-muted text-muted-foreground")}
     >
-      {icon ? <Icon name={icon} className="size-2.5" aria-hidden /> : null}
+      {icon ? <Icon name={icon} className="size-3" aria-hidden /> : null}
       {count}
     </span>
   );
@@ -287,9 +296,9 @@ function ChildrenCount({ total, working }: { total: number; working: number }) {
           ? `${total} child agents, ${working} working`
           : `${total} child agents`
       }
-      className="flex shrink-0 items-center gap-0.5 rounded bg-muted px-1 font-mono text-2xs text-muted-foreground"
+      className={cn(BADGE_CLASS, "flex shrink-0 items-center gap-0.5 bg-muted text-muted-foreground")}
     >
-      <Icon name="Bot" className="size-2.5" aria-hidden />
+      <Icon name="Bot" className="size-3" aria-hidden />
       {working > 0 ? `${total}(${working})` : total}
     </span>
   );
@@ -324,11 +333,12 @@ function PullRequestBadge({ pullRequest }: { pullRequest: PluginSidebarPullReque
       onClick={(event) => event.stopPropagation()}
       title={pullRequest.title}
       className={cn(
-        "flex shrink-0 items-center gap-0.5 rounded px-1 font-mono text-2xs hover:underline",
+        BADGE_CLASS,
+        "flex shrink-0 items-center gap-0.5 hover:underline",
         className,
       )}
     >
-      <Icon name={icon} className="size-2.5" aria-hidden />
+      <Icon name={icon} className="size-3" aria-hidden />
       {pullRequest.number}
     </a>
   );

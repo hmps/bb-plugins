@@ -111,12 +111,9 @@ form[data-promptbox] {
 }
 
 /*
- * Better Sidebar (t3sidebar) cards: more air between rows, bolder titles.
+ * Better Sidebar (t3sidebar) cards: bolder titles. The plugin owns the gap.
  * The plugin marks unread with weight alone, so unread steps up to 700.
  */
-ul:has(> li > .group\/card) {
-  gap: 4px;
-}
 .group\/card span.truncate.text-sm {
   font-size: 13px;
   font-weight: 600;
