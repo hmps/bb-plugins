@@ -145,3 +145,119 @@ form[data-promptbox] {
     font-size: 1rem;
   }
 }
+
+/*
+ * Right panel, new tab: the actions as filled, rounded tiles in a centered
+ * column, like Codex (dark: tile #1b1b1d on #0f0f11, 40px rows, 4px apart,
+ * 13px labels, about 540px wide). The panel sits on the sidebar colour,
+ * so the fills are ink over transparent. Recent rows keep the list look with the
+ * same shape. The search field matches the tiles.
+ */
+[data-panel-new-tab-page] > div {
+  width: 100%;
+  max-width: 560px;
+  margin-inline: auto;
+}
+@media (width >= 48rem) {
+  [data-panel-new-tab-page] {
+    justify-content: center;
+    padding-bottom: 3rem;
+  }
+}
+[data-panel-new-tab-page] input[role="combobox"] {
+  height: 40px;
+  border-radius: 10px;
+  border-color: transparent;
+  background-color: color-mix(in oklch, var(--ink) 6%, transparent);
+  font-size: 13px;
+}
+[data-panel-new-tab-page] .group.rounded.px-2 {
+  min-height: 40px;
+  padding-inline: 12px;
+  border-radius: 10px;
+  gap: 10px;
+  font-size: 13px;
+}
+[data-panel-new-tab-page] .group.rounded.px-2 > button:first-child {
+  gap: 10px;
+}
+[data-testid="new-tab-actions"] .flex.flex-col.gap-px {
+  gap: 4px;
+}
+[data-testid="new-tab-actions"] .group.rounded.px-2 {
+  background-color: color-mix(in oklch, var(--ink) 6%, transparent);
+}
+[data-testid="new-tab-actions"] .group.rounded.px-2:hover,
+[data-testid="new-tab-actions"] .group.rounded.px-2:focus-within {
+  background-color: color-mix(in oklch, var(--ink) 11%, transparent);
+}
+[data-panel-new-tab-page] input[role="combobox"]:focus-visible {
+  border-color: color-mix(in oklch, var(--ink) 18%, transparent);
+}
+[data-panel-new-tab-page] .border-dashed {
+  border-radius: 10px;
+}
+
+/*
+ * Right panel, thread info: the key/value rows as one rounded card with
+ * faint lines between rows, and the commit and file lists as cards too,
+ * so the panel matches the new-tab tiles. bb gives the list no data
+ * attribute, so the rules key off the rows' label-column grid.
+ */
+dl:has(> .grid-cols-\[var\(--detail-label-width\,96px\)_minmax\(0\,1fr\)\]) {
+  --info-card: color-mix(in oklch, var(--ink) 6%, transparent);
+  --info-line: color-mix(in oklch, var(--ink) 7%, transparent);
+  gap: 0;
+  padding-block: 16px;
+}
+dl > .grid-cols-\[var\(--detail-label-width\,96px\)_minmax\(0\,1fr\)\] {
+  min-height: 40px;
+  padding: 8px 14px;
+  align-items: center;
+  background-color: var(--info-card);
+}
+dl > .grid-cols-\[var\(--detail-label-width\,96px\)_minmax\(0\,1fr\)\] :is(dt, dd) {
+  font-size: 13px;
+}
+dl > .grid-cols-\[var\(--detail-label-width\,96px\)_minmax\(0\,1fr\)\]:first-child {
+  border-radius: 12px 12px 0 0;
+}
+dl > .grid-cols-\[var\(--detail-label-width\,96px\)_minmax\(0\,1fr\)\] + .grid-cols-\[var\(--detail-label-width\,96px\)_minmax\(0\,1fr\)\] {
+  border-top: 1px solid var(--info-line);
+}
+dl > .grid-cols-\[var\(--detail-label-width\,96px\)_minmax\(0\,1fr\)\]:not(:has(+ .grid-cols-\[var\(--detail-label-width\,96px\)_minmax\(0\,1fr\)\])) {
+  border-radius: 0 0 12px 12px;
+}
+dl > .grid-cols-\[var\(--detail-label-width\,96px\)_minmax\(0\,1fr\)\]:first-child:not(:has(+ .grid-cols-\[var\(--detail-label-width\,96px\)_minmax\(0\,1fr\)\])) {
+  border-radius: 12px;
+}
+/* The cards replace the divider line. */
+dl:has(> .grid-cols-\[var\(--detail-label-width\,96px\)_minmax\(0\,1fr\)\]) > .border-t[aria-hidden] {
+  display: none;
+}
+/* Sections: the label over its own card. */
+dl:has(> .grid-cols-\[var\(--detail-label-width\,96px\)_minmax\(0\,1fr\)\]) > .flex-col {
+  margin-top: 20px;
+  gap: 6px;
+}
+dl:has(> .grid-cols-\[var\(--detail-label-width\,96px\)_minmax\(0\,1fr\)\]) > .flex-col > dt {
+  padding-inline: 14px;
+}
+dl:has(> .grid-cols-\[var\(--detail-label-width\,96px\)_minmax\(0\,1fr\)\]) > .flex-col > dd > .flex-col.gap-1\.5 {
+  gap: 0;
+  padding: 6px;
+  border-radius: 12px;
+  background-color: var(--info-card);
+  font-size: 13px;
+}
+dl:has(> .grid-cols-\[var\(--detail-label-width\,96px\)_minmax\(0\,1fr\)\]) > .flex-col > dd > .flex-col.gap-1\.5 > div {
+  min-height: 32px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-inline: 8px;
+  border-radius: 8px;
+}
+dl:has(> .grid-cols-\[var\(--detail-label-width\,96px\)_minmax\(0\,1fr\)\]) > .flex-col > dd > .flex-col.gap-1\.5 :is(span, button).text-xs {
+  font-size: 13px;
+}
