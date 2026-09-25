@@ -103,6 +103,34 @@ export function descendantSignals(
 }
 
 /**
+ * How many child threads were ever started under each thread, rolled up to
+ * every ancestor the same way `descendantSignals` rolls up live work, so the
+ * card's "total (working)" pair counts the same set of threads.
+ *
+ * Archived children still count — this is a history, not live work.
+ * Feed this the FULL thread list, like `descendantSignals`.
+ */
+export function spawnedChildCounts(
+  threads: readonly PluginSidebarThread[],
+): ReadonlyMap<string, number> {
+  const parentIdOf = new Map<string, string | null>(
+    threads.map((thread) => [thread.id, thread.parentThreadId]),
+  );
+  const counts = new Map<string, number>();
+  for (const thread of threads) {
+    // `seen` guards a cyclic parent chain and a self-parented row.
+    const seen = new Set<string>([thread.id]);
+    let ancestorId = parentIdOf.get(thread.id) ?? null;
+    while (ancestorId !== null && !seen.has(ancestorId)) {
+      seen.add(ancestorId);
+      counts.set(ancestorId, (counts.get(ancestorId) ?? 0) + 1);
+      ancestorId = parentIdOf.get(ancestorId) ?? null;
+    }
+  }
+  return counts;
+}
+
+/**
  * The signals below are tree-aware: they read the thread AND everything under
  * it. Omit `signals` and they fall back to the thread alone, which is what a
  * caller that has no tree in hand wants.

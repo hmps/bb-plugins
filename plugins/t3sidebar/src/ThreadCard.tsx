@@ -38,6 +38,7 @@ export function ThreadCard({
   queuedMessages = 0,
   workingChildren = 0,
   childrenNeedYou = 0,
+  spawnedChildren = 0,
 }: {
   thread: PluginSidebarThread;
   projectName: string | null;
@@ -62,6 +63,9 @@ export function ThreadCard({
   workingChildren?: number;
   /** Descendants with a raised hand; they outrank their own work. */
   childrenNeedYou?: number;
+  /** Child threads ever started below this thread, archived ones included;
+      drawn with `workingChildren` as one "total (working)" badge. */
+  spawnedChildren?: number;
 }) {
   const actions = useSidebarThreadActions();
   const { splitProps, layout } = useSidebarThreadSplit(thread.id);
@@ -217,13 +221,6 @@ export function ThreadCard({
                 count={thread.activity.backgroundAgents}
               />
             ) : null}
-            {workingChildren > 0 ? (
-              <ActivityCount
-                label="child threads working"
-                count={workingChildren}
-                icon="Branch"
-              />
-            ) : null}
             {queuedMessages > 0 ? (
               <ActivityCount
                 label="queued messages"
@@ -232,6 +229,12 @@ export function ThreadCard({
               />
             ) : null}
             {pullRequest ? <PullRequestBadge pullRequest={pullRequest} /> : null}
+            {spawnedChildren > 0 ? (
+              <ChildrenCount
+                total={spawnedChildren}
+                working={workingChildren}
+              />
+            ) : null}
             {/* Always drawn, so the line has a fixed right edge. */}
             <ProviderGlyph providerId={thread.providerId} />
           </div>
@@ -274,7 +277,7 @@ function ActivityCount({
   label: string;
   count: number;
   /** A glyph in front of the number, so two counts on one line read apart. */
-  icon?: Extract<IconName, "Queue" | "Branch">;
+  icon?: Extract<IconName, "Queue">;
 }) {
   return (
     <span
@@ -283,6 +286,23 @@ function ActivityCount({
     >
       {icon ? <Icon name={icon} className="size-2.5" aria-hidden /> : null}
       {count}
+    </span>
+  );
+}
+
+/** Every child ever started, then the ones working now in brackets. */
+function ChildrenCount({ total, working }: { total: number; working: number }) {
+  return (
+    <span
+      aria-label={
+        working > 0
+          ? `${total} child agents, ${working} working`
+          : `${total} child agents`
+      }
+      className="flex shrink-0 items-center gap-0.5 rounded bg-muted px-1 font-mono text-2xs text-muted-foreground"
+    >
+      <Icon name="Bot" className="size-2.5" aria-hidden />
+      {working > 0 ? `${total}(${working})` : total}
     </span>
   );
 }

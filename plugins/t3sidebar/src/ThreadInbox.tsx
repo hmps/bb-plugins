@@ -28,6 +28,7 @@ import {
   attentionFirst,
   attentionRank,
   descendantSignals,
+  spawnedChildCounts,
   filterByProject,
   hideChildrenOfVisibleParents,
   isOnWorkingShelf,
@@ -88,6 +89,7 @@ export function ThreadInbox({
   // Computed over every thread, never the scoped list: a child spawned into
   // another project still works for the parent this list shows.
   const descendants = useMemo(() => descendantSignals(threads), [threads]);
+  const spawnedChildren = useMemo(() => spawnedChildCounts(threads), [threads]);
 
   // Each thread's tier as of the last committed render. Opening a thread can
   // mark it read in the same update that makes it active, so the hold must
@@ -252,6 +254,7 @@ export function ThreadInbox({
                     queuedMessages={queueCounts.get(thread.id) ?? 0}
                     workingChildren={descendants.get(thread.id)?.working ?? 0}
                     childrenNeedYou={descendants.get(thread.id)?.needsYou ?? 0}
+                    spawnedChildren={spawnedChildren.get(thread.id) ?? 0}
                   />
                 ))}
               </Shelf>
@@ -284,6 +287,7 @@ export function ThreadInbox({
                     queuedMessages={queueCounts.get(thread.id) ?? 0}
                     workingChildren={descendants.get(thread.id)?.working ?? 0}
                     childrenNeedYou={descendants.get(thread.id)?.needsYou ?? 0}
+                    spawnedChildren={spawnedChildren.get(thread.id) ?? 0}
                   />
                 ))}
               </CollapsibleShelf>
@@ -309,6 +313,7 @@ export function ThreadInbox({
                     queuedMessages={queueCounts.get(thread.id) ?? 0}
                     workingChildren={descendants.get(thread.id)?.working ?? 0}
                     childrenNeedYou={descendants.get(thread.id)?.needsYou ?? 0}
+                    spawnedChildren={spawnedChildren.get(thread.id) ?? 0}
                   />
                 ))}
               </Shelf>

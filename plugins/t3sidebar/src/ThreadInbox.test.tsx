@@ -484,7 +484,7 @@ describe("child thread rollup", () => {
     // The child never gets a row of its own; the parent counts it instead.
     expect(screen.queryByText("Child thread")).toBeNull();
     expect(
-      within(shelf).getByLabelText("1 child threads working"),
+      within(shelf).getByLabelText("1 child agents, 1 working"),
     ).toBeDefined();
     // The parent has no indicator of its own, so it borrows the spinner.
     expect(within(shelf).getByLabelText("Child thread working")).toBeDefined();
@@ -520,15 +520,33 @@ describe("child thread rollup", () => {
     const shelf = await screen.findByRole("region", { name: "Working" });
     fireEvent.click(within(shelf).getByRole("button"));
     expect(
-      within(shelf).getByLabelText("1 child threads working"),
+      within(shelf).getByLabelText("2 child agents, 1 working"),
     ).toBeDefined();
   });
 
   it("draws nothing for a parent whose children are at rest", async () => {
     render(withChild({}));
     expect(await screen.findByText("Parent thread")).toBeDefined();
-    expect(screen.queryByLabelText(/child threads working/)).toBeNull();
+    expect(screen.getByLabelText("1 child agents")).toBeDefined();
     expect(screen.getByLabelText("Settle thread")).toBeDefined();
+  });
+
+  it("counts the child agents a thread started, just before the provider", async () => {
+    render([
+      ...withChild({ isArchived: true }),
+      thread({ id: "thr_second", parentThreadId: "thr_parent" }),
+    ]);
+    const count = await screen.findByLabelText("2 child agents");
+    // The provider glyph box holds a labelled svg.
+    expect(
+      count.nextElementSibling?.querySelector('[aria-label="Codex"]'),
+    ).not.toBeNull();
+  });
+
+  it("draws no child count for a thread without children", async () => {
+    render([thread({ id: "thr_alone", title: "Alone" })]);
+    expect(await screen.findByText("Alone")).toBeDefined();
+    expect(screen.queryByLabelText(/child agents/)).toBeNull();
   });
 });
 

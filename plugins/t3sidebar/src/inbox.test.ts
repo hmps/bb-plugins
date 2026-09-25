@@ -12,6 +12,7 @@ import {
   partitionPinned,
   searchThreadsByTitle,
   sortByCreatedAtDescending,
+  spawnedChildCounts,
   threadDisplayTitle,
   visibleInboxThreads,
 } from "./inbox";
@@ -394,6 +395,34 @@ describe("descendantSignals", () => {
       thread({ id: "b", parentThreadId: "a" }),
     ]);
     expect(signals.get("b")).toEqual({ working: 1, needsYou: 0 });
+  });
+});
+
+describe("spawnedChildCounts", () => {
+  it("rolls every child up to its ancestors, archived ones included", () => {
+    const counts = spawnedChildCounts([
+      thread({ id: "parent" }),
+      thread({ id: "a", parentThreadId: "parent" }),
+      thread({ id: "b", parentThreadId: "parent", isArchived: true }),
+      thread({ id: "grandchild", parentThreadId: "a" }),
+    ]);
+    expect(counts.get("parent")).toBe(3);
+    expect(counts.get("a")).toBe(1);
+    expect(counts.get("grandchild")).toBeUndefined();
+  });
+
+  it("ignores a self-parented thread", () => {
+    const counts = spawnedChildCounts([thread({ id: "a", parentThreadId: "a" })]);
+    expect(counts.get("a")).toBeUndefined();
+  });
+
+  it("terminates on a cyclic parent chain", () => {
+    const counts = spawnedChildCounts([
+      thread({ id: "a", parentThreadId: "b" }),
+      thread({ id: "b", parentThreadId: "a" }),
+    ]);
+    expect(counts.get("a")).toBe(1);
+    expect(counts.get("b")).toBe(1);
   });
 });
 
