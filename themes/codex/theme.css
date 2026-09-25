@@ -68,9 +68,11 @@ html {
 /*
  * Chat column: 740px of text like Codex. bb's 760px column loses 48px to
  * padding (px-4 column + px-2 message), so 740 + 48 = 788px. The composer
- * shares the column width.
+ * shares the column width. bb adds scroll-bottom-anchor-content to the
+ * column only while it is scrolled to the bottom, so key off classes that
+ * stay; otherwise the column shrinks back to 760px on a scroll up.
  */
-.scroll-bottom-anchor-content.max-w-\[760px\],
+.mx-auto.flex-col.gap-2.pt-4.max-w-\[760px\],
 .chat-prompt-box.max-w-\[760px\] {
   max-width: 788px;
 }
@@ -108,6 +110,47 @@ form[data-promptbox] {
 [data-follow-up-composer-footer].max-h-6 {
   min-height: 36px;
   max-height: 36px;
+}
+
+/*
+ * Queue panel above the composer: inset 22px like the drawer, so it sits
+ * inside the composer's corners, with the drawer's 18px radius and no shadow.
+ */
+[data-promptbox-shell] section:has([data-queued-messages-scroll-frame]) {
+  margin-inline: 22px;
+  border-top-left-radius: 18px;
+  border-top-right-radius: 18px;
+  box-shadow: none;
+}
+/* The changes bar ("Committed · 3 files") above it: the same inset. */
+[data-promptbox-shell] section.rounded-lg.border.bg-surface-raised-solid {
+  margin-inline: 22px;
+}
+
+/*
+ * Light mode only: a white composer with a faint edge, not a grey fill.
+ * No shadow (the rule above removes it). The drawer keeps its grey
+ * (#f3f3f3). bb marks dark mode with html.dark.
+ */
+:root:not(.dark) form[data-promptbox] {
+  background-color: var(--canvas);
+  border-color: color-mix(in oklch, var(--ink) 12%, var(--canvas));
+}
+/* Send: a black circle with a white icon. */
+:root:not(.dark) [data-promptbox-submit-action] {
+  border-color: transparent;
+  border-radius: 9999px;
+  background-color: oklch(0% 0 0);
+  color: oklch(100% 0 0);
+}
+:root:not(.dark) [data-promptbox-shell] > form[data-promptbox] + div,
+:root:not(.dark) [data-follow-up-composer-footer] {
+  background-color: color-mix(in oklch, var(--ink) 6%, var(--canvas));
+}
+
+/* Light mode only: your message bubbles are a flat fill, no edge, like Codex. */
+:root:not(.dark) .group\/message .rounded-xl.border.border-border-seam.bg-surface-recessed {
+  border-color: transparent;
 }
 
 /*

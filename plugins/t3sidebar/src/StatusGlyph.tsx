@@ -116,13 +116,14 @@ export function StatusGlyph({
       //
       // Vivid on purpose: this is the one glyph that says "come back here",
       // and bb's muted timeline blue did not pull the eye across a long list.
+      // Orange-red in light mode: blue does not stand out on a white sidebar.
       // A soft halo doubles its footprint without moving the column.
       return (
         <span
           aria-label={aria}
           className={cn("flex items-center justify-center", shared)}
         >
-          <span className="size-1.5 rounded-full bg-[oklch(0.68_0.2_262)] shadow-[0_0_0_3px_oklch(0.68_0.2_262/0.28)]" />
+          <span className="size-1.5 rounded-full bg-[oklch(0.63_0.21_35)] shadow-[0_0_0_3px_oklch(0.63_0.21_35/0.24)] dark:bg-[oklch(0.68_0.2_262)] dark:shadow-[0_0_0_3px_oklch(0.68_0.2_262/0.28)]" />
         </span>
       );
     case "none":
@@ -151,10 +152,10 @@ function ShineIcon({
 }
 
 /**
- * The notification for a finished thread you have not read: a blue bar on
- * the row's left edge. The row must be positioned. Vivid on purpose: this is
- * the one mark that says "come back here", and it has to pull the eye across
- * a long list.
+ * The notification for a finished thread you have not read: a bar on the
+ * row's left edge, orange-red in light mode and blue in dark mode. The row
+ * must be positioned. Vivid on purpose: this is the one mark that says
+ * "come back here", and it has to pull the eye across a long list.
  */
 export function UnreadBar({
   indicator,
@@ -168,7 +169,7 @@ export function UnreadBar({
     <span
       role="img"
       aria-label={label ?? undefined}
-      className="pointer-events-none absolute inset-y-2.5 left-0 w-[3px] rounded-r-full bg-[oklch(0.68_0.2_262)]"
+      className="pointer-events-none absolute inset-y-2.5 left-0 w-[3px] rounded-r-full bg-[oklch(0.63_0.21_35)] dark:bg-[oklch(0.68_0.2_262)]"
     />
   );
 }
