@@ -756,22 +756,13 @@ describe("card metadata", () => {
     expect(await screen.findByLabelText("some-new-agent")).toBeDefined();
   });
 
-  // A personal-project thread has a machine but no worktree, so the machine
-  // takes the branch's place instead of leaving the line blank.
-  it("shows the machine when the thread has no branch", async () => {
-    render([
-      thread({
-        id: "thr_m",
-        host: { id: "host_1", name: "Sawyer's MacBook" },
-      }),
-    ]);
-    expect(await screen.findByText("Sawyer's MacBook")).toBeDefined();
-  });
-
-  it("prefers the branch over the machine when both exist", async () => {
+  // Two lines: the project badge shares the bottom line with the counts and
+  // the glyph. The branch and the machine are not shown.
+  it("puts the project badge on the glyph's line, without branch or machine", async () => {
     render([
       thread({
         id: "thr_b",
+        providerId: "claude-code",
         host: { id: "host_1", name: "Sawyer's MacBook" },
         environment: {
           id: "env_1",
@@ -781,7 +772,10 @@ describe("card metadata", () => {
         },
       }),
     ]);
-    expect(await screen.findByText("bb/feature")).toBeDefined();
+    const badge = await screen.findByText("bb", { selector: "span.rounded" });
+    const glyph = await screen.findByLabelText("Claude Code");
+    expect(badge.closest("div")?.contains(glyph)).toBe(true);
+    expect(screen.queryByText("bb/feature")).toBeNull();
     expect(screen.queryByText("Sawyer's MacBook")).toBeNull();
   });
 

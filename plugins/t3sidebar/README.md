@@ -36,10 +36,10 @@ Inside each tier the order stays newest first.
 
 Four shelves:
 
-- **Inbox** — three-line cards: title and one fixed-width status slot on the
-  first line; the project badge on the second; then branch (or the machine,
-  when a thread has no worktree), activity counts, the pull-request number,
-  and the agent glyph. Pinned threads sit above.
+- **Inbox** — two-line cards: title and one fixed-width status slot on the
+  first line; then the project badge on the left and activity counts, the
+  pull-request number, the child-agent count, and the agent glyph on the
+  right. Pinned threads sit above.
 
   The project reads as a coloured badge. Give each project its own colour in
   the plugin's settings, under **Project colours**; a project with no colour
@@ -54,7 +54,7 @@ Four shelves:
   are drawn vivid (blue with a halo, amber) so they pull the eye down a long
   list; the rest stay muted.
 
-  The third line also counts what is queued: a small bubble-and-clock badge
+  The second line also counts what is queued: a small bubble-and-clock badge
   with the number of messages waiting in the thread's queue. The sidebar's
   thread view has no queue field, so the plugin's backend reads it over the
   SDK once per thread and then pushes changes as bb reports them.

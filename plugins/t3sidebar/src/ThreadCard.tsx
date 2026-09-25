@@ -15,8 +15,8 @@ import { threadDisplayTitle } from "./inbox";
 import { resolveSnoozePresets } from "./lifecycle";
 
 /**
- * One thread as a three-line card: title and status, the project badge, then
- * branch and activity. The card is the whole point of this sidebar — status lives in the
+ * One thread as a two-line card: title and status, then the project badge
+ * and activity. The card is the whole point of this sidebar — status lives in the
  * row instead of in its position, which is what lets the list stay still.
  *
  * The row is a positioned container with a full-bleed anchor UNDER the
@@ -180,35 +180,23 @@ export function ThreadCard({
               </span>
             )}
           </div>
-          {/* The project, as a badge in the colour the user gave it: the row
-              says which project it belongs to before it is read. */}
-          {projectName ? (
-            <div className="pointer-events-none relative mt-0.5 flex h-4 items-center">
-              <span
-                className={cn(
-                  "max-w-full truncate rounded px-1 text-2xs font-medium",
-                  projectColor(projectColorId).badgeClass,
-                )}
-              >
-                {projectName}
-              </span>
-            </div>
-          ) : null}
-          <div className="pointer-events-none relative mt-0.5 flex h-4 items-center gap-1.5 text-2xs text-muted-foreground">
-            {/* A thread without a worktree still runs somewhere, so the
-                machine takes the branch's place rather than leaving the line
-                blank. */}
-            {thread.environment?.branchName ? (
-              <span className="min-w-0 flex-1 truncate font-mono">
-                {thread.environment.branchName}
-              </span>
-            ) : thread.host ? (
-              <span className="min-w-0 flex-1 truncate">
-                {thread.host.name}
-              </span>
-            ) : (
-              <span className="flex-1" />
-            )}
+          <div className="pointer-events-none relative mt-1.5 flex h-4 items-center gap-1.5 text-2xs text-muted-foreground">
+            {/* The project, as a badge in the colour the user gave it: the row
+                says which project it belongs to before it is read. The
+                badge sits in a flexible cell, so the counts keep the right
+                edge. */}
+            <span className="flex min-w-0 flex-1">
+              {projectName ? (
+                <span
+                  className={cn(
+                    "max-w-full truncate rounded px-1 font-medium",
+                    projectColor(projectColorId).badgeClass,
+                  )}
+                >
+                  {projectName}
+                </span>
+              ) : null}
+            </span>
             {thread.activity.workflows > 0 ? (
               <ActivityCount
                 label="workflows"
