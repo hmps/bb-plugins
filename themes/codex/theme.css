@@ -111,15 +111,16 @@ form[data-promptbox] {
 }
 
 /*
- * Better Sidebar (t3sidebar) cards: bolder titles. The plugin owns the gap.
- * The plugin marks unread with weight alone, so unread steps up to 700.
+ * Better Sidebar (t3sidebar) cards: 13px titles. The plugin marks unread
+ * with weight alone, so read titles stay regular (400) and unread titles
+ * step up to 600. A bold title on every card hides which ones are new.
  */
 .group\/card span.truncate.text-sm {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 400;
 }
 .group\/card span.truncate.text-sm.font-medium {
-  font-weight: 700;
+  font-weight: 600;
 }
 
 /*
