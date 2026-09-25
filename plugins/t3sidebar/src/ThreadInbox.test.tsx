@@ -387,6 +387,75 @@ describe("parking threads", () => {
     await waitFor(() => expect(settled).toBe("thr_park"));
   });
 
+  // Touch screens have no hover: the park actions hide behind a left swipe.
+  describe("swipe to reveal", () => {
+    const drag = (
+      target: Element,
+      pointerType: string,
+      to: { x: number; y: number },
+    ) => {
+      fireEvent.pointerDown(target, { pointerType, clientX: 200, clientY: 20 });
+      fireEvent.pointerMove(target, {
+        pointerType,
+        clientX: (200 + to.x) / 2,
+        clientY: (20 + to.y) / 2,
+      });
+      fireEvent.pointerMove(target, { pointerType, clientX: to.x, clientY: to.y });
+      fireEvent.pointerUp(target, { pointerType, clientX: to.x, clientY: to.y });
+    };
+    const link = async () =>
+      (await screen.findByLabelText("Quiet")).closest("a") as Element;
+
+    it("reveals the tray on a left swipe, and its Settle settles", async () => {
+      let settled: string | null = null;
+      renderSlot(inbox, listProps, {
+        sidebarThreads: {
+          status: "ready",
+          threads: [thread({ id: "thr_park", title: "Quiet" })],
+          projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
+        },
+        rpc: {
+          listProjectColors: () => ({ projects: [] }),
+          listLifecycle: () => ({ rows: [] }),
+          settle: (input) => {
+            settled = (input as { threadId: string }).threadId;
+            return { ok: true };
+          },
+        },
+      });
+      const row = await link();
+      expect(screen.queryByRole("button", { name: "Settle" })).toBeNull();
+      drag(row, "touch", { x: 40, y: 24 });
+      fireEvent.click(await screen.findByRole("button", { name: "Settle" }));
+      await waitFor(() => expect(settled).toBe("thr_park"));
+    });
+
+    it("keeps the tray shut for a mouse drag", async () => {
+      render([thread({ id: "thr_park", title: "Quiet" })]);
+      drag(await link(), "mouse", { x: 40, y: 24 });
+      expect(screen.queryByRole("button", { name: "Settle" })).toBeNull();
+    });
+
+    it("leaves a vertical touch move to scrolling", async () => {
+      render([thread({ id: "thr_park", title: "Quiet" })]);
+      drag(await link(), "touch", { x: 190, y: 180 });
+      expect(screen.queryByRole("button", { name: "Settle" })).toBeNull();
+    });
+
+    it("closes the tray on a tap of the open card", async () => {
+      render([thread({ id: "thr_park", title: "Quiet" })]);
+      const row = await link();
+      drag(row, "touch", { x: 40, y: 24 });
+      expect(await screen.findByRole("button", { name: "Settle" })).toBeDefined();
+      fireEvent.pointerDown(row, { pointerType: "touch", clientX: 100, clientY: 20 });
+      fireEvent.pointerUp(row, { pointerType: "touch", clientX: 100, clientY: 20 });
+      fireEvent.click(row);
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: "Settle" })).toBeNull(),
+      );
+    });
+  });
+
   it("shows the wake countdown on a snoozed row", async () => {
     const wakeAt = Date.now() + 2 * 60 * 60 * 1000;
     renderSlot(inbox, listProps, {

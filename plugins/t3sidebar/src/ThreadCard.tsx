@@ -13,10 +13,15 @@ import { ProviderGlyph } from "./ProviderGlyph";
 import { STATUS_SLOT_CLASS, StatusOrTime } from "./StatusSlot";
 import { threadDisplayTitle } from "./inbox";
 import { resolveSnoozePresets } from "./lifecycle";
+import { useSwipeReveal } from "./useSwipeReveal";
 
 /** One look for every badge on the card's second line — project, counts,
     and PR — so the line reads as one set. Tabular digits keep counts from
     changing width as they tick. */
+/** Three swipe actions, each a comfortable thumb target. */
+const SWIPE_ACTION_WIDTH = 64;
+const SWIPE_TRAY_WIDTH = SWIPE_ACTION_WIDTH * 3;
+
 const BADGE_CLASS =
   "rounded px-1.5 text-[11px] leading-4 font-medium tabular-nums";
 
@@ -81,6 +86,8 @@ export function ThreadCard({
 
   const snoozeUntilTomorrow = () =>
     onSnooze(resolveSnoozePresets(new Date())[2]!.snoozedUntil);
+  // Touch screens have no hover: the park actions hide behind a left swipe.
+  const swipe = useSwipeReveal(SWIPE_TRAY_WIDTH, canPark && !archiving);
 
   return (
     <RowContextMenu
@@ -98,146 +105,227 @@ export function ThreadCard({
           : []
       }
     >
-      <li className="list-none" aria-busy={archiving || undefined}>
+      <li
+        ref={swipe.rootRef}
+        className="relative list-none overflow-hidden"
+        aria-busy={archiving || undefined}
+      >
+        {swipe.trayVisible ? (
+          <div
+            className="absolute inset-y-0 right-0 flex"
+            style={{ width: SWIPE_TRAY_WIDTH }}
+          >
+            <SwipeAction
+              label="Snooze"
+              icon="Clock"
+              className="bg-amber-700"
+              onActivate={() => {
+                swipe.close();
+                snoozeUntilTomorrow();
+              }}
+            />
+            <SwipeAction
+              label="Archive"
+              icon="Archive"
+              className="bg-sky-800"
+              onActivate={() => {
+                swipe.close();
+                onSettleAndArchive();
+              }}
+            />
+            <SwipeAction
+              label="Settle"
+              icon="Check"
+              className="bg-emerald-800"
+              onActivate={() => {
+                swipe.close();
+                onSettle();
+              }}
+            />
+          </div>
+        ) : null}
+        {/* The sliding layer is opaque, so the tray stays hidden until the
+            card moves off it. pan-y leaves vertical scrolling to the
+            browser and sideways moves to the swipe. data-no-sidebar-swipe
+            is bb's opt-out: without it, bb's mobile drawer takes a left
+            swipe as "close the sidebar". */}
         <div
+          {...swipe.handlers}
+          data-no-sidebar-swipe={canPark && !archiving ? "" : undefined}
           className={cn(
-            // Each card is a box in the shelf's grid: a rule below every card, and
-            // the shelf draws the outer edge.
-            "group/card relative border-b border-sidebar-border px-4 py-3 transition-colors",
-            isActive ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/60",
-            // A thread open in another pane gets a weaker tint than the active
-            // row, so the two states stay distinguishable.
-            !isActive && layout !== null && "bg-sidebar-accent/30",
-            // The whole card goes inert, so neither a second archive nor a
-            // navigation to a thread on its way out can land.
-            archiving && "pointer-events-none opacity-60",
+            "relative touch-pan-y bg-sidebar",
+            !swipe.dragging && "transition-transform duration-200 ease-out",
           )}
+          style={
+            swipe.offset ? { transform: `translateX(${swipe.offset}px)` } : undefined
+          }
         >
-          <a
-            // Both attributes, or bb's nine thread shortcuts stop finding rows.
-            data-sidebar-thread-shortcut-target=""
-            data-sidebar-thread-id={thread.id}
-            href="#"
-            aria-label={threadDisplayTitle(thread)}
-            tabIndex={archiving ? -1 : undefined}
-            {...splitProps}
-            onClick={(event) => {
-              event.preventDefault();
-              actions.open(thread.id, {
-                split: event.metaKey || event.ctrlKey,
-              });
-              onNavigate();
-            }}
-            className="absolute inset-0 cursor-pointer"
-          />
-          <div className="pointer-events-none relative flex min-h-5 items-center gap-1.5">
-            <span
-              className={cn(
-                // Weight alone carries unread. Fading the title — or the whole
-                // card — makes a thread at rest read as disabled, and at rest
-                // is what most of the list is most of the time.
-                "min-w-0 flex-1 truncate text-sm text-foreground",
-                thread.isUnread && "font-medium",
-              )}
-            >
-              {threadDisplayTitle(thread)}
-            </span>
-            {/* Status at rest, park actions on hover. Only the status yields,
-                so the title never shifts. A touch screen has no hover, so
-                there the buttons stay on and the status keeps its slot. */}
-            {archiving ? (
-              <span className={cn(STATUS_SLOT_CLASS, "relative")}>
-                <Icon
-                  name="Loading"
-                  aria-label="Archiving thread"
-                  className="size-3.5 animate-spin text-muted-foreground"
-                />
-              </span>
-            ) : canPark ? (
-              <span className="pointer-events-auto hidden items-center gap-0.5 group-hover/card:flex pointer-coarse:flex">
-                <ParkButton
-                  label="Snooze until tomorrow"
-                  icon="Clock"
-                  onActivate={snoozeUntilTomorrow}
-                />
-                <ParkButton
-                  label="Settle and archive thread"
-                  icon="Archive"
-                  onActivate={onSettleAndArchive}
-                />
-                <ParkButton
-                  label="Settle thread"
-                  icon="Check"
-                  onActivate={onSettle}
-                />
-              </span>
-            ) : null}
-            {archiving ? null : (
+          <div
+            className={cn(
+              // Each card is a box in the shelf's grid: a rule below every card, and
+              // the shelf draws the outer edge.
+              "group/card relative border-b border-sidebar-border px-4 py-3 transition-colors",
+              isActive ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/60",
+              // A thread open in another pane gets a weaker tint than the active
+              // row, so the two states stay distinguishable.
+              !isActive && layout !== null && "bg-sidebar-accent/30",
+              // The whole card goes inert, so neither a second archive nor a
+              // navigation to a thread on its way out can land.
+              archiving && "pointer-events-none opacity-60",
+            )}
+          >
+            <a
+              // Both attributes, or bb's nine thread shortcuts stop finding rows.
+              data-sidebar-thread-shortcut-target=""
+              data-sidebar-thread-id={thread.id}
+              href="#"
+              aria-label={threadDisplayTitle(thread)}
+              tabIndex={archiving ? -1 : undefined}
+              {...splitProps}
+              onClick={(event) => {
+                event.preventDefault();
+                actions.open(thread.id, {
+                  split: event.metaKey || event.ctrlKey,
+                });
+                onNavigate();
+              }}
+              className="absolute inset-0 cursor-pointer"
+            />
+            <div className="pointer-events-none relative flex min-h-5 items-center gap-1.5">
               <span
                 className={cn(
-                  STATUS_SLOT_CLASS,
-                  canPark && "pointer-fine:group-hover/card:hidden",
+                  // Weight alone carries unread. Fading the title — or the whole
+                  // card — makes a thread at rest read as disabled, and at rest
+                  // is what most of the list is most of the time.
+                  "min-w-0 flex-1 truncate text-sm text-foreground",
+                  thread.isUnread && "font-medium",
                 )}
               >
-                <StatusOrTime
-                  thread={thread}
-                  now={now}
-                  workingChildren={workingChildren}
-                  childrenNeedYou={childrenNeedYou}
-                />
+                {threadDisplayTitle(thread)}
               </span>
-            )}
-          </div>
-          <div className="pointer-events-none relative mt-1.5 flex h-4 items-center gap-1.5 text-2xs text-muted-foreground">
-            {/* The project, as a badge in the colour the user gave it: the row
-                says which project it belongs to before it is read. The
-                badge sits in a flexible cell, so the counts keep the right
-                edge. */}
-            <span className="flex min-w-0 flex-1">
-              {projectName ? (
-                <span
-                  className={cn(
-                    BADGE_CLASS,
-                    "max-w-full truncate",
-                    projectColor(projectColorId).badgeClass,
-                  )}
-                >
-                  {projectName}
+              {/* Status at rest, park actions on hover. Only the status yields,
+                  so the title never shifts. A touch screen has no hover: there
+                  the actions sit behind a left swipe instead. */}
+              {archiving ? (
+                <span className={cn(STATUS_SLOT_CLASS, "relative")}>
+                  <Icon
+                    name="Loading"
+                    aria-label="Archiving thread"
+                    className="size-3.5 animate-spin text-muted-foreground"
+                  />
+                </span>
+              ) : canPark ? (
+                <span className="pointer-events-auto hidden items-center gap-0.5 pointer-fine:group-hover/card:flex">
+                  <ParkButton
+                    label="Snooze until tomorrow"
+                    icon="Clock"
+                    onActivate={snoozeUntilTomorrow}
+                  />
+                  <ParkButton
+                    label="Settle and archive thread"
+                    icon="Archive"
+                    onActivate={onSettleAndArchive}
+                  />
+                  <ParkButton
+                    label="Settle thread"
+                    icon="Check"
+                    onActivate={onSettle}
+                  />
                 </span>
               ) : null}
-            </span>
-            {thread.activity.workflows > 0 ? (
-              <ActivityCount
-                label="workflows"
-                count={thread.activity.workflows}
-              />
-            ) : null}
-            {thread.activity.backgroundAgents > 0 ? (
-              <ActivityCount
-                label="background agents"
-                count={thread.activity.backgroundAgents}
-              />
-            ) : null}
-            {queuedMessages > 0 ? (
-              <ActivityCount
-                label="queued messages"
-                count={queuedMessages}
-                icon="Queue"
-              />
-            ) : null}
-            {pullRequest ? <PullRequestBadge pullRequest={pullRequest} /> : null}
-            {spawnedChildren > 0 ? (
-              <ChildrenCount
-                total={spawnedChildren}
-                working={workingChildren}
-              />
-            ) : null}
-            {/* Always drawn, so the line has a fixed right edge. */}
-            <ProviderGlyph providerId={thread.providerId} />
+              {archiving ? null : (
+                <span
+                  className={cn(
+                    STATUS_SLOT_CLASS,
+                    canPark && "pointer-fine:group-hover/card:hidden",
+                  )}
+                >
+                  <StatusOrTime
+                    thread={thread}
+                    now={now}
+                    workingChildren={workingChildren}
+                    childrenNeedYou={childrenNeedYou}
+                  />
+                </span>
+              )}
+            </div>
+            <div className="pointer-events-none relative mt-1.5 flex h-4 items-center gap-1.5 text-2xs text-muted-foreground">
+              {/* The project, as a badge in the colour the user gave it: the row
+                  says which project it belongs to before it is read. The
+                  badge sits in a flexible cell, so the counts keep the right
+                  edge. */}
+              <span className="flex min-w-0 flex-1">
+                {projectName ? (
+                  <span
+                    className={cn(
+                      BADGE_CLASS,
+                      "max-w-full truncate",
+                      projectColor(projectColorId).badgeClass,
+                    )}
+                  >
+                    {projectName}
+                  </span>
+                ) : null}
+              </span>
+              {thread.activity.workflows > 0 ? (
+                <ActivityCount
+                  label="workflows"
+                  count={thread.activity.workflows}
+                />
+              ) : null}
+              {thread.activity.backgroundAgents > 0 ? (
+                <ActivityCount
+                  label="background agents"
+                  count={thread.activity.backgroundAgents}
+                />
+              ) : null}
+              {queuedMessages > 0 ? (
+                <ActivityCount
+                  label="queued messages"
+                  count={queuedMessages}
+                  icon="Queue"
+                />
+              ) : null}
+              {pullRequest ? <PullRequestBadge pullRequest={pullRequest} /> : null}
+              {spawnedChildren > 0 ? (
+                <ChildrenCount
+                  total={spawnedChildren}
+                  working={workingChildren}
+                />
+              ) : null}
+              {/* Always drawn, so the line has a fixed right edge. */}
+              <ProviderGlyph providerId={thread.providerId} />
+            </div>
           </div>
         </div>
       </li>
     </RowContextMenu>
+  );
+}
+
+function SwipeAction({
+  label,
+  icon,
+  className,
+  onActivate,
+}: {
+  label: string;
+  icon: Extract<IconName, "Clock" | "Check" | "Archive">;
+  className: string;
+  onActivate: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onActivate}
+      className={cn(
+        "flex flex-1 flex-col items-center justify-center gap-1 text-2xs font-medium text-white",
+        className,
+      )}
+    >
+      <Icon name={icon} className="size-4" aria-hidden />
+      {label}
+    </button>
   );
 }
 

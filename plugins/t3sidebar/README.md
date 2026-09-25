@@ -61,8 +61,9 @@ Four shelves:
 
   Snooze, Settle, and **Settle and archive** sit in the status slot on hover.
   The last action records the settlement, then archives the BB thread. A touch
-  screen has no hover, so the controls stay on, and a long-press on any row
-  opens the menu with the same actions.
+  screen has no hover: swipe a card left to show Snooze, Archive, and Settle,
+  and tap anywhere else to close them. A long-press on any row opens the menu
+  with the same actions.
 
 - **Working** — live work that does not need you, folded to one line above
   the inbox. Open it and the threads show as full cards, the same as the inbox. A thread that starts working leaves the inbox for this shelf, and comes
