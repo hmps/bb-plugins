@@ -182,6 +182,15 @@ form[data-promptbox] {
   }
 }
 
+/* Mobile conversation text: one pixel larger than desktop. */
+@media (width < 48rem) {
+  .group\/message.text-sm,
+  .group\/message .text-sm.leading-relaxed,
+  .border-border-seam.whitespace-pre-wrap.text-sm {
+    font-size: 15px;
+  }
+}
+
 /* Keep bb's 16px composer on phones: iOS zooms in on inputs under 16px. */
 @media (width < 48rem) and (pointer: coarse) {
   [data-promptbox-editor-scroll] {
