@@ -28,6 +28,10 @@
       "source": "./plugins/mobile-large-editor"
     },
     {
+      "name": "mobile-composer-bars",
+      "source": "./plugins/mobile-composer-bars"
+    },
+    {
       "name": "pr-digest",
       "source": "./plugins/pr-digest"
     },

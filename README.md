@@ -12,6 +12,7 @@ bb plugin install t3sidebar@hmps
 bb plugin install usage-tracker@hmps
 bb plugin install ios-status-bar@hmps
 bb plugin install mobile-large-editor@hmps
+bb plugin install mobile-composer-bars@hmps
 bb plugin install github-plus@hmps
 bb plugin install quiet-push@hmps
 ```
@@ -28,7 +29,8 @@ that `marketplace.json` lists.
 | [t3sidebar](plugins/t3sidebar) | Fork of bb's t3sidebar example with touch support for Snooze and Settle. |
 | [usage-tracker](plugins/usage-tracker) | Codex and Claude usage pace, Codex reset credits, and model-scoped quota rows such as Fable. |
 | [ios-status-bar](plugins/ios-status-bar) | Paints the iOS Safari status bar area with the app background instead of black. |
-| [mobile-large-editor](plugins/mobile-large-editor) | Adds the "Make prompt box larger" toggle to thread composers on mobile. |
+| [mobile-large-editor](plugins/mobile-large-editor) | Codex-style thread composer on mobile: one row while empty, grows to five rows, and a corner button opens a full-height editor. |
+| [mobile-composer-bars](plugins/mobile-composer-bars) | Hides the status bars above the thread composer on mobile behind a toggle. |
 | [github-plus](plugins/github-plus) | Fork of bb's builtin github plugin with an editable review prompt and provider/model picker before an agent review starts. |
 | [quiet-push](plugins/quiet-push) | Lets an agent mute the push notification for the turn it is about to end. |
 

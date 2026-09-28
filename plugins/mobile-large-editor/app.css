@@ -1,5 +1,54 @@
 /* Only active while the content script has put .bb-mobile-large-editor on
-   <html>, so reload, disable, and removal restore stock behavior at once. */
+   <html>, so reload, disable, and removal restore stock behavior at once.
+   Every rule is for the thread follow-up composer on compact viewports, in
+   the expanded layout (not the one-line compact card, not real zen mode).
+   The editor's stock sizes are inline styles, hence !important. */
+
+@media (max-width: 767px) {
+  /* One row while empty; grows with the text up to five rows, then scrolls.
+     ProseMirror rows are 1.7em; the editor pads 12px top and 4px bottom. */
+  html.bb-mobile-large-editor
+    [data-follow-up-composer]
+    [data-promptbox]:not([data-promptbox-compact]):not([data-promptbox-zen])
+    [data-promptbox-editor-scroll] {
+    min-height: 0 !important;
+    max-height: calc(5 * 1.7em + 1rem) !important;
+  }
+
+  /* The long placeholder wraps to two rows; use the short one. */
+  html.bb-mobile-large-editor
+    [data-follow-up-composer]
+    .ProseMirror
+    p.is-editor-empty:first-child::before {
+    content: "Ask a follow-up";
+  }
+
+  /* Expand button in the top-right corner of the editor. The action row is
+     position: relative and the actions group has a translate (which also
+     makes a containing block; the CSS build drops a paired transform: none,
+     so set translate alone). Clear both so the button anchors to the
+     prompt box card. */
+  html.bb-mobile-large-editor
+    [data-follow-up-composer]
+    [data-promptbox]:not([data-promptbox-compact]):not([data-promptbox-zen])
+    [data-promptbox-action-row]:has(.bb-mobile-large-editor-toggle) {
+    position: static;
+  }
+  html.bb-mobile-large-editor
+    [data-follow-up-composer]
+    [data-promptbox-standard-actions]:has(.bb-mobile-large-editor-toggle) {
+    translate: none;
+  }
+  html.bb-mobile-large-editor [data-follow-up-composer] .bb-mobile-large-editor-toggle {
+    position: absolute;
+    top: 0.375rem;
+    right: 0.375rem;
+    z-index: 1;
+  }
+  html.bb-mobile-large-editor .bb-mobile-large-editor-toggle[data-idle] {
+    display: none;
+  }
+}
 
 /* Toggle button: a ghost icon button that matches the stock composer actions
    (h-8 on fine pointers, h-10 on coarse pointers under 768px). */
@@ -25,10 +74,6 @@ html.bb-mobile-large-editor .bb-mobile-large-editor-toggle:hover {
   background: var(--state-hover);
   color: var(--foreground);
 }
-html.bb-mobile-large-editor .bb-mobile-large-editor-toggle[aria-pressed="true"] {
-  background: var(--state-active);
-  color: var(--foreground);
-}
 @media (max-width: 767px) and (pointer: coarse) {
   html.bb-mobile-large-editor .bb-mobile-large-editor-toggle {
     height: 2.5rem;
@@ -36,19 +81,27 @@ html.bb-mobile-large-editor .bb-mobile-large-editor-toggle[aria-pressed="true"] 
   }
 }
 
-/* Large mode. The stock thread zen mode sizes the card to 50dvh; on mobile the
-   keyboard can cover most of that, so size against the visible shell height
-   bb publishes (--bb-shell-height follows the visual viewport while the
-   keyboard is open). Compact (one-line, unfocused) and real zen layouts are
-   left alone. The editor's stock sizes are inline styles, hence !important. */
+/* Large mode: the editor fills the visible app shell, like Codex's
+   full-screen editor. bb publishes --bb-shell-height, which follows the
+   visual viewport while the keyboard is open. The rest of the shell is the
+   safe-area inset, the 48px header, the 54px action row, the card borders,
+   and the 16px bottom padding, rounded up to 128px. The status bars above
+   the composer are hidden so they do not push the card off the screen. */
 @media (max-width: 767px) {
   html.bb-mobile-large-editor-active
     [data-follow-up-composer]
     [data-promptbox]:not([data-promptbox-compact]):not([data-promptbox-zen])
     [data-promptbox-editor-scroll] {
-    --bb-mobile-large-editor-height: calc(var(--bb-shell-height, 100dvh) * 0.5);
+    --bb-mobile-large-editor-height: calc(
+      var(--bb-shell-height, 100dvh) - env(safe-area-inset-top, 0px) - 128px
+    );
     height: var(--bb-mobile-large-editor-height) !important;
     min-height: var(--bb-mobile-large-editor-height) !important;
     max-height: var(--bb-mobile-large-editor-height) !important;
+  }
+  html.bb-mobile-large-editor-active
+    [data-promptbox-shell]:has([data-follow-up-composer])
+    > div:not([data-follow-up-composer-anchor]) {
+    display: none;
   }
 }

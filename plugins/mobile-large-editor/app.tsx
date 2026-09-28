@@ -1,23 +1,29 @@
 // bb-plugin-mobile-large-editor — frontend entry.
 //
-// bb's prompt box has a "Make prompt box larger" (zen mode) toggle, but the
-// thread follow-up composer hides it on compact viewports (<= 767px): the
-// mobile composer expands by focus and receives a `compact` config, and
-// `enterZenMode` bails out when that config is set. The plugin SDK has no way
-// to flip zen mode, so this plugin reproduces the part that matters:
-//   1. A composer action button (host-rendered next to the mic/send buttons)
-//      that only shows on compact viewports in the expanded layout.
-//   2. A class on <html> that, via app.css, gives the follow-up editor the
-//      zen height (half the visible app shell) and lets it scroll.
-// The mode is transient, like the stock thread zen mode: it resets when a
+// A Codex-style thread composer on compact viewports (<= 767px):
+//   1. While empty, the editor is one row high with a short placeholder. It
+//      grows with the text up to five rows, then scrolls (app.css).
+//   2. At five rows, an expand button shows in the top-right corner of the
+//      editor. It is a composer action (host-rendered in the action row) that
+//      app.css moves to the corner.
+//   3. Large mode fills the visible app shell with the editor, like Codex's
+//      full-screen editor. The same corner button collapses it.
+// bb has its own zen mode ("Make prompt box larger"), but the thread follow-up
+// composer hides it on compact viewports: the mobile composer receives a
+// `compact` config and `enterZenMode` bails out when it is set. The plugin SDK
+// has no way to flip zen mode, so a class on <html> drives large mode instead.
+// Large mode is transient, like the stock thread zen mode: it resets when a
 // message is submitted. Enter already inserts a newline on coarse pointers,
 // so no key handling changes are needed.
-import { useEffect, useSyncExternalStore, type ReactElement } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactElement } from "react";
 import { definePluginApp, useComposerView } from "@get-bb/plugin-sdk/app";
 import "./app.css";
 
 const ROOT_CLASS = "bb-mobile-large-editor";
 const ACTIVE_CLASS = "bb-mobile-large-editor-active";
+// The editor grows up to this many rows, then scrolls (app.css) and shows the
+// toggle.
+const MAX_ROWS = 5;
 // Mirrors COMPACT_VIEWPORT_QUERY in @bb/shared-ui.
 const COMPACT_VIEWPORT_QUERY = "(max-width: 767px)";
 
@@ -78,11 +84,31 @@ function MinimizeIcon(): ReactElement {
   );
 }
 
+// Rows of text in the editor, from the ProseMirror height and line height.
+function useEditorRows(anchor: HTMLElement | null): number {
+  const [rows, setRows] = useState(1);
+  useEffect(() => {
+    const editor = anchor?.closest("form[data-promptbox]")?.querySelector<HTMLElement>(".ProseMirror");
+    if (!editor) return;
+    const update = () => {
+      const lineHeight = parseFloat(getComputedStyle(editor).lineHeight) || 1;
+      setRows(Math.max(1, Math.round(editor.getBoundingClientRect().height / lineHeight)));
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(editor);
+    return () => observer.disconnect();
+  }, [anchor]);
+  return rows;
+}
+
 function LargeEditorToggle(): ReactElement | null {
   const view = useComposerView();
   const isActive = useActive();
   const isCompactViewport = useMediaQuery(COMPACT_VIEWPORT_QUERY);
   const isSubmitting = view.run.isSubmitting;
+  const [button, setButton] = useState<HTMLButtonElement | null>(null);
+  const rows = useEditorRows(button);
 
   // Stock thread zen mode resets on submit (`resetOnSubmit: true`).
   useEffect(() => {
@@ -95,8 +121,12 @@ function LargeEditorToggle(): ReactElement | null {
 
   return (
     <button
+      ref={setButton}
       type="button"
       className="bb-mobile-large-editor-toggle"
+      // Below the row cap the button stays mounted but invisible (app.css):
+      // the row count needs a mounted node to find the editor.
+      data-idle={!isActive && rows < MAX_ROWS ? "" : undefined}
       aria-pressed={isActive}
       aria-label={isActive ? "Make prompt box smaller" : "Make prompt box larger"}
       title={isActive ? "Make prompt box smaller" : "Make prompt box larger"}
