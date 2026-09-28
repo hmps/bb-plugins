@@ -1,0 +1,17 @@
+/* Voice recording with an empty editor: only the recording bar shows, so the
+   card is one row high. The empty text row above it adds nothing. bb makes
+   the editor read-only while it records and drops the is-editor-empty class,
+   so match the empty paragraph by its markup. */
+@media (max-width: 767px) {
+  html.bb-mobile-fixes
+    [data-follow-up-composer]
+    [data-promptbox]:not([data-promptbox-compact]):not([data-promptbox-zen]):has(
+      [data-promptbox-voice-controls]:not([aria-hidden])
+    ):has(.ProseMirror > p:only-child > br.ProseMirror-trailingBreak:only-child)
+    [data-promptbox-editor-scroll] {
+    min-height: 0 !important;
+    max-height: 0 !important;
+    padding-block: 0;
+    overflow: hidden;
+  }
+}

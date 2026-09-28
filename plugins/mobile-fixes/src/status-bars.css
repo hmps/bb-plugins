@@ -1,0 +1,42 @@
+/* Hide the status bars above the thread composer on compact viewports:
+   background commands, child threads, parent thread, changes. The
+   queued-messages panel stays. Plugin slots (display: contents) stay too. */
+@media (max-width: 767px) {
+  html.bb-mobile-fixes:not(.bb-mobile-fixes-bars-open)
+    [data-promptbox-shell]
+    > div:not([data-follow-up-composer-anchor])
+    > section:not(:has([data-queued-messages-scroll-frame])) {
+    display: none;
+  }
+}
+
+html.bb-mobile-fixes .bb-mobile-fixes-bars {
+  position: relative;
+}
+html.bb-mobile-fixes .bb-mobile-fixes-bars[data-empty] {
+  display: none;
+}
+
+/* Hidden item count: a small badge on the top-right corner of the icon. */
+html.bb-mobile-fixes .bb-mobile-fixes-bars-count {
+  position: absolute;
+  top: 0.125rem;
+  right: 0.125rem;
+  min-width: 0.875rem;
+  height: 0.875rem;
+  padding-inline: 0.1875rem;
+  border-radius: 9999px;
+  background: var(--foreground);
+  color: var(--background);
+  font-size: 0.5625rem;
+  font-weight: 600;
+  line-height: 0.875rem;
+  text-align: center;
+  pointer-events: none;
+}
+@media (max-width: 767px) and (pointer: coarse) {
+  html.bb-mobile-fixes .bb-mobile-fixes-bars-count {
+    top: 0.375rem;
+    right: 0.375rem;
+  }
+}

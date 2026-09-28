@@ -12,13 +12,12 @@
     "types": [
       "node"
     ],
-    "allowArbitraryExtensions": true,
     "noEmit": true,
     "skipLibCheck": true
   },
   "include": [
     "app.tsx",
-    "app.d.css.ts",
-    "server.ts"
+    "server.ts",
+    "src"
   ]
 }

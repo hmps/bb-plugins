@@ -24,12 +24,8 @@
       "source": "./plugins/ios-status-bar"
     },
     {
-      "name": "mobile-large-editor",
-      "source": "./plugins/mobile-large-editor"
-    },
-    {
-      "name": "mobile-composer-bars",
-      "source": "./plugins/mobile-composer-bars"
+      "name": "mobile-fixes",
+      "source": "./plugins/mobile-fixes"
     },
     {
       "name": "pr-digest",
