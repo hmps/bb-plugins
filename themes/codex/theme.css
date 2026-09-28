@@ -111,6 +111,17 @@ form[data-promptbox] {
   min-height: 36px;
   max-height: 36px;
 }
+/*
+ * Phones: bb hides the footer with a container style query while the
+ * composer container is compact. The 36px rule above wins over it and
+ * leaves 36px of empty space under the composer, so repeat bb's rule.
+ */
+@container follow-up-composer style(--follow-up-composer-container-compact: true) {
+  [data-follow-up-composer] [data-follow-up-composer-footer] {
+    min-height: 0;
+    max-height: 0;
+  }
+}
 
 /*
  * Queue panel above the composer: inset 22px like the drawer, so it sits
