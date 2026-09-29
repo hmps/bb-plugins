@@ -324,3 +324,15 @@ dl:has(> .grid-cols-\[var\(--detail-label-width\,96px\)_minmax\(0\,1fr\)\]) > .f
 dl:has(> .grid-cols-\[var\(--detail-label-width\,96px\)_minmax\(0\,1fr\)\]) > .flex-col > dd > .flex-col.gap-1\.5 :is(span, button).text-xs {
   font-size: 13px;
 }
+
+/*
+ * Children popover in the thread header: bb gives the list no max height,
+ * so rows below the screen edge cannot be reached. Scroll the list only;
+ * the "Children" header stays in place.
+ */
+[role="menu"][aria-label="Child threads"] > ul {
+  max-height: min(32rem, calc(100dvh - 11rem));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
