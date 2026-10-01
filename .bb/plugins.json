@@ -46,6 +46,10 @@
     {
       "name": "custom-model-picker",
       "source": "./plugins/custom-model-picker"
+    },
+    {
+      "name": "child-thread-split",
+      "source": "./plugins/child-thread-split"
     }
   ]
 }

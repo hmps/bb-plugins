@@ -32,6 +32,7 @@ that `marketplace.json` lists.
 | [github-plus](plugins/github-plus) | Fork of bb's builtin github plugin with an editable review prompt and provider/model picker before an agent review starts. |
 | [quiet-push](plugins/quiet-push) | Lets an agent mute the push notification for the turn it is about to end. |
 | [custom-model-picker](plugins/custom-model-picker) | Adds a composer model picker with a configurable model list, favorites, and reasoning controls. |
+| [child-thread-split](plugins/child-thread-split) | Adds Open in split buttons beside child threads in the composer and conversation. |
 
 ## Layout
 

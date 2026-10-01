@@ -233,6 +233,29 @@
           "tagPrefix": "quiet-push/"
         }
       }
+    },
+    {
+      "id": "child-thread-split",
+      "displayName": "Child Thread Split",
+      "description": "An Open in split button on child thread rows above the composer and on child thread pills in message headers.",
+      "icon": "Columns2",
+      "tags": [
+        "threads",
+        "composer",
+        "interface"
+      ],
+      "author": {
+        "name": "Hampus Persson",
+        "github": "hmps"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/hmps/bb-plugins.git",
+          "subdir": "plugins/child-thread-split",
+          "range": "^0.1.0",
+          "tagPrefix": "child-thread-split/"
+        }
+      }
     }
   ]
 }

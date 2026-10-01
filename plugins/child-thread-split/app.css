@@ -1,0 +1,103 @@
+/*
+ * Plain CSS on purpose: plugin Tailwind utilities are scoped to the plugin
+ * root, so they do not style nodes portalled into host DOM. Colors come from
+ * the host theme variables, so light and dark mode follow the app.
+ */
+
+/* Composer rows: put the button beside the row link, not inside it. */
+li:has(> [data-child-thread-split] > button) {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+li:has(> [data-child-thread-split] > button) > a {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Message headers: keep the header truncating and the button beside it. */
+[class~="group/timeline-row"]:has(> [data-child-thread-split] > button) {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+[class~="group/timeline-row"]:has(> [data-child-thread-split] > button)
+  > :not([data-child-thread-split]) {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+[data-child-thread-split] {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.child-thread-split__button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: calc(var(--radius, 0.5rem) - 4px);
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.child-thread-split__button:hover {
+  background: var(--state-hover);
+  color: var(--foreground);
+}
+
+.child-thread-split__button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--ring);
+  opacity: 1;
+}
+
+/* Reveal on the composer row, or anywhere on the message panel (header and preview). */
+li:hover > [data-child-thread-split] > .child-thread-split__button,
+li:focus-within > [data-child-thread-split] > .child-thread-split__button,
+:is(:hover, :focus-within)
+  > [class~="group/timeline-row"]
+  > [data-child-thread-split]
+  > .child-thread-split__button {
+  opacity: 1;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .child-thread-split__button {
+    opacity: 1;
+  }
+}
+
+/* A larger hit area on touch screens, without a larger visible button. */
+.child-thread-split__touch-target {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, 3rem);
+  height: max(100%, 3rem);
+  transform: translate(-50%, -50%);
+}
+
+@media (pointer: fine) {
+  .child-thread-split__touch-target {
+    display: none;
+  }
+}
+
+.child-thread-split__icon {
+  width: 0.875rem;
+  height: 0.875rem;
+  flex-shrink: 0;
+}
