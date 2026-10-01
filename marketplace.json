@@ -193,6 +193,25 @@
       }
     },
     {
+      "id": "custom-model-picker",
+      "displayName": "Custom Model Picker",
+      "description": "Adds a composer model picker with a configurable model list, favorites, and reasoning controls.",
+      "icon": "Cpu",
+      "tags": ["composer", "models", "interface"],
+      "author": {
+        "name": "Hampus Persson",
+        "github": "hmps"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/hmps/bb-plugins.git",
+          "subdir": "plugins/custom-model-picker",
+          "range": "^0.1.0",
+          "tagPrefix": "custom-model-picker/"
+        }
+      }
+    },
+    {
       "id": "quiet-push",
       "displayName": "Quiet Push",
       "description": "Gives agents a mute_notification tool. A muted turn ends without a mobile, web, or desktop notification from the builtin Push notifications plugin.",

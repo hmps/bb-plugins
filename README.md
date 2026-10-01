@@ -31,6 +31,7 @@ that `marketplace.json` lists.
 | [mobile-fixes](plugins/mobile-fixes) | Phone fixes for the thread composer: a Codex-style editor, hideable status bars, and first-tap voice input. |
 | [github-plus](plugins/github-plus) | Fork of bb's builtin github plugin with an editable review prompt and provider/model picker before an agent review starts. |
 | [quiet-push](plugins/quiet-push) | Lets an agent mute the push notification for the turn it is about to end. |
+| [custom-model-picker](plugins/custom-model-picker) | Adds a composer model picker with a configurable model list, favorites, and reasoning controls. |
 
 ## Layout
 

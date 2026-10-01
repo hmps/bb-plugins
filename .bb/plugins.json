@@ -42,6 +42,10 @@
     {
       "name": "quiet-push",
       "source": "./plugins/quiet-push"
+    },
+    {
+      "name": "custom-model-picker",
+      "source": "./plugins/custom-model-picker"
     }
   ]
 }

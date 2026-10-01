@@ -123,6 +123,12 @@ form[data-promptbox] {
   }
 }
 
+/* Use the custom picker when it is present. Keep the core fallback otherwise. */
+[data-app-composer]:has([data-plugin-composer-action-plugin="custom-model-picker"] button[aria-label^="Model:"])
+  button[aria-label^="Provider, model and reasoning"] {
+  display: none;
+}
+
 /*
  * Queue panel above the composer: inset 22px like the drawer, so it sits
  * inside the composer's corners, with the drawer's 18px radius and no shadow.
