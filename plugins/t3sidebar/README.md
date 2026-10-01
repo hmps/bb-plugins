@@ -66,8 +66,8 @@ Four shelves:
   and tap anywhere else to close them. A long-press on any row opens the menu
   with the same actions.
 
-- **Working** — live work that does not need you, folded to one line above
-  the inbox. Open it and the threads show as full cards, the same as the inbox. A thread that starts working leaves the inbox for this shelf, and comes
+- **Working** — live work that does not need you, expanded by default above
+  the inbox. Threads show as full cards, the same as the inbox. Click the shelf heading to collapse or expand it. A thread that starts working leaves the inbox for this shelf, and comes
   back the moment it finishes or asks you something. Pinned threads stay
   pinned. The setting **Working shelf** (Tools → Better Sidebar, on by default)
   turns this off, and working threads then stay in the inbox.

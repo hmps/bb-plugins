@@ -178,12 +178,12 @@ export default function plugin(bb: BbPluginApi) {
       default: false,
     },
     // Live work rarely needs the user, so by default it leaves the inbox for
-    // a collapsed shelf and comes back the moment it finishes or asks.
+    // the Working shelf and comes back the moment it finishes or asks.
     [WORKING_SHELF_SETTING]: {
       type: "boolean",
       label: "Working shelf",
       description:
-        "Move threads that are working to a collapsed Working shelf. They return when they finish or ask.",
+        "Move threads that are working to the Working shelf, expanded by default. They return when they finish or ask.",
       default: true,
     },
   });

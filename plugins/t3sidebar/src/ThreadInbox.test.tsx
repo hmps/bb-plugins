@@ -353,7 +353,6 @@ describe("parking threads", () => {
     // Live work wins over the settle: the row lands on Working, never Settled.
     const shelf = await screen.findByRole("region", { name: "Working" });
     expect(screen.queryByRole("region", { name: "Settled" })).toBeNull();
-    fireEvent.click(within(shelf).getByRole("button"));
     expect(within(shelf).getByText("Still running")).toBeDefined();
     expect(screen.queryByLabelText("Settle thread")).toBeNull();
   });
@@ -529,13 +528,17 @@ describe("working shelf", () => {
       ...overrides,
     });
 
-  it("collapses a working thread onto the Working shelf", async () => {
+  it("shows working threads by default and lets the user collapse and expand them", async () => {
     render([busy(), thread({ id: "thr_quiet", title: "Quiet" })]);
     const shelf = await screen.findByRole("region", { name: "Working" });
+    expect(within(shelf).getByRole("button", { expanded: true })).toBeDefined();
+    expect(within(shelf).getByText("Still running")).toBeDefined();
+    expect(screen.getByText("Quiet")).toBeDefined();
+    fireEvent.click(within(shelf).getByRole("button", { expanded: true }));
+    expect(within(shelf).getByRole("button", { expanded: false })).toBeDefined();
     expect(within(shelf).getByText(/Working \(1\)/)).toBeDefined();
     expect(screen.queryByText("Still running")).toBeNull();
-    expect(screen.getByText("Quiet")).toBeDefined();
-    fireEvent.click(within(shelf).getByRole("button"));
+    fireEvent.click(within(shelf).getByRole("button", { expanded: false }));
     expect(within(shelf).getByText("Still running")).toBeDefined();
     // The spinner speaks for the row, and there is nothing to restore: bb
     // moves it back on its own.
@@ -582,7 +585,6 @@ describe("child thread rollup", () => {
   it("moves a parent with a working child onto the Working shelf", async () => {
     render(withChild({ indicator: "runtime", indicatorLabel: "Child works" }));
     const shelf = await screen.findByRole("region", { name: "Working" });
-    fireEvent.click(within(shelf).getByRole("button"));
     expect(within(shelf).getByText("Parent thread")).toBeDefined();
     // The child never gets a row of its own; the parent counts it instead.
     expect(screen.queryByText("Child thread")).toBeNull();
@@ -621,7 +623,6 @@ describe("child thread rollup", () => {
       }),
     ]);
     const shelf = await screen.findByRole("region", { name: "Working" });
-    fireEvent.click(within(shelf).getByRole("button"));
     expect(
       within(shelf).getByLabelText("2 child agents, 1 working"),
     ).toBeDefined();

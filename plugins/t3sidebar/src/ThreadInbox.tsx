@@ -82,7 +82,7 @@ export function ThreadInbox({
     return () => clearInterval(timer);
   }, []);
   const now = nowMinute * 60_000;
-  const [showWorking, setShowWorking] = useState(false);
+  const [showWorking, setShowWorking] = useState(true);
   const [showSnoozed, setShowSnoozed] = useState(false);
   const [showSettled, setShowSettled] = useState(false);
 
@@ -284,8 +284,8 @@ export function ThreadInbox({
                   ))}
                 </Shelf>
               ) : null}
-              {/* Above the inbox, collapsed: one line says how much is
-                  running, and the cards that may need you start right below. */}
+              {/* Above the inbox, expanded by default so live work stays
+                  visible until the user collapses it. */}
               {working.length > 0 ? (
                 <CollapsibleShelf
                   label="Working"
