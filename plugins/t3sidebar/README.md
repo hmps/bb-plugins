@@ -45,7 +45,7 @@ Five shelves:
 - **Inbox** — two-line cards: title and one fixed-width status slot on the
   first line; then the project badge on the left and activity counts, the
   pull-request number, the child-agent count, and the agent glyph on the
-  right. Pinned threads sit above.
+  right. Pinned threads sit above the inbox, below Working.
 
   The project reads as a coloured badge. Give each project its own colour and,
   if its bb name is long, a short label in the plugin's settings, under
@@ -72,10 +72,10 @@ Five shelves:
   and tap anywhere else to close them. A long-press on any row opens the menu
   with the same actions.
 
-- **Working** — live work that does not need you, expanded by default above
-  the inbox. Threads show as full cards, the same as the inbox. Click the shelf heading to collapse or expand it. A thread that starts working leaves the inbox for this shelf, and comes
-  back the moment it finishes or asks you something. Pinned threads stay
-  pinned. The setting **Working shelf** (Tools → Better Sidebar, on by default)
+- **Working** — live work that does not need you, expanded by default below
+  Unread and above Pinned. Threads show as full cards, the same as the inbox. Click the shelf heading to collapse or expand it. A thread that starts working leaves the inbox for this shelf, and comes
+  back the moment it finishes or asks you something. Pinned threads move here
+  too, and go back to Pinned when they are done. The setting **Working shelf** (Tools → Better Sidebar, on by default)
   turns this off, and working threads then stay in the inbox.
 - **Snoozed** — hidden until a wake time you chose. A snoozed thread comes
   back early if it starts working or asks you something.

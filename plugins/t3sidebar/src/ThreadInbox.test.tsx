@@ -555,11 +555,18 @@ describe("working shelf", () => {
     expect(screen.queryByRole("region", { name: "Working" })).toBeNull();
   });
 
-  it("keeps a pinned working thread on the Pinned shelf", async () => {
-    render([busy({ isPinned: true })]);
-    const pinned = await screen.findByRole("region", { name: "Pinned" });
-    expect(within(pinned).getByText("Still running")).toBeDefined();
-    expect(screen.queryByRole("region", { name: "Working" })).toBeNull();
+  it("moves a pinned working thread to Working, above Pinned", async () => {
+    render([
+      busy({ isPinned: true }),
+      thread({ id: "thr_pin", title: "Pinned quiet", isPinned: true }),
+      thread({ id: "thr_quiet", title: "Inbox quiet" }),
+    ]);
+    const shelf = await screen.findByRole("region", { name: "Working" });
+    expect(within(shelf).getByText("Still running")).toBeDefined();
+    const regions = screen
+      .getAllByRole("region")
+      .map((region) => region.getAttribute("aria-label"));
+    expect(regions).toEqual(["Working", "Pinned", "Inbox"]);
   });
 
   it("leaves working threads in the inbox when the setting is off", async () => {
@@ -591,6 +598,8 @@ describe("unread shelf", () => {
     expect(within(unread).getByText("Asks you")).toBeDefined();
     expect(within(unread).queryByText("Pinned quiet")).toBeNull();
     expect(within(unread).queryByText("Inbox quiet")).toBeNull();
+    // A pinned thread off its shelf still shows that it is pinned.
+    expect(within(unread).getAllByLabelText("Pinned")).toHaveLength(1);
   });
 
   it("leaves an unread thread that still works on the Working shelf", async () => {

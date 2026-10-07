@@ -170,12 +170,8 @@ export function ThreadInbox({
       )
         onUnreadShelf.push(thread);
       // Live work that does not need you leaves the inbox for its own shelf.
-      // A pinned thread stays put: pinning is the user's own ordering.
-      else if (
-        workingShelfOn &&
-        !thread.isPinned &&
-        isOnWorkingShelf(thread, descendants)
-      )
+      // A pinned thread goes too, and returns to Pinned once it is done.
+      else if (workingShelfOn && isOnWorkingShelf(thread, descendants))
         onWorkingShelf.push(thread);
       else active.push(thread);
     }
@@ -314,12 +310,7 @@ export function ThreadInbox({
               {unread.length > 0 ? (
                 <Shelf label="Unread">{unread.map(renderCard)}</Shelf>
               ) : null}
-              {pinned.length > 0 ? (
-                <Shelf label="Pinned">
-                  {pinned.map(renderCard)}
-                </Shelf>
-              ) : null}
-              {/* Above the inbox, expanded by default so live work stays
+              {/* Below Unread, expanded by default so live work stays
                   visible until the user collapses it. */}
               {working.length > 0 ? (
                 <CollapsibleShelf
@@ -332,6 +323,11 @@ export function ThreadInbox({
                       current work, and its branch, counts, and PR matter. */}
                   {working.map(renderCard)}
                 </CollapsibleShelf>
+              ) : null}
+              {pinned.length > 0 ? (
+                <Shelf label="Pinned">
+                  {pinned.map(renderCard)}
+                </Shelf>
               ) : null}
               {inbox.length > 0 ? (
                 <Shelf

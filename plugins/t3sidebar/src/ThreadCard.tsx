@@ -200,6 +200,16 @@ export function ThreadCard({
               label={thread.indicatorLabel}
             />
             <div className="pointer-events-none relative flex min-h-5 items-center gap-1.5">
+              {/* Before the title, so a long title cannot truncate it away.
+                  A pinned thread can sit on Unread or Working, and this is
+                  how it still reads as pinned there. */}
+              {thread.isPinned ? (
+                <Icon
+                  name="Pin"
+                  aria-label="Pinned"
+                  className="size-3 shrink-0 text-muted-foreground"
+                />
+              ) : null}
               <span
                 className={cn(
                   // Weight alone carries unread. Fading the title — or the whole
