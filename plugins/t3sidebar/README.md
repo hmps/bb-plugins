@@ -34,8 +34,14 @@ One setting, off by default, bends that rule: **Needs attention first**
 input, then unread results, then live work, then everything you have read.
 Inside each tier the order stays newest first.
 
-Four shelves:
+Five shelves:
 
+- **Unread** — everything that waits on you, at the top: a raised hand, or a
+  result you have not read. It takes pinned threads too, so nothing that needs
+  you hides further down. A thread that is unread but still working stays on
+  its own shelf until it finishes. When you open a thread, it stays on Unread
+  while you read it. When you open another thread, it goes back to Pinned or
+  the inbox.
 - **Inbox** — two-line cards: title and one fixed-width status slot on the
   first line; then the project badge on the left and activity counts, the
   pull-request number, the child-agent count, and the agent glyph on the

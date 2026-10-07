@@ -37,6 +37,7 @@ import {
   filterByProject,
   hideChildrenOfVisibleParents,
   isOnWorkingShelf,
+  needsAttention,
   partitionPinned,
   searchThreadsByTitle,
   sortByCreatedAtDescending,
@@ -100,14 +101,27 @@ export function ThreadInbox({
   // mark it read in the same update that makes it active, so the hold must
   // come from the render before, not this one.
   const committedRanks = useRef<ReadonlyMap<string, number>>(new Map());
+  // The same, for the Unread shelf: the open thread stays on it until you
+  // open another one, so it does not jump shelves while you read it.
+  const committedUnread = useRef<ReadonlySet<string>>(new Set());
   useEffect(() => {
     committedRanks.current = new Map(
       threads.map((thread) => [thread.id, attentionRank(thread, descendants)]),
     );
+    committedUnread.current = new Set(
+      threads
+        .filter((thread) => needsAttention(thread, descendants))
+        .map((thread) => thread.id),
+    );
   }, [threads, descendants]);
-  const heldRef = useRef<{ activeId: string | null; held: HeldRank | null }>({
+  const heldRef = useRef<{
+    activeId: string | null;
+    held: HeldRank | null;
+    heldUnreadId: string | null;
+  }>({
     activeId: null,
     held: null,
+    heldUnreadId: null,
   });
   if (heldRef.current.activeId !== activeThreadId) {
     const rank =
@@ -120,11 +134,15 @@ export function ThreadInbox({
         activeThreadId === null || rank === undefined
           ? null
           : { threadId: activeThreadId, rank },
+      heldUnreadId:
+        activeThreadId !== null && committedUnread.current.has(activeThreadId)
+          ? activeThreadId
+          : null,
     };
   }
-  const held = heldRef.current.held;
+  const { held, heldUnreadId } = heldRef.current;
 
-  const { pinned, inbox, working, snoozed, settled } = useMemo(() => {
+  const { unread, pinned, inbox, working, snoozed, settled } = useMemo(() => {
     const scoped = filterByProject(
       visibleInboxThreads(threads),
       scope === ALL_PROJECTS ? null : scope,
@@ -135,6 +153,7 @@ export function ThreadInbox({
       hideChildrenOfVisibleParents(scoped),
       searchQuery,
     );
+    const onUnreadShelf: typeof matched = [];
     const active: typeof matched = [];
     const onWorkingShelf: typeof matched = [];
     const onSnoozeShelf: typeof matched = [];
@@ -143,6 +162,13 @@ export function ThreadInbox({
       const shelf = lifecycle.shelfFor(thread);
       if (shelf === "snoozed") onSnoozeShelf.push(thread);
       else if (shelf === "settled") onSettledShelf.push(thread);
+      // Anything that waits on you goes to the top, pinned or not, and goes
+      // back to its own shelf once you have read it.
+      else if (
+        thread.id === heldUnreadId ||
+        needsAttention(thread, descendants)
+      )
+        onUnreadShelf.push(thread);
       // Live work that does not need you leaves the inbox for its own shelf.
       // A pinned thread stays put: pinning is the user's own ordering.
       else if (
@@ -161,6 +187,7 @@ export function ThreadInbox({
         ? attentionFirst(sortByCreatedAtDescending(list), descendants, held)
         : sortByCreatedAtDescending(list);
     return {
+      unread: order(onUnreadShelf),
       pinned: order(split.pinned),
       inbox: order(split.inbox),
       working: sortByCreatedAtDescending(onWorkingShelf),
@@ -175,6 +202,7 @@ export function ThreadInbox({
     attentionOnTop,
     descendants,
     held,
+    heldUnreadId,
     lifecycle,
     scope,
     searchQuery,
@@ -196,6 +224,31 @@ export function ThreadInbox({
         : new Map(),
     );
   }, [hintsVisible]);
+
+  const renderCard = (thread: PluginSidebarThread) => (
+    <ThreadCard
+      key={thread.id}
+      thread={thread}
+      projectName={
+        projectLabels.get(thread.projectId) ??
+        projectNameById.get(thread.projectId) ??
+        null
+      }
+      projectColorId={projectColors.get(thread.projectId) ?? null}
+      isActive={thread.id === activeThreadId}
+      canPark={lifecycle.canPark(thread)}
+      onNavigate={onNavigate}
+      onSettle={() => lifecycle.settle(thread.id)}
+      onSettleAndArchive={() => lifecycle.settleAndArchive(thread.id)}
+      archiving={lifecycle.isArchiving(thread.id)}
+      onSnooze={(until) => lifecycle.snooze(thread.id, until)}
+      now={now}
+      queuedMessages={queueCounts.get(thread.id) ?? 0}
+      workingChildren={descendants.get(thread.id)?.working ?? 0}
+      childrenNeedYou={descendants.get(thread.id)?.needsYou ?? 0}
+      spawnedChildren={spawnedChildren.get(thread.id) ?? 0}
+    />
+  );
 
   const scopeLabel =
     scope === ALL_PROJECTS
@@ -242,7 +295,8 @@ export function ThreadInbox({
             >
               Could not load threads.
             </p>
-          ) : pinned.length +
+          ) : unread.length +
+              pinned.length +
               inbox.length +
               working.length +
               snoozed.length +
@@ -256,32 +310,13 @@ export function ThreadInbox({
             </p>
           ) : (
             <>
+              {/* Everything that waits on you, above all else. */}
+              {unread.length > 0 ? (
+                <Shelf label="Unread">{unread.map(renderCard)}</Shelf>
+              ) : null}
               {pinned.length > 0 ? (
                 <Shelf label="Pinned">
-                  {pinned.map((thread) => (
-                    <ThreadCard
-                      key={thread.id}
-                      thread={thread}
-                      projectName={
-                        projectLabels.get(thread.projectId) ??
-                        projectNameById.get(thread.projectId) ??
-                        null
-                      }
-                      projectColorId={projectColors.get(thread.projectId) ?? null}
-                      isActive={thread.id === activeThreadId}
-                      canPark={lifecycle.canPark(thread)}
-                      onNavigate={onNavigate}
-                      onSettle={() => lifecycle.settle(thread.id)}
-                      onSettleAndArchive={() => lifecycle.settleAndArchive(thread.id)}
-                      archiving={lifecycle.isArchiving(thread.id)}
-                      onSnooze={(until) => lifecycle.snooze(thread.id, until)}
-                      now={now}
-                      queuedMessages={queueCounts.get(thread.id) ?? 0}
-                      workingChildren={descendants.get(thread.id)?.working ?? 0}
-                      childrenNeedYou={descendants.get(thread.id)?.needsYou ?? 0}
-                      spawnedChildren={spawnedChildren.get(thread.id) ?? 0}
-                    />
-                  ))}
+                  {pinned.map(renderCard)}
                 </Shelf>
               ) : null}
               {/* Above the inbox, expanded by default so live work stays
@@ -295,60 +330,18 @@ export function ThreadInbox({
                 >
                   {/* Full cards, not slim rows: a working thread is still
                       current work, and its branch, counts, and PR matter. */}
-                  {working.map((thread) => (
-                    <ThreadCard
-                      key={thread.id}
-                      thread={thread}
-                      projectName={
-                        projectLabels.get(thread.projectId) ??
-                        projectNameById.get(thread.projectId) ??
-                        null
-                      }
-                      projectColorId={projectColors.get(thread.projectId) ?? null}
-                      isActive={thread.id === activeThreadId}
-                      canPark={lifecycle.canPark(thread)}
-                      onNavigate={onNavigate}
-                      onSettle={() => lifecycle.settle(thread.id)}
-                      onSettleAndArchive={() => lifecycle.settleAndArchive(thread.id)}
-                      archiving={lifecycle.isArchiving(thread.id)}
-                      onSnooze={(until) => lifecycle.snooze(thread.id, until)}
-                      now={now}
-                      queuedMessages={queueCounts.get(thread.id) ?? 0}
-                      workingChildren={descendants.get(thread.id)?.working ?? 0}
-                      childrenNeedYou={descendants.get(thread.id)?.needsYou ?? 0}
-                      spawnedChildren={spawnedChildren.get(thread.id) ?? 0}
-                    />
-                  ))}
+                  {working.map(renderCard)}
                 </CollapsibleShelf>
               ) : null}
               {inbox.length > 0 ? (
                 <Shelf
-                  label={pinned.length > 0 || working.length > 0 ? "Inbox" : null}
+                  label={
+                    unread.length > 0 || pinned.length > 0 || working.length > 0
+                      ? "Inbox"
+                      : null
+                  }
                 >
-                  {inbox.map((thread) => (
-                    <ThreadCard
-                      key={thread.id}
-                      thread={thread}
-                      projectName={
-                        projectLabels.get(thread.projectId) ??
-                        projectNameById.get(thread.projectId) ??
-                        null
-                      }
-                      projectColorId={projectColors.get(thread.projectId) ?? null}
-                      isActive={thread.id === activeThreadId}
-                      canPark={lifecycle.canPark(thread)}
-                      onNavigate={onNavigate}
-                      onSettle={() => lifecycle.settle(thread.id)}
-                      onSettleAndArchive={() => lifecycle.settleAndArchive(thread.id)}
-                      archiving={lifecycle.isArchiving(thread.id)}
-                      onSnooze={(until) => lifecycle.snooze(thread.id, until)}
-                      now={now}
-                      queuedMessages={queueCounts.get(thread.id) ?? 0}
-                      workingChildren={descendants.get(thread.id)?.working ?? 0}
-                      childrenNeedYou={descendants.get(thread.id)?.needsYou ?? 0}
-                      spawnedChildren={spawnedChildren.get(thread.id) ?? 0}
-                    />
-                  ))}
+                  {inbox.map(renderCard)}
                 </Shelf>
               ) : null}
               <ParkedShelf

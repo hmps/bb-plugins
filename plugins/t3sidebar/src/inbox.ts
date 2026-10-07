@@ -168,6 +168,22 @@ export function isOnWorkingShelf(
 }
 
 /**
+ * Whether a thread belongs on the Unread shelf at the top: a raised hand, or a
+ * result you have not read. An unread thread that is still working is not
+ * done yet, so it stays wherever its work puts it.
+ *
+ * This outranks pinning: an unread pinned thread leaves Pinned until you read
+ * it, so nothing that waits on you hides below the fold.
+ */
+export function needsAttention(
+  thread: PluginSidebarThread,
+  signals?: ReadonlyMap<string, DescendantSignal>,
+): boolean {
+  if (needsYouTree(thread, signals)) return true;
+  return thread.isUnread && !isWorkingTree(thread, signals);
+}
+
+/**
  * Urgency tiers for the "needs attention first" setting. Lower comes first:
  * a raised hand, then a finished result you have not read, then live work,
  * then everything you have already read.

@@ -101,7 +101,8 @@ describe("attention first setting", () => {
       createdAt: 1,
       hasPendingInteraction: true,
     }),
-    thread({ id: "new", title: "New quiet", createdAt: 2 }),
+    // Unread, so both sit on the Unread shelf and the setting orders them.
+    thread({ id: "new", title: "New quiet", createdAt: 2, isUnread: true }),
   ];
   const titles = () =>
     screen
@@ -565,6 +566,76 @@ describe("working shelf", () => {
     render([busy()], undefined, { workingShelf: false });
     expect(await screen.findByText("Still running")).toBeDefined();
     expect(screen.queryByRole("region", { name: "Working" })).toBeNull();
+  });
+});
+
+describe("unread shelf", () => {
+  it("lifts unread and waiting threads above Pinned, pinned or not", async () => {
+    render([
+      thread({ id: "thr_pin", title: "Pinned quiet", isPinned: true }),
+      thread({
+        id: "thr_pin_unread",
+        title: "Pinned unread",
+        isPinned: true,
+        isUnread: true,
+      }),
+      thread({ id: "thr_ask", title: "Asks you", hasPendingInteraction: true }),
+      thread({ id: "thr_quiet", title: "Inbox quiet" }),
+    ]);
+    const regions = (await screen.findAllByRole("region")).map((region) =>
+      region.getAttribute("aria-label"),
+    );
+    expect(regions).toEqual(["Unread", "Pinned", "Inbox"]);
+    const unread = screen.getByRole("region", { name: "Unread" });
+    expect(within(unread).getByText("Pinned unread")).toBeDefined();
+    expect(within(unread).getByText("Asks you")).toBeDefined();
+    expect(within(unread).queryByText("Pinned quiet")).toBeNull();
+    expect(within(unread).queryByText("Inbox quiet")).toBeNull();
+  });
+
+  it("leaves an unread thread that still works on the Working shelf", async () => {
+    render([
+      thread({
+        id: "thr_busy",
+        title: "Still running",
+        isUnread: true,
+        indicator: "runtime",
+      }),
+    ]);
+    const shelf = await screen.findByRole("region", { name: "Working" });
+    expect(within(shelf).getByText("Still running")).toBeDefined();
+    expect(screen.queryByRole("region", { name: "Unread" })).toBeNull();
+  });
+
+  it("holds an opened thread on Unread, then returns it to Pinned", () => {
+    const unread = thread({
+      id: "thr_pin",
+      title: "Pinned unread",
+      isPinned: true,
+      isUnread: true,
+    });
+    const other = thread({ id: "thr_other", title: "Other" });
+    const Inbox = inbox.component;
+    let state: { threads: readonly PluginSidebarThread[] } | undefined;
+    function Probe(props: PluginThreadListProps) {
+      state = sdk.experimental_useSidebarThreads() as unknown as typeof state;
+      return <Inbox {...props} />;
+    }
+    const slot = render([unread, other]);
+    slot.rerender(<Probe {...listProps} />);
+    const shelfOf = (title: string) =>
+      screen.getByText(title).closest("section")?.getAttribute("aria-label");
+    expect(shelfOf("Pinned unread")).toBe("Unread");
+
+    // Opening the thread marks it read in the same update; it stays put.
+    state!.threads = [{ ...unread, isUnread: false }, other];
+    slot.rerender(<Probe {...listProps} activeThreadId="thr_pin" />);
+    expect(shelfOf("Pinned unread")).toBe("Unread");
+
+    // Opening another thread sends it back where it came from.
+    slot.rerender(<Probe {...listProps} activeThreadId="thr_other" />);
+    expect(shelfOf("Pinned unread")).toBe("Pinned");
+    expect(screen.queryByRole("region", { name: "Unread" })).toBeNull();
   });
 });
 
