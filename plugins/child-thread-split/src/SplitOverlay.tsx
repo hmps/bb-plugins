@@ -2,10 +2,10 @@ import { useMemo, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import {
   experimental_Icon as Icon,
-  experimental_useSidebarThreadActions,
   experimental_useSidebarThreadSplit,
   experimental_useSidebarThreads,
   useBbContext,
+  useBbNavigate,
   useSidebarSplitLayout,
   type PluginSidebarSplitLayout,
   type PluginSidebarThread,
@@ -66,7 +66,7 @@ interface OpenInSplitButtonProps {
 
 function OpenInSplitButton({ threadId, title, hidden, pane }: OpenInSplitButtonProps) {
   const split = experimental_useSidebarThreadSplit(threadId);
-  const actions = experimental_useSidebarThreadActions();
+  const navigate = useBbNavigate();
   const layout = useSidebarSplitLayout();
 
   // False on compact viewports, with splits disabled, and for unknown threads.
@@ -85,9 +85,9 @@ function OpenInSplitButton({ threadId, title, hidden, pane }: OpenInSplitButtonP
     // keyboard press never does. Focus the pane that shows the button first,
     // so the split opens beside it and not beside another pane.
     if (!isOpen && pane !== null && !pane.isFocused && pane.threadId !== null) {
-      actions.open(pane.threadId, { split: true });
+      navigate.toThread(pane.threadId, { split: true });
     }
-    actions.open(threadId, { split: true });
+    navigate.toThread(threadId, { split: true });
   };
 
   return (

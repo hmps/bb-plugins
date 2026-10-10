@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  experimental_useSidebarThreadActions as useSidebarThreadActions,
   experimental_useSidebarThreads as useSidebarThreads,
   type PluginSidebarThread,
   type PluginThreadListProps,
@@ -59,7 +58,6 @@ export function ThreadInbox({
   searchQuery,
 }: PluginThreadListProps) {
   const { status, threads, projects } = useSidebarThreads();
-  const actions = useSidebarThreadActions();
   const lifecycle = useLifecycle(threads);
   const queueCounts = useQueueCounts(threads);
   const { colors: projectColors, labels: projectLabels } = useProjectBadges();

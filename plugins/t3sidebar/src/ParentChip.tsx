@@ -1,6 +1,6 @@
 import {
-  experimental_useSidebarThreadActions as useSidebarThreadActions,
   experimental_useSidebarThreads as useSidebarThreads,
+  useBbNavigate,
   type PluginThreadHeaderActionProps,
 } from "@get-bb/plugin-sdk/app";
 import { Icon } from "./components/Icon";
@@ -21,7 +21,7 @@ export function ParentChip({
   isCompactViewport,
 }: PluginThreadHeaderActionProps) {
   const { threads } = useSidebarThreads();
-  const actions = useSidebarThreadActions();
+  const navigate = useBbNavigate();
 
   const parent = parentOf(threads, threadId);
   if (parent === null) return null;
@@ -33,7 +33,7 @@ export function ParentChip({
       type="button"
       aria-label={`Back to parent: ${title}`}
       title={title}
-      onClick={() => actions.open(parent.id)}
+      onClick={() => navigate.toThread(parent.id)}
       className={cn(
         "flex h-7 max-w-full items-center gap-1.5 rounded-full border border-border text-2xs text-muted-foreground",
         "hover:bg-accent hover:text-foreground",

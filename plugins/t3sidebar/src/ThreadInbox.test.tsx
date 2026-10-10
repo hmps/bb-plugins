@@ -30,6 +30,16 @@ function thread(
     title: "A thread",
     titleFallback: null,
     parentThreadId: null,
+    lifecycleOwnerThreadId: null,
+    sourceThreadId: null,
+    status: "idle",
+    runtimeStatus: "idle",
+    queuedWork: "none",
+    pinnedAt: null,
+    pinSortKey: null,
+    archivedAt: null,
+    href: "/t/thr_1",
+    isHidden: false,
     sectionId: null,
     originKind: null,
     originPluginId: null,
@@ -53,6 +63,7 @@ function thread(
     updatedAt: 100,
     lastReadAt: 100,
     latestAttentionAt: 100,
+    displayTitle: overrides.title ?? "A thread",
     ...overrides,
   };
 }
@@ -69,7 +80,7 @@ const listProps = {
 
 function render(
   threads: PluginSidebarThread[],
-  projects = [{ id: "proj_1", name: "bb", isPersonal: false }],
+  projects = [{ id: "proj_1", name: "bb", isPersonal: false, href: "/p/proj_1", settingsHref: "/p/proj_1/settings" }],
   settings: Record<string, string | boolean> = {},
 ) {
   return renderSlot(inbox, listProps, {
@@ -184,7 +195,7 @@ describe("ThreadInbox", () => {
         sidebarThreads: {
           status: "ready",
           threads: [thread({ id: "thr_open" })],
-          projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
+          projects: [{ id: "proj_1", name: "bb", isPersonal: false, href: "/p/proj_1", settingsHref: "/p/proj_1/settings" }],
         },
         rpc: {
           listProjectColors: () => ({ projects: [] }),
@@ -193,8 +204,8 @@ describe("ThreadInbox", () => {
       },
     );
     fireEvent.click(screen.getByRole("link"));
-    expect(rendered.sidebarActionCalls).toContainEqual({
-      method: "open",
+    expect(rendered.navigateCalls).toContainEqual({
+      method: "toThread",
       threadId: "thr_open",
       options: { split: false },
     });
@@ -204,8 +215,8 @@ describe("ThreadInbox", () => {
   it("opens in a split with the platform modifier held", () => {
     const rendered = render([thread({ id: "thr_split" })]);
     fireEvent.click(screen.getByRole("link"), { metaKey: true });
-    expect(rendered.sidebarActionCalls).toContainEqual({
-      method: "open",
+    expect(rendered.navigateCalls).toContainEqual({
+      method: "toThread",
       threadId: "thr_split",
       options: { split: true },
     });
@@ -233,7 +244,7 @@ describe("ThreadInbox", () => {
             thread({ id: "a", title: "Sidebar work" }),
             thread({ id: "b", title: "Something else" }),
           ],
-          projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
+          projects: [{ id: "proj_1", name: "bb", isPersonal: false, href: "/p/proj_1", settingsHref: "/p/proj_1/settings" }],
         },
         rpc: {
           listProjectColors: () => ({ projects: [] }),
@@ -262,8 +273,8 @@ describe("ThreadInbox", () => {
         thread({ id: "b", title: "In other", projectId: "proj_2" }),
       ],
       [
-        { id: "proj_1", name: "bb", isPersonal: false },
-        { id: "proj_2", name: "other", isPersonal: false },
+        { id: "proj_1", name: "bb", isPersonal: false, href: "/p/proj_1", settingsHref: "/p/proj_1/settings" },
+        { id: "proj_2", name: "other", isPersonal: false, href: "/p/proj_2", settingsHref: "/p/proj_2/settings" },
       ],
     );
     // Radix opens on keyboard too, which jsdom can drive without pointer
@@ -291,7 +302,7 @@ describe("parking threads", () => {
       sidebarThreads: {
         status: "ready",
         threads: [thread({ id: "thr_done", title: "Finished work" })],
-        projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
+        projects: [{ id: "proj_1", name: "bb", isPersonal: false, href: "/p/proj_1", settingsHref: "/p/proj_1/settings" }],
       },
       rpc: {
         listProjectColors: () => ({ projects: [] }),
@@ -334,7 +345,7 @@ describe("parking threads", () => {
             },
           }),
         ],
-        projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
+        projects: [{ id: "proj_1", name: "bb", isPersonal: false, href: "/p/proj_1", settingsHref: "/p/proj_1/settings" }],
       },
       // Settled in the store, but still working: it must stay visible.
       rpc: {
@@ -372,7 +383,7 @@ describe("parking threads", () => {
       sidebarThreads: {
         status: "ready",
         threads: [thread({ id: "thr_park", title: "Quiet" })],
-        projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
+        projects: [{ id: "proj_1", name: "bb", isPersonal: false, href: "/p/proj_1", settingsHref: "/p/proj_1/settings" }],
       },
       rpc: {
         listProjectColors: () => ({ projects: [] }),
@@ -446,7 +457,7 @@ describe("parking threads", () => {
         sidebarThreads: {
           status: "ready",
           threads: [thread({ id: "thr_park", title: "Quiet" })],
-          projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
+          projects: [{ id: "proj_1", name: "bb", isPersonal: false, href: "/p/proj_1", settingsHref: "/p/proj_1/settings" }],
         },
         rpc: {
           listProjectColors: () => ({ projects: [] }),
@@ -496,7 +507,7 @@ describe("parking threads", () => {
       sidebarThreads: {
         status: "ready",
         threads: [thread({ id: "thr_snz", title: "Later" })],
-        projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
+        projects: [{ id: "proj_1", name: "bb", isPersonal: false, href: "/p/proj_1", settingsHref: "/p/proj_1/settings" }],
       },
       rpc: {
         listProjectColors: () => ({ projects: [] }),
@@ -740,7 +751,7 @@ describe("queued messages", () => {
       sidebarThreads: {
         status: "ready",
         threads: [thread({ id: "thr_q", title: "Queued work" })],
-        projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
+        projects: [{ id: "proj_1", name: "bb", isPersonal: false, href: "/p/proj_1", settingsHref: "/p/proj_1/settings" }],
       },
       rpc: {
         listProjectColors: () => ({ projects: [] }),
@@ -783,27 +794,18 @@ describe("queued messages", () => {
 });
 
 describe("row context menu", () => {
-  it("offers the plugin's own thread actions on right-click", async () => {
+  // bb owns the menu, so split, pin, rename, delete, and other plugins'
+  // actions match bb's own rows; the row adds only its shelf actions.
+  it("adds the row's shelf actions to bb's thread menu", async () => {
     render([thread({ id: "thr_menu", title: "Right click me" })]);
     const row = await screen.findByText("Right click me");
     fireEvent.contextMenu(row);
     const menu = await screen.findByRole("menu", { name: "Thread actions" });
-    // The plugin builds this menu itself — the SDK ships no menu component —
-    // so the items are this plugin's choice, backed by the action hook.
     expect(
       within(menu)
         .getAllByRole("menuitem")
         .map((item) => item.textContent),
-    ).toEqual([
-      "Open in split",
-      "Snooze until tomorrow",
-      "Settle",
-      "Settle and archive",
-      "Mark unread",
-      "Pin",
-      "Archive",
-      "Delete",
-    ]);
+    ).toEqual(["Snooze until tomorrow", "Settle", "Settle and archive"]);
   });
 
   // A touch screen never hovers, so the card's park buttons stay hidden
@@ -815,7 +817,7 @@ describe("row context menu", () => {
       sidebarThreads: {
         status: "ready",
         threads: [thread({ id: "thr_menu_park", title: "Long press me" })],
-        projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
+        projects: [{ id: "proj_1", name: "bb", isPersonal: false, href: "/p/proj_1", settingsHref: "/p/proj_1/settings" }],
       },
       rpc: {
         listProjectColors: () => ({ projects: [] }),
@@ -838,7 +840,7 @@ describe("row context menu", () => {
       sidebarThreads: {
         status: "ready",
         threads: [thread({ id: "thr_menu_archive", title: "Archive me" })],
-        projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
+        projects: [{ id: "proj_1", name: "bb", isPersonal: false, href: "/p/proj_1", settingsHref: "/p/proj_1/settings" }],
       },
       rpc: {
         listProjectColors: () => ({ projects: [] }),
@@ -862,7 +864,7 @@ describe("row context menu", () => {
       sidebarThreads: {
         status: "ready",
         threads: [thread({ id: "thr_slow", title: "Slow archive" })],
-        projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
+        projects: [{ id: "proj_1", name: "bb", isPersonal: false, href: "/p/proj_1", settingsHref: "/p/proj_1/settings" }],
       },
       rpc: {
         listLifecycle: () => ({ rows: [] }),
@@ -892,7 +894,7 @@ describe("row context menu", () => {
       sidebarThreads: {
         status: "ready",
         threads: [thread({ id: "thr_snz_menu", title: "Snoozed row" })],
-        projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
+        projects: [{ id: "proj_1", name: "bb", isPersonal: false, href: "/p/proj_1", settingsHref: "/p/proj_1/settings" }],
       },
       rpc: {
         listProjectColors: () => ({ projects: [] }),
@@ -915,18 +917,6 @@ describe("row context menu", () => {
     expect(within(menu).getByText("Wake now")).toBeDefined();
   });
 
-  it("routes deletion through the host's confirmation", async () => {
-    const rendered = render([thread({ id: "thr_del", title: "Delete me" })]);
-    fireEvent.contextMenu(await screen.findByText("Delete me"));
-    const menu = await screen.findByRole("menu", { name: "Thread actions" });
-    fireEvent.click(within(menu).getByText("Delete"));
-    await waitFor(() =>
-      expect(rendered.sidebarActionCalls).toContainEqual({
-        method: "requestDelete",
-        threadId: "thr_del",
-      }),
-    );
-  });
 });
 
 describe("card metadata", () => {
@@ -953,6 +943,9 @@ describe("card metadata", () => {
           name: "Worktree",
           branchName: "bb/feature",
           workspaceDisplayKind: "managed-worktree",
+          path: null,
+          isWorktree: true,
+          providerId: null,
         },
       }),
     ]);
@@ -969,7 +962,7 @@ describe("card metadata", () => {
       sidebarThreads: {
         status: "ready",
         threads: [thread({ id: "thr_l" })],
-        projects: [{ id: "proj_1", name: "vaam-main", isPersonal: false }],
+        projects: [{ id: "proj_1", name: "vaam-main", isPersonal: false, href: "/p/proj_1", settingsHref: "/p/proj_1/settings" }],
       },
       rpc: {
         listProjectColors: () => ({
@@ -1094,7 +1087,7 @@ describe("pull request badge", () => {
       sidebarThreads: {
         status: "ready",
         threads: [thread({ id: "thr_pr" })],
-        projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
+        projects: [{ id: "proj_1", name: "bb", isPersonal: false, href: "/p/proj_1", settingsHref: "/p/proj_1/settings" }],
       },
       rpc: {
         listProjectColors: () => ({ projects: [] }),
@@ -1149,7 +1142,7 @@ describe("project badge", () => {
       sidebarThreads: {
         status: "ready",
         threads: [thread({ id: "thr_p", title: "A thread" })],
-        projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
+        projects: [{ id: "proj_1", name: "bb", isPersonal: false, href: "/p/proj_1", settingsHref: "/p/proj_1/settings" }],
       },
       rpc: {
         listProjectColors: () => ({ projects }),

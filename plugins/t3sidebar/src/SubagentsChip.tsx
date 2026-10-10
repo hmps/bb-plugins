@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
-  experimental_useSidebarThreadActions as useSidebarThreadActions,
   experimental_useSidebarThreads as useSidebarThreads,
+  useBbNavigate,
   type PluginSidebarThread,
   type PluginThreadHeaderActionProps,
 } from "@get-bb/plugin-sdk/app";
@@ -25,7 +25,7 @@ export function SubagentsChip({
   isCompactViewport,
 }: PluginThreadHeaderActionProps) {
   const { threads } = useSidebarThreads();
-  const actions = useSidebarThreadActions();
+  const navigate = useBbNavigate();
   const [open, setOpen] = useState(false);
 
   const children = childrenOf(threads, threadId);
@@ -85,7 +85,7 @@ export function SubagentsChip({
                     role="menuitem"
                     onClick={() => {
                       setOpen(false);
-                      actions.open(child.id);
+                      navigate.toThread(child.id);
                     }}
                     className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent"
                   >

@@ -1,7 +1,4 @@
-import {
-  experimental_useSidebarThreadActions as useSidebarThreadActions,
-  type PluginSidebarThread,
-} from "@get-bb/plugin-sdk/app";
+import { type PluginSidebarThread, useBbNavigate } from "@get-bb/plugin-sdk/app";
 import { Icon } from "./components/Icon";
 import { cn } from "./lib/utils";
 import { RowContextMenu } from "./RowContextMenu";
@@ -35,7 +32,7 @@ export function SlimRow({
   onNavigate: () => void;
   onRestore: () => void;
 }) {
-  const actions = useSidebarThreadActions();
+  const navigate = useBbNavigate();
   // While the shortcut modifier is held, the key that opens this row.
   const shortcutHint = useThreadShortcutHint(thread.id);
   const title = threadDisplayTitle(thread);
@@ -49,6 +46,7 @@ export function SlimRow({
       shelfItems={[
         {
           label: shelf === "snoozed" ? "Wake now" : "Un-settle",
+          icon: shelf === "snoozed" ? "ClockArrowUp" : "RotateCcw",
           onSelect: onRestore,
         },
       ]}
@@ -67,7 +65,7 @@ export function SlimRow({
             aria-label={title}
             onClick={(event) => {
               event.preventDefault();
-              actions.open(thread.id, {
+              navigate.toThread(thread.id, {
                 split: event.metaKey || event.ctrlKey,
               });
               onNavigate();

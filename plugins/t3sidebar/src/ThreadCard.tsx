@@ -1,9 +1,9 @@
 import {
   experimental_useSidebarThreadPullRequest as useSidebarThreadPullRequest,
   experimental_useSidebarThreadSplit as useSidebarThreadSplit,
-  experimental_useSidebarThreadActions as useSidebarThreadActions,
   type PluginSidebarPullRequest,
   type PluginSidebarThread,
+  useBbNavigate,
 } from "@get-bb/plugin-sdk/app";
 import { Icon, type IconName } from "./components/Icon";
 import { projectColor } from "./project-colors";
@@ -80,7 +80,7 @@ export function ThreadCard({
       drawn with `workingChildren` as one "total (working)" badge. */
   spawnedChildren?: number;
 }) {
-  const actions = useSidebarThreadActions();
+  const navigate = useBbNavigate();
   const { splitProps, layout } = useSidebarThreadSplit(thread.id);
   // Opt-in per row: this costs a git-host lookup, and threads sharing a
   // worktree share one.
@@ -99,10 +99,15 @@ export function ThreadCard({
       shelfItems={
         canPark && !archiving
           ? [
-              { label: "Snooze until tomorrow", onSelect: snoozeUntilTomorrow },
-              { label: "Settle", onSelect: onSettle },
+              {
+                label: "Snooze until tomorrow",
+                icon: "Clock",
+                onSelect: snoozeUntilTomorrow,
+              },
+              { label: "Settle", icon: "Check", onSelect: onSettle },
               {
                 label: "Settle and archive",
+                icon: "Archive",
                 onSelect: onSettleAndArchive,
               },
             ]
@@ -188,7 +193,7 @@ export function ThreadCard({
               {...splitProps}
               onClick={(event) => {
                 event.preventDefault();
-                actions.open(thread.id, {
+                navigate.toThread(thread.id, {
                   split: event.metaKey || event.ctrlKey,
                 });
                 onNavigate();

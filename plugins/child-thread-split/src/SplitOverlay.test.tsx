@@ -206,8 +206,8 @@ describe("composer child rows", () => {
     expect(document.activeElement).toBe(button);
 
     fireEvent.click(button);
-    expect(view.inspection.sidebarActionCalls).toEqual([
-      { method: "open", threadId: CHILD, options: { split: true } },
+    expect(view.inspection.navigateCalls).toEqual([
+      { method: "toThread", threadId: CHILD, options: { split: true } },
     ]);
     expect(linkClicks).toBe(0);
   });
@@ -278,9 +278,9 @@ describe("split panes", () => {
     await waitFor(() => expect(splitButtons()).toHaveLength(1));
 
     fireEvent.click(splitButtons()[0]);
-    expect(view.inspection.sidebarActionCalls).toEqual([
-      { method: "open", threadId: PARENT, options: { split: true } },
-      { method: "open", threadId: CHILD, options: { split: true } },
+    expect(view.inspection.navigateCalls).toEqual([
+      { method: "toThread", threadId: PARENT, options: { split: true } },
+      { method: "toThread", threadId: CHILD, options: { split: true } },
     ]);
   });
 
@@ -346,8 +346,8 @@ describe("message header pills", () => {
     expect(button.closest(`[data-testid="message-${CHILD}"]`)).not.toBeNull();
 
     fireEvent.click(button);
-    expect(view.inspection.sidebarActionCalls).toEqual([
-      { method: "open", threadId: CHILD, options: { split: true } },
+    expect(view.inspection.navigateCalls).toEqual([
+      { method: "toThread", threadId: CHILD, options: { split: true } },
     ]);
     expect(toggles).toBe(0);
   });
@@ -402,8 +402,8 @@ describe("child report previews", () => {
       expect(button.closest(`[data-testid="report-${CHILD}"]`)).not.toBeNull();
 
       fireEvent.click(button);
-      expect(view.inspection.sidebarActionCalls).toEqual([
-        { method: "open", threadId: CHILD, options: { split: true } },
+      expect(view.inspection.navigateCalls).toEqual([
+        { method: "toThread", threadId: CHILD, options: { split: true } },
       ]);
       expect(toggles).toEqual([]);
     },

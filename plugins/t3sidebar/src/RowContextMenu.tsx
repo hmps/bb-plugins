@@ -1,25 +1,28 @@
 import type { ReactNode } from "react";
-import * as ContextMenu from "@radix-ui/react-context-menu";
 import {
-  experimental_useSidebarThreadActions as useSidebarThreadActions,
+  experimental_ThreadActionsContextMenu as ThreadActionsContextMenu,
   type PluginSidebarThread,
+  type PluginThreadActionsInlineItem,
+  type PluginThreadActionTarget,
 } from "@get-bb/plugin-sdk/app";
-import { cn } from "./lib/utils";
 
 /**
- * This sidebar's own right-click menu.
+ * This sidebar's right-click and long-press menu: bb's own thread menu, so
+ * split, read, pin, rename, archive, delete, and every plugin's thread
+ * actions behave exactly as they do on bb's rows. Delete keeps bb's
+ * confirmation rather than deleting a subtree silently.
  *
- * The plugin API ships no menu component on purpose, so a replaced sidebar
- * owns this surface. Every item below is one call on
- * `experimental_useSidebarThreadActions`, and the destructive one is
- * `requestDelete`, which opens BB's confirmation rather than deleting a
- * subtree silently.
+ * The row's shelf actions ride along as inline items.
  */
 /** One shelf action for the menu: settle, snooze, wake, or un-settle. */
 export interface RowMenuShelfItem {
   label: string;
+  icon: string;
   onSelect: () => void;
 }
+
+/** Sorts ahead of bb's groups, so the shelf actions lead the menu. */
+const SHELF_GROUP = "0_shelf";
 
 export function RowContextMenu({
   thread,
@@ -34,74 +37,34 @@ export function RowContextMenu({
   shelfItems?: readonly RowMenuShelfItem[];
   children: ReactNode;
 }) {
-  const actions = useSidebarThreadActions();
+  const inline: PluginThreadActionsInlineItem[] = shelfItems.map((item) => ({
+    key: `shelf:${item.label}`,
+    group: SHELF_GROUP,
+    action: { label: item.label, icon: item.icon, run: item.onSelect },
+  }));
 
   return (
-    <ContextMenu.Root>
-      <ContextMenu.Trigger asChild>{children}</ContextMenu.Trigger>
-      <ContextMenu.Portal>
-        <ContextMenu.Content
-          aria-label="Thread actions"
-          className="z-50 min-w-44 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-md"
-        >
-          <Item onSelect={() => actions.open(thread.id, { split: true })}>
-            Open in split
-          </Item>
-          <Separator />
-          {shelfItems.length > 0 ? (
-            <>
-              {shelfItems.map((item) => (
-                <Item key={item.label} onSelect={item.onSelect}>
-                  {item.label}
-                </Item>
-              ))}
-              <Separator />
-            </>
-          ) : null}
-          <Item
-            onSelect={() => void actions.setRead(thread.id, thread.isUnread)}
-          >
-            {thread.isUnread ? "Mark read" : "Mark unread"}
-          </Item>
-          <Item
-            onSelect={() => void actions.setPinned(thread.id, !thread.isPinned)}
-          >
-            {thread.isPinned ? "Unpin" : "Pin"}
-          </Item>
-          <Separator />
-          <Item onSelect={() => actions.archive(thread.id)}>Archive</Item>
-          <Item destructive onSelect={() => actions.requestDelete(thread.id)}>
-            Delete
-          </Item>
-        </ContextMenu.Content>
-      </ContextMenu.Portal>
-    </ContextMenu.Root>
-  );
-}
-
-function Item({
-  children,
-  destructive = false,
-  onSelect,
-}: {
-  children: ReactNode;
-  destructive?: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <ContextMenu.Item
-      onSelect={onSelect}
-      className={cn(
-        "cursor-pointer rounded-md px-2 py-1.5 text-sm outline-none",
-        "data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground",
-        destructive && "text-destructive-text",
-      )}
-    >
+    <ThreadActionsContextMenu thread={actionTarget(thread)} inline={inline}>
       {children}
-    </ContextMenu.Item>
+    </ThreadActionsContextMenu>
   );
 }
 
-function Separator() {
-  return <ContextMenu.Separator className="my-1 h-px bg-border" />;
+/** The fields bb's thread menu reads, from a sidebar row. */
+function actionTarget(thread: PluginSidebarThread): PluginThreadActionTarget {
+  const { environment } = thread;
+  return {
+    id: thread.id,
+    projectId: thread.projectId,
+    parentThreadId: thread.parentThreadId,
+    archivedAt: thread.archivedAt,
+    pinnedAt: thread.pinnedAt,
+    sectionId: thread.sectionId,
+    isUnread: thread.isUnread,
+    status: thread.status,
+    environment:
+      environment?.id != null
+        ? { id: environment.id, path: environment.path ?? null }
+        : null,
+  };
 }

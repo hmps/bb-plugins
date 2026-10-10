@@ -20,6 +20,16 @@ function thread(
     title: "A thread",
     titleFallback: null,
     parentThreadId: null,
+    lifecycleOwnerThreadId: null,
+    sourceThreadId: null,
+    status: "idle",
+    runtimeStatus: "idle",
+    queuedWork: "none",
+    pinnedAt: null,
+    pinSortKey: null,
+    archivedAt: null,
+    href: "/t/thr_1",
+    isHidden: false,
     sectionId: null,
     originKind: null,
     originPluginId: null,
@@ -43,6 +53,7 @@ function thread(
     updatedAt: 100,
     lastReadAt: 100,
     latestAttentionAt: 100,
+    displayTitle: overrides.title ?? "A thread",
     ...overrides,
   };
 }
@@ -59,7 +70,7 @@ function render(
       sidebarThreads: {
         status: "ready",
         threads,
-        projects: [{ id: "proj_1", name: "bb", isPersonal: false }],
+        projects: [{ id: "proj_1", name: "bb", isPersonal: false, href: "/p/proj_1", settingsHref: "/p/proj_1/settings" }],
       },
     },
   );
@@ -79,10 +90,9 @@ describe("ParentChip", () => {
       "child",
     );
     fireEvent.click(screen.getByRole("button"));
-    expect(rendered.sidebarActionCalls).toContainEqual({
-      method: "open",
+    expect(rendered.navigateCalls).toContainEqual({
+      method: "toThread",
       threadId: "parent",
-      options: undefined,
     });
   });
 
