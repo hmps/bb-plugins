@@ -1,11 +1,18 @@
 /* Hide the status bars above the thread composer on compact viewports:
    background commands, child threads, parent thread, changes. The
-   queued-messages panel stays. Plugin slots (display: contents) stay too. */
+   queued-messages panel stays. Plugin slots (display: contents) stay too.
+   Pending-interaction cards (questions, approvals, plan review, plugin forms)
+   share the stack and also stay: bb hides the composer while one is open. */
 @media (max-width: 767px) {
   html.bb-mobile-fixes:not(.bb-mobile-fixes-bars-open)
     [data-promptbox-shell]
     > div:not([data-follow-up-composer-anchor])
-    > section:not(:has([data-queued-messages-scroll-frame])) {
+    > section:not(:has([data-queued-messages-scroll-frame])):not(
+      [data-testid="user-question-banner"],
+      [data-testid="approval-banner"],
+      [data-testid="plan-review-banner"],
+      [data-testid="plugin-interaction-shell"]
+    ) {
     display: none;
   }
 }

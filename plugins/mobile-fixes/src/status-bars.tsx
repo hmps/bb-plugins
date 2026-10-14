@@ -11,8 +11,9 @@ import { COMPACT_VIEWPORT_QUERY, createFlag, useMediaQuery } from "./shared";
 import "./status-bars.css";
 
 // Each bar item has a disclosure toggle; the context bar has one per item.
+// Pending-interaction cards stay visible (status-bars.css), so they do not count.
 const BAR_ITEM_SELECTOR =
-  ":scope > div:not([data-follow-up-composer-anchor]) > section:not(:has([data-queued-messages-scroll-frame])) button[aria-controls][aria-expanded]";
+  ':scope > div:not([data-follow-up-composer-anchor]) > section:not(:has([data-queued-messages-scroll-frame])):not([data-testid="user-question-banner"], [data-testid="approval-banner"], [data-testid="plan-review-banner"], [data-testid="plugin-interaction-shell"]) button[aria-controls][aria-expanded]';
 
 export const barsOpen = createFlag("bb-mobile-fixes-bars-open", "bb-mobile-fixes:bars-open");
 

@@ -60,7 +60,9 @@
    visual viewport while the keyboard is open. The rest of the shell is the
    safe-area inset, the 48px header, the 54px action row, the card borders,
    and the 16px bottom padding, rounded up to 128px. The status bars above
-   the composer are hidden so they do not push the card off the screen. */
+   the composer are hidden so they do not push the card off the screen.
+   bb hides the composer while a pending-interaction card is open; the
+   stack then stays, so the card shows. */
 @media (max-width: 767px) {
   html.bb-mobile-fixes.bb-mobile-fixes-large
     [data-follow-up-composer]
@@ -74,7 +76,7 @@
     max-height: var(--bb-mobile-fixes-large-height) !important;
   }
   html.bb-mobile-fixes.bb-mobile-fixes-large
-    [data-promptbox-shell]:has([data-follow-up-composer])
+    [data-promptbox-shell]:has([data-follow-up-composer]:not([hidden]))
     > div:not([data-follow-up-composer-anchor]) {
     display: none;
   }
