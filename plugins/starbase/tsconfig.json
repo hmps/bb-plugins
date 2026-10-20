@@ -18,6 +18,7 @@
   "include": [
     "server.ts",
     "board.ts",
+    "mission.ts",
     "app.tsx",
     "*.test.ts",
     "components",

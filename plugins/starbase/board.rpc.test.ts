@@ -195,6 +195,7 @@ describe("board rpc", () => {
       "waiting",
       "blocked",
       "review",
+      "deploy",
       "done",
     ]);
     expect(column(board, "progress")?.cards.map((card) => card.id)).toEqual([

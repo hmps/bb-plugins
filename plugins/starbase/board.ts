@@ -40,6 +40,7 @@ export const COLUMN_IDS = [
   "waiting",
   "blocked",
   "review",
+  "deploy",
   "done",
 ] as const;
 export type ColumnId = (typeof COLUMN_IDS)[number];
@@ -50,6 +51,7 @@ export const COLUMN_TITLES: Record<ColumnId, string> = {
   waiting: "Waiting on you",
   blocked: "Blocked",
   review: "Commander review",
+  deploy: "Awaiting deploy",
   done: "Done",
 };
 

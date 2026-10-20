@@ -291,6 +291,7 @@ describe("buildBoard", () => {
       "waiting",
       "blocked",
       "review",
+      "deploy",
       "done",
     ]);
     const queued = board.find((entry) => entry.id === "queued");

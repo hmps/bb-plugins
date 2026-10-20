@@ -215,6 +215,7 @@ in the notes that starts with `decision=`, or the last reconciliation line with
 | Blocked | The Crew thread failed; or the newest record is `disposition=external_blocker`. |
 | In progress | The Crew thread is active or starting; or the bead is `in_progress`; or the newest record is `disposition=progressing`. |
 | Commander review | The bead names a Crew thread and no rule above matched; or the newest record is a `disposition=` that starts with `complete`, or `preserve_state`. |
+| Awaiting deploy | Only a mission state v1 row goes here: lifecycle `source-ready` or `ready-for-deploy`. The notes rules above never use it. |
 | Queued | The bead is open and names no Crew thread. |
 
 A live pending interaction and a failed Crew thread beat the newest record. A
@@ -222,7 +223,8 @@ thread that bb no longer has, could not read, or archived does not count as
 live. Its card keeps a small flag.
 
 The wide board shows the columns from Queued to Done. A narrow panel stacks
-them: Waiting on you, Blocked, In progress, Commander review, Queued, Done.
+them: Waiting on you, Blocked, In progress, Commander review, Awaiting deploy,
+Queued, Done.
 Queued and Done start collapsed there; click the header to open them.
 
 A card shows the mission id, build or survey, the title, the project (in the
