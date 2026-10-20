@@ -371,6 +371,7 @@ describe("board source", () => {
   const COLUMNS: Record<string, string> = {
     active: "progress",
     "changed-verified-target": "blocked",
+    "direct-root-discussion": "waiting",
     "missing-verified-target": "blocked",
     "new-blocker": "waiting",
     "partial-source-failure": "waiting",

@@ -175,7 +175,11 @@ describe("viewMission", () => {
 
   it("shows a new blocker after an old report", () => {
     const view = viewMission(state("pending-new-blocker-after-old-report"));
-    expect(view.attention.map((a) => a.kind)).toEqual(["blocker"]);
+    // The core keeps the old report's blocker and adds the lifecycle one.
+    expect(view.attention.map((a) => [a.kind, a.summary])).toEqual([
+      ["blocker", "old"],
+      ["blocker", "Current Crew report is blocked"],
+    ]);
     expect(view.column).toBe("blocked");
     expect(view.tone).toBe("alert");
     expect(view.problems).toContain(
