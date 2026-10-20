@@ -5,8 +5,9 @@
 //     lives in the route's subPath, so back/forward walks the picks;
 //   - a "Starbase board" thread panel tab, scoped to the thread's Command
 //     project. A pick made on a Commander is saved for it.
-// The server builds every column from a warm snapshot; this file only renders
-// them. One card is one mission.
+// The server builds every column from a warm snapshot of the Starbase SITREP;
+// this file only renders them. One card is one SITREP row: a mission, or a
+// Crew thread that no mission bead claims. The board never writes.
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MouseEvent, ReactNode } from "react";
 import {
@@ -16,7 +17,8 @@ import {
   type PluginNavPanelProps,
   type PluginThreadPanelProps,
 } from "@get-bb/plugin-sdk/app";
-import type { BoardCard, BoardColumn, CardFlag, ColumnId } from "./board.js";
+import type { BoardCard, BoardColumn, ColumnId } from "./board.js";
+import type { MissionTone } from "./mission.js";
 import type { starbaseRpcContract } from "./server.js";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
@@ -32,10 +34,32 @@ const FOLLOW_UP_MS = 2_000;
 /** How many Done cards show before "Show all". */
 const DONE_PREVIEW = 20;
 
-const FLAG_LABELS: Record<CardFlag, string> = {
+/** SITREP row flags in words. A flag not named here shows as written. */
+const FLAG_LABELS: Record<string, string> = {
+  "needs-input": "Needs input",
+  "thread-failed": "Thread failed",
   "thread-gone": "Thread gone",
-  "thread-unreadable": "Thread unreadable",
-  "thread-archived": "Thread archived",
+  "bb-error": "bb error",
+  "bb-unreachable": "bb unreachable",
+  "forge-error": "Forge error",
+  "source-error": "Source error",
+  "bead-without-thread": "No thread",
+  "thread-without-bead": "No mission bead",
+};
+
+const ATTENTION_LABELS: Record<string, string> = {
+  decision: "Decision",
+  blocker: "Blocker",
+  "verification-failed": "Verification failed",
+};
+
+/** The dot before a card's stage. Only `alert` is a strong color. */
+const TONE_DOTS: Record<MissionTone, string> = {
+  alert: "bg-amber-500",
+  warn: "bg-violet-500",
+  working: "bg-primary",
+  waiting: "bg-muted-foreground/40",
+  quiet: "bg-emerald-500",
 };
 
 /**
@@ -81,10 +105,13 @@ function age(value: string | number | null, now: number): string {
   return `${Math.round(hours / 24)}d`;
 }
 
+type SourceState = "current" | "partial" | "stale" | "unavailable";
+
 interface BoardData {
   project: string;
   generatedAt: number;
   refreshing: boolean;
+  source: SourceState;
   error: string | null;
   projects: string[];
   columns: BoardColumn[];
@@ -205,15 +232,16 @@ function Freshness(props: { board: BoardData | null }) {
   const { board } = props;
   if (board === null) return null;
   const ago = age(board.generatedAt, Date.now());
-  return (
-    <span className="text-xs text-muted-foreground">
-      {board.refreshing
-        ? "Updating…"
-        : ago === "0m"
-          ? "Updated just now"
-          : `Updated ${ago} ago`}
-    </span>
-  );
+  const when = ago === "0m" ? "just now" : `${ago} ago`;
+  // Old rows never read as a fresh update.
+  const label = board.refreshing
+    ? "Updating…"
+    : board.source === "unavailable"
+      ? `Tried ${when}`
+      : board.source === "stale"
+        ? `Last good read ${when}`
+        : `Updated ${when}`;
+  return <span className="text-xs text-muted-foreground">{label}</span>;
 }
 
 function Toolbar(props: {
@@ -237,6 +265,39 @@ function Toolbar(props: {
         >
           {props.loading ? "Loading…" : "Refresh"}
         </Button>
+      )}
+    </div>
+  );
+}
+
+const SOURCE_NOTES: Record<Exclude<SourceState, "current">, string> = {
+  partial:
+    "A source failed during the last SITREP run. Some cards may be incomplete.",
+  stale:
+    "The last SITREP run failed. These cards are from the last good read and may be out of date.",
+  unavailable:
+    "No SITREP run has given missions yet. The missions are unknown, not empty.",
+};
+
+/** How far to trust the board, shown in the page, never as a notification. */
+function SourceNotice(props: { board: BoardData }) {
+  const { board } = props;
+  if (board.source === "current") return null;
+  return (
+    <div
+      role="status"
+      className={cn(
+        "mx-3 mt-3 rounded-md border px-3 py-2 text-xs",
+        board.source === "unavailable"
+          ? "border-destructive/40 text-destructive"
+          : "border-amber-500/40 text-foreground",
+      )}
+    >
+      <div className="font-medium">{SOURCE_NOTES[board.source]}</div>
+      {board.error === null ? null : (
+        <div className="mt-0.5 break-words text-muted-foreground">
+          {board.error}
+        </div>
       )}
     </div>
   );
@@ -273,11 +334,7 @@ function OpenIcon() {
   );
 }
 
-function CardView(props: {
-  card: BoardCard;
-  showProject: boolean;
-  now: number;
-}) {
+function CardView(props: { card: BoardCard; showProject: boolean }) {
   const { card } = props;
   const navigate = useBbNavigate();
   const [open, setOpen] = useState(false);
@@ -288,7 +345,7 @@ function CardView(props: {
   const details: [string, string | null][] = [
     ["Outcome", card.outcome],
     ["Note", card.note],
-    ["Commander record", card.record],
+    ["Thread status", card.threadStatus],
   ];
   return (
     <div className="rounded-md border border-border bg-background text-sm">
@@ -298,29 +355,67 @@ function CardView(props: {
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span className="font-mono">{card.id}</span>
-          <span>{card.mission}</span>
+        <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+          <span className="truncate font-mono">{card.id}</span>
+          <span className="shrink-0">{card.mission ?? "no bead"}</span>
           {props.showProject ? (
             <span className="truncate">{card.project}</span>
           ) : null}
-          <span className="ml-auto shrink-0">
-            {age(card.closedAt ?? card.updatedAt, props.now)}
-          </span>
         </div>
         <div className="break-words font-medium text-foreground">
           {card.title || "(untitled)"}
         </div>
-        {card.status === null ? null : (
-          <div className="line-clamp-2 break-words text-xs text-muted-foreground">
-            {card.status}
+        <div className="flex items-start gap-1.5 text-xs text-foreground">
+          <span
+            aria-hidden="true"
+            className={cn(
+              "mt-1 size-1.5 shrink-0 rounded-full",
+              TONE_DOTS[card.tone],
+            )}
+          />
+          <span className="break-words">{card.stage}</span>
+        </div>
+        {card.nextAction === null ? null : (
+          <div className="line-clamp-2 break-words text-xs text-foreground">
+            <span className="text-muted-foreground">Next: </span>
+            {card.nextAction}
           </div>
         )}
+        <div className="break-words text-xs text-muted-foreground">
+          {card.owner === null
+            ? "No owner"
+            : `Owner: ${card.owner}${card.ownerIdle ? " · idle" : ""}`}
+        </div>
       </button>
+      {card.attention.length === 0 ? null : (
+        <ul className="flex flex-col gap-1 px-2.5 pb-1.5 text-xs">
+          {card.attention.map((event, index) => (
+            <li key={index} className="break-words text-foreground">
+              <span className="font-medium">
+                {ATTENTION_LABELS[event.kind] ?? event.kind}
+              </span>
+              {event.surfaced ? (
+                <span className="text-muted-foreground"> · seen</span>
+              ) : null}
+              <span className="text-muted-foreground">: </span>
+              {event.summary}
+            </li>
+          ))}
+        </ul>
+      )}
       {(card.pr !== null ||
+        card.integrity !== null ||
         card.flags.length > 0 ||
         card.threadId !== null) && (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2.5 pb-2 text-xs">
+          {card.integrity === null ? null : (
+            <Badge
+              variant="outline"
+              className="px-1.5 py-0 text-[11px] font-medium text-foreground"
+            >
+              {card.integrity}
+            </Badge>
+          )}
           {card.pr === null ? null : (
             <a
               href={card.pr.url}
@@ -338,15 +433,15 @@ function CardView(props: {
               variant="outline"
               className="px-1.5 py-0 text-[11px] font-medium text-muted-foreground"
             >
-              {FLAG_LABELS[flag]}
+              {FLAG_LABELS[flag] ?? flag}
             </Badge>
           ))}
           {card.threadId === null ? null : (
             <button
               type="button"
               className="ml-auto rounded p-0.5 text-muted-foreground hover:bg-state-hover hover:text-foreground"
-              title="Open Crew thread"
-              aria-label="Open Crew thread"
+              title="Open thread"
+              aria-label="Open thread"
               onClick={() => navigate.toThread(card.threadId as string)}
             >
               <OpenIcon />
@@ -356,6 +451,20 @@ function CardView(props: {
       )}
       {open ? (
         <div className="flex flex-col gap-1.5 border-t border-border px-2.5 py-2 text-xs">
+          <div>
+            <span className="text-muted-foreground">Problems: </span>
+            {card.problems.length === 0 ? (
+              <span className="text-foreground">—</span>
+            ) : (
+              <ul className="mt-0.5 list-disc pl-4 text-foreground">
+                {card.problems.map((problem, index) => (
+                  <li key={index} className="break-words">
+                    {problem}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
           {details.map(([label, value]) => (
             <div key={label}>
               <span className="text-muted-foreground">{label}: </span>
@@ -370,11 +479,7 @@ function CardView(props: {
   );
 }
 
-function ColumnView(props: {
-  column: BoardColumn;
-  showProject: boolean;
-  now: number;
-}) {
+function ColumnView(props: { column: BoardColumn; showProject: boolean }) {
   const { column } = props;
   const collapsible = COLLAPSED_WHEN_NARROW.has(column.id);
   const [collapsed, setCollapsed] = useState(collapsible);
@@ -433,7 +538,6 @@ function ColumnView(props: {
               key={card.id}
               card={card}
               showProject={props.showProject}
-              now={props.now}
             />
           ))
         )}
@@ -454,9 +558,10 @@ function ColumnView(props: {
 
 function BoardView(props: { board: BoardData | null; error: string | null }) {
   const { board } = props;
-  const error = props.error ?? board?.error ?? null;
   if (board === null) {
-    if (error !== null) return <Message tone="error">{error}</Message>;
+    if (props.error !== null) {
+      return <Message tone="error">{props.error}</Message>;
+    }
     return (
       <div className="flex flex-col gap-2 p-3">
         <Skeleton className="h-16" />
@@ -465,20 +570,24 @@ function BoardView(props: { board: BoardData | null; error: string | null }) {
       </div>
     );
   }
-  const now = Date.now();
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto">
-      {error === null ? null : <Message tone="error">{error}</Message>}
-      <div className="flex flex-col gap-4 p-3 @2xl:flex-row @2xl:items-start">
-        {board.columns.map((column) => (
-          <ColumnView
-            key={column.id}
-            column={column}
-            showProject={board.project === ALL}
-            now={now}
-          />
-        ))}
-      </div>
+      {props.error === null ? null : (
+        <Message tone="error">{props.error}</Message>
+      )}
+      <SourceNotice board={board} />
+      {/* With no rows, empty columns would read as an empty queue. */}
+      {board.source === "unavailable" ? null : (
+        <div className="flex flex-col gap-4 p-3 @2xl:flex-row @2xl:items-start">
+          {board.columns.map((column) => (
+            <ColumnView
+              key={column.id}
+              column={column}
+              showProject={board.project === ALL}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
