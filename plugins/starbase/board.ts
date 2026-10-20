@@ -24,6 +24,11 @@ export const COLUMN_CARD_LIMIT = 150;
 const TITLE_MAX_CHARS = 200;
 const LINE_MAX_CHARS = 240;
 const DETAIL_MAX_CHARS = 600;
+/**
+ * The next action is an instruction, and an open card shows all of it. This
+ * bound only keeps one runaway row from filling the payload.
+ */
+const NEXT_ACTION_MAX_CHARS = 2000;
 
 /** The wide-layout order, left to right. */
 export const COLUMN_IDS = [
@@ -193,8 +198,6 @@ export function toCard(row: unknown): BoardCard | null {
     const found = text(value).trim();
     return NO_VALUE.has(found) ? null : clip(found, DETAIL_MAX_CHARS);
   };
-  const line = (value: string | null) =>
-    value === null ? null : clip(value, LINE_MAX_CHARS);
   return {
     id,
     bead,
@@ -210,7 +213,10 @@ export function toCard(row: unknown): BoardCard | null {
     column: view.column,
     stage: clip(view.stage, LINE_MAX_CHARS),
     tone: view.tone,
-    nextAction: line(view.nextAction),
+    nextAction:
+      view.nextAction === null
+        ? null
+        : clip(view.nextAction, NEXT_ACTION_MAX_CHARS),
     owner: view.owner,
     ownerIdle: view.ownerIdle,
     attention: view.attention.map((event) => ({

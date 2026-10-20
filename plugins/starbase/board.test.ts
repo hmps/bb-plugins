@@ -169,6 +169,16 @@ describe("toCard", () => {
   it("clips a long title", () => {
     expect(card("active", { title: "x".repeat(500) }).title).toHaveLength(200);
   });
+
+  it("carries a long next action whole, for the open card", () => {
+    const base = fullRow("active").mission_state as Row;
+    const nextAction = `${"Check the deploy target. ".repeat(12)}Then ask the Governor before deployment.`;
+    const found = card("active", {
+      mission_state: { ...base, next_action: nextAction },
+    });
+    expect(nextAction.length).toBeGreaterThan(240);
+    expect(found.nextAction).toBe(nextAction);
+  });
 });
 
 describe("buildBoard", () => {

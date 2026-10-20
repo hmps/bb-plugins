@@ -258,7 +258,7 @@ A card shows:
 - the mission id (or the thread id), build or survey, the project, and the
   title;
 - the stage, with a dot for the tone;
-- "Next:" and the next action;
+- "Next:" and the next action, in two lines; an open card shows all of it;
 - "Owner:" and the owner role and thread, with "idle" when the owner thread
   is idle;
 - each pending attention event, with "seen" when the Commander surfaced it;
