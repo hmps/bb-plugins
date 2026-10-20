@@ -9,7 +9,6 @@
       "contract_version": 1,
       "env": "env_fixture",
       "flags": [
-        "output-not-recorded",
         "source-error"
       ],
       "mission": "build",
@@ -19,15 +18,15 @@
           {
             "evidence": [
               {
-                "checked_at": "2026-10-20T08:10:19Z",
+                "checked_at": "2026-10-20T08:45:33Z",
                 "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "digest": "02df6de594d3f4294eaf1083f922896bb0dd8d936272413bd0a7100ade57936b",
                 "kind": "file",
-                "ref": "/tmp/mission-lifecycle-ug3hsumw/accepted-target.txt",
+                "ref": "/tmp/mission-lifecycle-ovsi8g_0/accepted-target.txt",
                 "target": "base-main"
               }
             ],
-            "fingerprint": "635da32d5a0cae8d51565dc858f09859159529cee70f2a3566667a3b19cfe36f",
+            "fingerprint": "32318532a40bead728c1dc5f39e74481db43838ba6abb716711aa087a238074a",
             "id": "bf3f36ab6fb8e59ba8dfa8b9",
             "kind": "verification-failed",
             "receipt": null,
@@ -50,15 +49,15 @@
           {
             "evidence": [
               {
-                "checked_at": "2026-10-20T08:10:19Z",
+                "checked_at": "2026-10-20T08:45:33Z",
                 "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "digest": "02df6de594d3f4294eaf1083f922896bb0dd8d936272413bd0a7100ade57936b",
                 "kind": "file",
-                "ref": "/tmp/mission-lifecycle-ug3hsumw/accepted-target.txt",
+                "ref": "/tmp/mission-lifecycle-ovsi8g_0/accepted-target.txt",
                 "target": "base-main"
               }
             ],
-            "fingerprint": "635da32d5a0cae8d51565dc858f09859159529cee70f2a3566667a3b19cfe36f",
+            "fingerprint": "32318532a40bead728c1dc5f39e74481db43838ba6abb716711aa087a238074a",
             "id": "bf3f36ab6fb8e59ba8dfa8b9",
             "kind": "verification-failed",
             "receipt": null,
@@ -68,8 +67,7 @@
           }
         ],
         "problems": [
-          "current target evidence unavailable: base-main",
-          "source failure: current target evidence unavailable: base-main"
+          "current target evidence unavailable: base-main"
         ],
         "report": {
           "fingerprint": "d42e7570324eee4b418cf6d1f55cbf61a8cfefb50c510294b9bf28060a332a60",
@@ -82,11 +80,11 @@
             "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "evidence": [
               {
-                "checked_at": "2026-10-20T08:10:19Z",
+                "checked_at": "2026-10-20T08:45:33Z",
                 "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "digest": "02df6de594d3f4294eaf1083f922896bb0dd8d936272413bd0a7100ade57936b",
                 "kind": "file",
-                "ref": "/tmp/mission-lifecycle-ug3hsumw/accepted-target.txt",
+                "ref": "/tmp/mission-lifecycle-ovsi8g_0/accepted-target.txt",
                 "target": "base-main"
               }
             ],

@@ -9,7 +9,6 @@
       "contract_version": 1,
       "env": "env_fixture",
       "flags": [
-        "output-not-recorded",
         "source-error"
       ],
       "mission": "survey",

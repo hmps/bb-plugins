@@ -48,11 +48,11 @@
     "attention": [
       {
         "kind": "blocker",
-        "source": "report",
-        "fingerprint": "f54a30fbbcb81b40388e90ee8ed20b284e63547b7bf8922485f1db3cfb3ea46a",
+        "source": "lifecycle:blocker",
+        "fingerprint": "4ed58cb263a10d92a3613891f8fa0e422c02cb9dbdd73b9ce800df591123a2bb",
         "summary": "Current Crew report is blocked",
         "evidence": [],
-        "id": "18f7607731fc5f596a840c18",
+        "id": "0a3e71fe16b96271e920e7bc",
         "revision": 1,
         "receipt": null
       }
@@ -60,11 +60,11 @@
     "pending_attention": [
       {
         "kind": "blocker",
-        "source": "report",
-        "fingerprint": "f54a30fbbcb81b40388e90ee8ed20b284e63547b7bf8922485f1db3cfb3ea46a",
+        "source": "lifecycle:blocker",
+        "fingerprint": "4ed58cb263a10d92a3613891f8fa0e422c02cb9dbdd73b9ce800df591123a2bb",
         "summary": "Current Crew report is blocked",
         "evidence": [],
-        "id": "18f7607731fc5f596a840c18",
+        "id": "0a3e71fe16b96271e920e7bc",
         "revision": 1,
         "receipt": null
       }

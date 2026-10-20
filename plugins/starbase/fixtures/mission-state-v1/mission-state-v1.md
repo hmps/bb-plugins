@@ -26,6 +26,22 @@ Missing records and orphans use `"unknown"`; other Beads status strings remain i
 Consumers reject unsupported contract versions.
 No source-error sentinel mission or extra public interface exists.
 
+N2 also adds two string fields to the existing row `source` object:
+
+- `source.output` is `"ok"` when `bb thread output` answered, and `"unreachable"` when a row with a thread got no output.
+  A confirmed thread 404 uses `"absent"`; its consequent missing output is known absence.
+  Rows without a thread or bead omit it.
+- `source.canonical` is `"failed"` when the row has any source failure, and `"ok"` otherwise.
+  Failures include the `bb-error`, `bb-unreachable`, and `forge-error` flags.
+  They also include unavailable output, message, or owner evidence, and failed target checks.
+
+A row with `source.canonical: "failed"` adds the flag `source-error` and drops `ok`.
+An unrecorded current report adds `output-not-recorded` and drops `ok`.
+Checked report fingerprints control this flag; missing legacy outcome notes do not override a matching checked report.
+Confirmed thread absence retains `thread-gone` without `source-error` from that absence or its missing output.
+The mission problem names cancellation or an authorized replacement and retains the record until archive safety is verified.
+The existing row fields, flags, and progress fields keep their meaning.
+
 The read-only command runs from the canonical Base main checkout:
 
 ```bash
@@ -117,6 +133,15 @@ An `act` disposition can name an implementation mission.
 It grants no build, merge, deploy, or spending authority.
 Cancellation requires an internal `cancellation` Decision with action `cancel`.
 Cancellation cannot bypass safety, source, or attention checks.
+A lost Crew thread does not prevent cancellation evidence from its retained Commander root.
+Use `state.sh apply` with the existing `update` operation, `lifecycle: "cancelled"`, null `next_action`, and a scoped `cancellation` Decision.
+The candidate preserves immutable linkage and existing history, evidence, and attention.
+Assign the retained Commander as owner when Crew no longer exist.
+The current Commander identity, conversation context, snapshot, and revision checks still apply.
+`land.sh` refuses archive when the Crew thread is missing; absence cannot prove PR or worktree safety.
+Keep the record open and let the Commander restore verifiable safety evidence.
+An unavailable Build worktree also adds a problem with that recovery action.
+Verified targets and a merged PR cannot prove worktree cleanliness.
 
 ## Current target evidence
 
@@ -144,14 +169,18 @@ Its fingerprint includes the expected target proof and current digests or unavai
 SITREP marks that source as failed and returns an incomplete read.
 Pending targets remain ordinary work and create no verification failure.
 A Base change can name `base-main` as its accepted installation target.
-Acceptance evidence must check the actual Base main checkout and exact commit ancestry.
-The built-in file digest collector does not perform that ancestry check.
+Its evidence is a fresh install and acceptance report file.
+An independently authorized verification of the actual Base main checkout and exact commit writes that file.
+No v1 collector checks the main checkout or commit ancestry.
 
-The CLI supplies a minimal collector for absolute local file references.
+The CLI supplies one collector: `gather_target_checks` for absolute local file references.
 It reads the file again and compares its SHA256 digest.
-The Commander remains responsible for evidence meaning and target association.
-A digest check does not prove live runtime behavior.
-Command, URL, and message evidence need an independent N2 collector for current target checks.
+The helper checks only the recorded target name, commit, and digest association.
+A matching digest proves that the file is unchanged.
+It does not prove runtime behavior, installation, or commit ancestry.
+The Commander remains accountable for evidence meaning and the exact target and commit.
+Command, URL, and message evidence have no current target collector in v1.
+Such evidence keeps the target check unavailable.
 The CLI never executes arbitrary stored commands.
 No generic deployment verifier exists.
 
@@ -184,6 +213,13 @@ A finished Survey can have worktree `n/a`; a Build requires `clean`.
 Event inputs have `kind`, `source`, `fingerprint`, `summary`, and `evidence`.
 Awaiting-decision and blocked lifecycles automatically derive stable events.
 Their fingerprint includes the current report and next action.
+One newly derived lifecycle event covers a report and its matching lifecycle cause.
+A fresh report replaces the current derived cause rather than adding a second report event.
+Previously stored report events and receipts remain intact; no automatic migration removes them.
+An explicit non-none `outcome.sh --decision` creates a separate `decision:explicit` event.
+Its fingerprint binds the exact decision text and current report fingerprint.
+An unchanged replay keeps its identity, revision, and receipt.
+A later `none` creates no new explicit event and does not remove unsurfaced events.
 Outcome-style updates persist these events through `prepare` under CAS.
 Recording a report fingerprint never erases its decision event.
 New blocked reports derive blocker attention before outcome records them.
@@ -234,6 +270,9 @@ Tests copy scripts into a scratch Base outside git.
 Every bd subprocess exports explicit `BEADS_DIR`.
 Export the approved scratch value before Git commands too.
 Existing repository hooks invoke bd during commits.
+In a Base worktree, run each Git mutation as `git -c core.hooksPath=/dev/null ...`.
+Run the source checks explicitly instead.
+Do not change hooks, Git config, or file permissions persistently.
 Apply uses prior revision 0 for explicit legacy adoption.
 Read returns `{snapshot, revision, issue, mission_state, capability}`.
 Unknown arguments fail before mutation.
@@ -306,6 +345,12 @@ The record includes conversation references, quote, exact scope, and attestation
 Reference checks prove existence and context, not human authorship.
 Spawn/tell, Crew output, and arbitrary user-role events never automatically grant authority.
 The CLI checks the current Commander thread and project for new authority or receipt writes.
+V1 pins `linkage.commander` as the authority and evidence root and has no rebind operation.
+Keep that root visible after disposition and source closure, because stored evidence is revalidated.
+`land.sh` refuses archive when the mission thread equals that Commander root.
+The mission record stays open; no root-close or root-archive route exists in v1.
+Other root discussions are not blocked solely because `parentThreadId` is null.
+Manual BB archive is outside script control and can invalidate stored evidence.
 
 Question and answer belong to the same visible project root Commander thread.
 The answer follows the question.

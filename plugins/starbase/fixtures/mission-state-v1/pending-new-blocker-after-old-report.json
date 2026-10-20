@@ -58,25 +58,45 @@
     "disposition": null,
     "attention": [
       {
+        "evidence": [],
+        "fingerprint": "d6d13014ef18d45030eec6ac0a66eab592e7f07e1feda93538935b3b434a8de8",
+        "id": "18f7607731fc5f596a840c18",
         "kind": "blocker",
+        "receipt": null,
+        "revision": 1,
         "source": "report",
-        "fingerprint": "f54a30fbbcb81b40388e90ee8ed20b284e63547b7bf8922485f1db3cfb3ea46a",
+        "summary": "old"
+      },
+      {
+        "kind": "blocker",
+        "source": "lifecycle:blocker",
+        "fingerprint": "76f2748c75b2d5e26b17766f76e8906e836eae77286fa4c991d5540c84051546",
         "summary": "Current Crew report is blocked",
         "evidence": [],
-        "id": "18f7607731fc5f596a840c18",
-        "revision": 2,
+        "id": "0a3e71fe16b96271e920e7bc",
+        "revision": 1,
         "receipt": null
       }
     ],
     "pending_attention": [
       {
+        "evidence": [],
+        "fingerprint": "d6d13014ef18d45030eec6ac0a66eab592e7f07e1feda93538935b3b434a8de8",
+        "id": "18f7607731fc5f596a840c18",
         "kind": "blocker",
+        "receipt": null,
+        "revision": 1,
         "source": "report",
-        "fingerprint": "f54a30fbbcb81b40388e90ee8ed20b284e63547b7bf8922485f1db3cfb3ea46a",
+        "summary": "old"
+      },
+      {
+        "kind": "blocker",
+        "source": "lifecycle:blocker",
+        "fingerprint": "76f2748c75b2d5e26b17766f76e8906e836eae77286fa4c991d5540c84051546",
         "summary": "Current Crew report is blocked",
         "evidence": [],
-        "id": "18f7607731fc5f596a840c18",
-        "revision": 2,
+        "id": "0a3e71fe16b96271e920e7bc",
+        "revision": 1,
         "receipt": null
       }
     ],

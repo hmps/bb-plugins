@@ -27,12 +27,12 @@
           },
           {
             "evidence": [],
-            "fingerprint": "4042a8e3e649baf3c0309cf505b942752edee8c4cf5ec03e1f889c94e6cb418d",
-            "id": "18f7607731fc5f596a840c18",
+            "fingerprint": "2055a7c2020d8f0eb903c939c06c55d738f9408e5a6af766753320d74a7b7621",
+            "id": "0a3e71fe16b96271e920e7bc",
             "kind": "blocker",
             "receipt": null,
             "revision": 1,
-            "source": "report",
+            "source": "lifecycle:blocker",
             "summary": "Current Crew report is blocked"
           }
         ],
@@ -59,12 +59,12 @@
           },
           {
             "evidence": [],
-            "fingerprint": "4042a8e3e649baf3c0309cf505b942752edee8c4cf5ec03e1f889c94e6cb418d",
-            "id": "18f7607731fc5f596a840c18",
+            "fingerprint": "2055a7c2020d8f0eb903c939c06c55d738f9408e5a6af766753320d74a7b7621",
+            "id": "0a3e71fe16b96271e920e7bc",
             "kind": "blocker",
             "receipt": null,
             "revision": 1,
-            "source": "report",
+            "source": "lifecycle:blocker",
             "summary": "Current Crew report is blocked"
           }
         ],

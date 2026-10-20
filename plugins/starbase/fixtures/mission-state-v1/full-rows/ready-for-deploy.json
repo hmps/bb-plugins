@@ -9,7 +9,7 @@
       "contract_version": 1,
       "env": "env_fixture",
       "flags": [
-        "output-not-recorded"
+        "ok"
       ],
       "mission": "build",
       "mission_state": {
