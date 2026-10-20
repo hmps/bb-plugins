@@ -193,57 +193,106 @@ places:
   - A Crew thread uses its Commander's project.
   - A Commander uses the project you last picked on it. The plugin saves that
     pick in its own database.
-  - A Commander with no saved pick uses the most common `project:` label among
-    the beads that name one of its Crew threads, live or archived. With no
+  - A Commander with no saved pick uses the most common project among the
+    missions that name one of its Crew threads, live or archived. With no
     Crew either, the panel asks you to pick a project.
   - Any other thread uses the posture whose `project_id` is the thread's
     project.
 
   The picker is always there. A pick on a Commander is saved for it.
 
-A card is one mission: a bead labelled `project:<slug>` and `mission:build` or
-`mission:survey`. Every other bead is not shown and not counted.
+### Where the board reads from
 
-The board reads the newest Commander record on a mission. That is the last line
-in the notes that starts with `decision=`, or the last reconciliation line with
-`disposition=<word>`. The first rule that matches puts a card in a column:
+The board is a view of the Starbase SITREP, mission state contract v1. It
+derives no mission state of its own. The server runs this command in the
+Base root:
 
-| Column | Rule |
-| --- | --- |
-| Done | The bead closed in the last 7 days. Older closed beads are not shown. |
-| Waiting on you | The Crew thread has a pending interaction; or the newest record is a `decision=` that is not `none`; or it is `disposition=governor_decision`. |
-| Blocked | The Crew thread failed; or the newest record is `disposition=external_blocker`. |
-| In progress | The Crew thread is active or starting; or the bead is `in_progress`; or the newest record is `disposition=progressing`. |
-| Commander review | The bead names a Crew thread and no rule above matched; or the newest record is a `disposition=` that starts with `complete`, or `preserve_state`. |
-| Awaiting deploy | Only a mission state v1 row goes here: lifecycle `source-ready` or `ready-for-deploy`. The notes rules above never use it. |
-| Queued | The bead is open and names no Crew thread. |
+```bash
+bash scripts/sitrep.sh --project all --commander <sitrepCommander> --recent-closed 50 --json
+```
 
-A live pending interaction and a failed Crew thread beat the newest record. A
-thread that bb no longer has, could not read, or archived does not count as
-live. Its card keeps a small flag.
+The SITREP prints one JSON row per mission: every open mission bead, the 50
+most recent closed ones, and each Crew thread under the Commander that no
+mission bead claims. Each row has `contract_version: 1` and a `mission_state`
+that the core projects. The board copies the next action, the owner, and the
+pending attention from that state. The contract is pinned in
+[`fixtures/mission-state-v1/`](fixtures/mission-state-v1/SOURCE.md).
+
+The Base must carry the v1 SITREP. An older SITREP prints rows with no
+`contract_version`. The board shows each such row as "Pre-v1 row" in
+Commander review.
+
+### Columns
+
+The first rule that matches puts a card in a column:
+
+| Order | Rule | Column |
+| --- | --- | --- |
+| 1 | The record integrity is not `valid` (`legacy`, `invalid`, or `conflict`), or the row has no readable v1 state. | Commander review |
+| 2 | The pending attention has a `decision`. | Waiting on you |
+| 3 | The pending attention has a `blocker` or a `verification-failed`. | Blocked |
+| 4 | The lifecycle is `active`. | In progress |
+| 4 | The lifecycle is `awaiting-decision`. | Waiting on you |
+| 4 | The lifecycle is `blocked`. | Blocked |
+| 4 | The lifecycle is `source-ready` or `ready-for-deploy`. | Awaiting deploy |
+| 4 | The lifecycle is `complete` or `cancelled`. | Done |
+| 4 | The lifecycle is `unverified`. | Commander review |
+
+Rules 2 and 3 apply also to a mission marked complete. Merged code thus waits
+in Awaiting deploy, and a survey that needs a decision waits in Waiting on
+you. A legacy mission that no checked update adopted is `unverified`, so it
+stays in Commander review with a "Legacy record" badge. A direct root
+discussion has the Commander as its owner and shows under it.
+
+No v1 lifecycle means "queued", so the Queued column is always empty. It
+stays to keep the layout.
 
 The wide board shows the columns from Queued to Done. A narrow panel stacks
 them: Waiting on you, Blocked, In progress, Commander review, Awaiting deploy,
 Queued, Done.
 Queued and Done start collapsed there; click the header to open them.
 
-A card shows the mission id, build or survey, the title, the project (in the
-all-projects view), the age, one status line, and the PR state when bb knows
-it. The status line is the pending decision, "Blocked on <owner>", or the
-`state=` of the newest disposition, else the latest `outcome=`. The icon on a
-card opens the Crew thread. Click a card to see the latest `outcome=`, hand
-note, and the newest Commander record.
+A card shows:
 
-The notes are read as the Starbase scripts write them. `thread=` and `env=` are
-the latest token anywhere in the notes. `outcome=` is the latest line that
-starts with the key. The note is the latest line that is not a `key=value` line
-or a reconciliation line.
+- the mission id (or the thread id), build or survey, the project, and the
+  title;
+- the stage, with a dot for the tone;
+- "Next:" and the next action;
+- "Owner:" and the owner role and thread, with "idle" when the owner thread
+  is idle;
+- each pending attention event, with "seen" when the Commander surfaced it;
+- an integrity badge when the board cannot trust the record, the PR state,
+  and the SITREP flags.
+
+The "Open thread" button opens the thread. Click a card to see the problems,
+the latest outcome and note, and the bb thread status.
+
+Only the pending attention and the lifecycle make a card ask for the user's
+eye. Report problems show as text on the card. The board sends no
+notification.
+
+### When a source fails
+
+The board header says how far to trust the cards:
+
+| Source | When | The board shows |
+| --- | --- | --- |
+| current | The SITREP exits 0 with a row array. | The cards, "Updated <time>". |
+| partial | The SITREP exits 1 with a row array: a source failed during the run. | The cards, with a notice and the SITREP's error. A card that the failure touched can carry `source-error`. |
+| stale | The run failed, but an earlier run gave rows. | The last good cards, "Last good read <time>", and the error. |
+| unavailable | No run has given rows yet. | No columns. A notice says the missions are unknown, not empty. |
+
+A run fails when the SITREP exits with any other code, prints no row array,
+times out after 60 seconds, or prints a row with an unsupported
+`contract_version`. One such row fails the whole run.
+
+### Warm snapshot
 
 The board answers from a warm snapshot, so the panel opens fast:
 
 - The first board call after the plugin loads reads the snapshot and waits for
   it. Every later call answers at once from the snapshot.
-- When the snapshot is older than 30 seconds, or a Crew thread on the board
+- When the snapshot is older than 30 seconds, or a thread on the board
   changed (active, idle, failed, archived, deleted, or a pending interaction),
   the next call answers from the old snapshot and reads a new one behind it.
   The board then shows "Updating…" and asks again shortly.
@@ -253,28 +302,30 @@ The board answers from a warm snapshot, so the panel opens fast:
 - The thread panel gets its scope and its board in one call. A Commander's
   inferred project is cached for 5 minutes; a pick clears it.
 
-The board only reads:
+### The board only reads
 
-- It runs `bd --readonly list --all --json --limit 0` in the Base root.
+- It runs the SITREP command above. The SITREP itself only reads: it runs
+  `bd` read-only, reads bb threads, and reads the forge. It needs `bash`,
+  `bd`, `bb`, `jq`, and `python3` on the plugin server's PATH. The directory
+  of `bdPath` goes first on that PATH.
 - It reads the Dolt password from `~/.config/beads/credentials`, section
-  `[100.85.132.50:3307]`, for each `bd` run. The password goes only into the
-  `bd` process environment as `BEADS_DOLT_PASSWORD`. It is never stored,
-  logged, or sent to the panel.
-- It reads the Crew thread of each open mission through the bb SDK, 8 at a
-  time: the thread, its interactions, and its PR. It does not read the threads
-  of closed missions, so a Done card shows no PR.
+  `[100.85.132.50:3307]`, for each run. The password goes only into the
+  SITREP process environment as `BEADS_DOLT_PASSWORD`. It is never stored or
+  sent to the panel, and the board removes it from the error text.
 - It reads `projects/*/posture.toml` for the project list and `project_id`.
+- It reads no thread through the bb SDK for the board.
 
-It never writes a bead, never runs a `bd` write command, and never runs a
-Starbase script. Each column sends at most 150 cards and the full count.
+It never writes a bead, never runs a `bd` write command, and has no board
+action that writes. Each column sends at most 150 cards and the full count.
 
 ## Settings
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `commanderProjectIds` | `proj_s9vk5k4c9u` | Projects whose threads act as Commanders. One project id per line, or separated by commas. |
-| `baseRoot` | `/Users/hmps/dev/starbase` | The Starbase checkout. The board runs `bd` here and reads `projects/*/posture.toml`. |
-| `bdPath` | `bd` | The `bd` executable. A bare name is looked up on PATH, then in the usual install locations (mise shims, `~/.local/bin`, `~/go/bin`, Homebrew). |
+| `baseRoot` | `/Users/hmps/dev/starbase` | The Starbase checkout. The board runs `scripts/sitrep.sh` here and reads `projects/*/posture.toml`. |
+| `sitrepCommander` | `thr_9mhukyfy2t` | The Commander thread the SITREP reads (`--commander`). Its Crew threads that no mission bead claims show as their own cards. Must be a thread id. |
+| `bdPath` | `bd` | The `bd` executable the SITREP uses. A bare name is looked up on PATH, then in the usual install locations (mise shims, `~/.local/bin`, `~/go/bin`, Homebrew). Its directory goes first on the SITREP's PATH. |
 
 A Commander is a root thread in one of these projects. Its Crew are its child
 threads. A Commander can therefore dispatch a Survey Mission inside its own
@@ -292,9 +343,13 @@ npm run build
 A plain `npm install` fails in npm 10 on vitest's optional peers, so use
 `--legacy-peer-deps`.
 
-The live smoke runs the real `bd` and reads real threads through the `bb` CLI.
-It only reads, and it prints the column counts:
+The board tests run a synthetic SITREP. Its rows come from the pinned core
+full rows in `fixtures/mission-state-v1/full-rows/`.
+
+The live smoke runs the real SITREP in a Base that you name, and reads real
+threads through the local bb API. It only reads, and it prints the column
+counts. It fails when the Base SITREP is older than v1:
 
 ```bash
-STARBASE_LIVE=1 npx vitest run board.live
+STARBASE_LIVE=1 STARBASE_LIVE_BASE=/path/to/starbase npx vitest run board.live
 ```
