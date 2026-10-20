@@ -22,6 +22,8 @@ import plugin, { redact, type SitrepResult, type SitrepRunner } from "./server";
 const COMMANDER_PROJECT = "proj_commander";
 const COMMANDER = "thr_commander";
 const NEW_COMMANDER = "thr_new_commander";
+/** A Commander with no Crew, whose own thread one mission bead links. */
+const ROOT_COMMANDER = "thr_root_commander";
 
 function baseRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "starbase-board-"));
@@ -125,7 +127,11 @@ function notFound() {
 
 function threadsGet({ threadId }: { threadId: string }) {
   if (threadId === "thr_gone") throw notFound();
-  if (threadId === COMMANDER || threadId === NEW_COMMANDER) {
+  if (
+    threadId === COMMANDER ||
+    threadId === NEW_COMMANDER ||
+    threadId === ROOT_COMMANDER
+  ) {
     return makeThreadResponse({
       id: threadId,
       projectId: COMMANDER_PROJECT,
@@ -677,6 +683,32 @@ describe("panel rpc", () => {
     await fake.harness.callRpc("panel", { threadId: COMMANDER });
     // One live and one archived listing.
     expect(fake.harness.sdk.callsTo("threads.list")).toHaveLength(2);
+  });
+
+  it("finds a Commander's project from a root discussion it owns", async () => {
+    const { fake, sitrep } = loadPlugin();
+    const root = fullRow("survey-decision", {
+      bead: "sb-root",
+      title: "Root discussion",
+      thread: ROOT_COMMANDER,
+      project: "fia",
+    });
+    sitrep.result = () => ({
+      exitCode: 0,
+      stdout: JSON.stringify([...rows, root]),
+      stderr: "",
+    });
+    const panel = (await fake.harness.callRpc("panel", {
+      threadId: ROOT_COMMANDER,
+    })) as Panel;
+    expect(panel.scope).toMatchObject({
+      scope: "fia",
+      source: "commander",
+      commanderId: ROOT_COMMANDER,
+    });
+    expect(
+      column(panel.board as Board, "waiting")?.cards.map((card) => card.id),
+    ).toEqual(["sb-root"]);
   });
 
   it("asks on a Commander with no Crew, then uses its saved pick", async () => {

@@ -1545,7 +1545,9 @@ export default function plugin(
   /**
    * The project a Commander commands, from the missions its Crew were
    * dispatched for. Archived Crew count too: a Commander whose missions are
-   * all settled still commands the same project.
+   * all settled still commands the same project. A mission bead that links
+   * the Commander's own thread (a root discussion) counts as well, so a
+   * Commander with no Crew still finds its project.
    */
   async function commanderProject(
     commanderId: string,
@@ -1562,9 +1564,10 @@ export default function plugin(
       listAllPages({ parentThreadId: commanderId }),
       listAllPages({ parentThreadId: commanderId, archived: true }),
     ]);
-    const crew = new Set(
-      [...(live ?? []), ...(archived ?? [])].map((row) => row.id),
-    );
+    const crew = new Set([
+      commanderId,
+      ...[...(live ?? []), ...(archived ?? [])].map((row) => row.id),
+    ]);
     const project = inferProject(cards, crew);
     // A Commander with no Crew yet is asked again next time.
     if (project !== null) {

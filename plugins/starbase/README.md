@@ -194,8 +194,9 @@ places:
   - A Commander uses the project you last picked on it. The plugin saves that
     pick in its own database.
   - A Commander with no saved pick uses the most common project among the
-    missions that name one of its Crew threads, live or archived. With no
-    Crew either, the panel asks you to pick a project.
+    missions that name one of its Crew threads, live or archived, or the
+    Commander thread itself (a root discussion). With no such mission, the
+    panel asks you to pick a project.
   - Any other thread uses the posture whose `project_id` is the thread's
     project.
 
