@@ -1,401 +1,228 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  COLUMN_CARD_LIMIT,
-  DONE_WINDOW_MS,
+  COLUMN_IDS,
   buildBoard,
-  classify,
   credentialPassword,
   inferProject,
-  parseNotes,
+  parsePr,
   postureValue,
-  toMissionBead,
-  type MissionBead,
-  type RawBead,
-  type ThreadInfo,
+  toCard,
+  toCards,
+  type BoardCard,
 } from "./board";
 
-const NOW = Date.parse("2026-10-19T12:00:00Z");
-const DAY = 24 * 60 * 60 * 1000;
+// The pinned core full rows: one SITREP row per case, exactly as the core
+// prints it.
+const FULL_ROWS = join(
+  import.meta.dirname,
+  "fixtures/mission-state-v1/full-rows",
+);
 
-function bead(
-  overrides: Partial<RawBead> & { notes?: string } = {},
-): MissionBead {
-  const parsed = toMissionBead({
-    id: "sb-1",
-    title: "A mission",
-    status: "open",
-    labels: ["project:vaam-main", "mission:build"],
-    updated_at: "2026-10-19T10:00:00Z",
-    ...overrides,
-  });
-  if (parsed === null) throw new Error("fixture bead has no project label");
-  return parsed;
+type Row = Record<string, unknown>;
+
+function fullRow(name: string, change: Row = {}): Row {
+  const run = JSON.parse(
+    readFileSync(join(FULL_ROWS, `${name}.json`), "utf8"),
+  ) as { stdout: Row[] };
+  return { ...run.stdout[0], ...change };
 }
 
-function thread(
-  overrides: Partial<Extract<ThreadInfo, { kind: "ok" }>> = {},
-): ThreadInfo {
-  return {
-    kind: "ok",
-    status: "idle",
-    pendingInteraction: false,
-    archived: false,
-    pr: null,
-    ...overrides,
-  };
+function card(name: string, change: Row = {}): BoardCard {
+  const found = toCard(fullRow(name, change));
+  if (found === null) throw new Error(`no card for ${name}`);
+  return found;
 }
 
-const DISPATCHED = "thread=thr_crew env=env_crew mode=worktree";
-
-function reconciliation(fields: string): string {
-  return `2026-10-16 15:00 reconciliation: ${fields}`;
-}
-
-describe("parseNotes", () => {
-  it("takes the latest value of each record", () => {
-    const notes = [
-      "thread=thr_old env=env_old",
-      "outcome=first try",
-      "decision=merge?",
-      "thread=thr_new env=env_new",
-      "outcome=PR opened",
-      "decision=none",
-    ].join("\n");
-    expect(parseNotes(notes)).toEqual({
-      thread: "thr_new",
-      env: "env_new",
-      outcome: "PR opened",
-      record: { kind: "decision", text: "none" },
-      note: null,
+describe("parsePr", () => {
+  it("splits the url from the state at the last space", () => {
+    expect(parsePr("https://github.com/x/y/pull/7 merged")).toEqual({
+      url: "https://github.com/x/y/pull/7",
+      state: "merged",
     });
   });
 
-  it("does not read a key=value inside prose as a record line", () => {
-    const notes = [
-      "outcome=done",
-      "Asked owner=Hampus and decision=later in chat.",
-    ].join("\n");
-    const parsed = parseNotes(notes);
-    expect(parsed.outcome).toBe("done");
-    expect(parsed.record).toBeNull();
-    expect(parsed.note).toBe("Asked owner=Hampus and decision=later in chat.");
-  });
-
-  it("keeps the latest hand note and skips blank lines", () => {
-    expect(parseNotes("first note\n\noutcome=x\nsecond note  \n\n").note).toBe(
-      "second note",
-    );
-  });
-
-  it("reads an empty env token as absent, like lib.sh", () => {
-    const parsed = parseNotes("thread=thr_a env= mode=worktree");
-    expect(parsed.thread).toBe("thr_a");
-    expect(parsed.env).toBeNull();
-  });
-
-  it("reads the fields of a reconciliation line, with ; inside the state", () => {
-    const line = reconciliation(
-      "disposition=external_blocker; owner=Platform team; state=waits on DNS; then a retry; next=ping them; evidence=PR #4",
-    );
-    expect(parseNotes(`${DISPATCHED}\n${line}`).record).toEqual({
-      kind: "disposition",
-      disposition: "external_blocker",
-      owner: "Platform team",
-      state: "waits on DNS; then a retry",
-      line,
-    });
-  });
-
-  it("lets the newest Commander record win, decision or disposition", () => {
-    const disposition = reconciliation("disposition=progressing; state=x");
-    expect(parseNotes(`decision=merge?\n${disposition}`).record?.kind).toBe(
-      "disposition",
-    );
-    expect(parseNotes(`${disposition}\ndecision=merge?`).record).toEqual({
-      kind: "decision",
-      text: "merge?",
-    });
-  });
-});
-
-describe("toMissionBead", () => {
-  it("drops a bead with no project label", () => {
-    expect(toMissionBead({ id: "sb-2", labels: ["mission:build"] })).toBeNull();
-  });
-
-  it("drops a bead that is not a build or survey mission", () => {
-    expect(toMissionBead({ id: "sb-3", labels: ["project:fia"] })).toBeNull();
-    expect(
-      toMissionBead({ id: "sb-4", labels: ["project:fia", "mission:epic"] }),
-    ).toBeNull();
-    expect(bead({ labels: ["project:fia", "mission:survey"] }).mission).toBe(
-      "survey",
-    );
-  });
-});
-
-describe("classify", () => {
-  const column = (notes: string, info?: ThreadInfo, status = "open") =>
-    classify(bead({ notes, status }), info, NOW)?.column;
-
-  it("puts an open mission with no thread in Queued", () => {
-    expect(classify(bead(), undefined, NOW)).toEqual({
-      column: "queued",
-      flags: [],
-    });
-  });
-
-  it("puts a closed mission in Done over every other signal", () => {
-    const closed = bead({
-      status: "closed",
-      closed_at: "2026-10-18T00:00:00Z",
-      notes: `${DISPATCHED}\ndecision=merge?`,
-    });
-    expect(classify(closed, thread({ pendingInteraction: true }), NOW)).toEqual(
-      { column: "done", flags: [] },
-    );
-  });
-
-  it("leaves out a mission closed longer ago than the Done window", () => {
-    const old = bead({
-      status: "closed",
-      closed_at: new Date(NOW - DONE_WINDOW_MS - DAY).toISOString(),
-    });
-    expect(classify(old, undefined, NOW)).toBeNull();
-  });
-
-  it("follows the newest Commander record", () => {
-    const progressing = reconciliation("disposition=progressing; state=x");
-    // A decision after a disposition: the decision counts.
-    expect(
-      column(`${DISPATCHED}\n${progressing}\ndecision=merge?`, thread()),
-    ).toBe("waiting");
-    // A disposition after a decision: the disposition counts.
-    expect(
-      column(`${DISPATCHED}\ndecision=merge?\n${progressing}`, thread()),
-    ).toBe("progress");
-  });
-
-  it("reads decision=none after governor_decision as nothing to wait on", () => {
-    const governor = reconciliation("disposition=governor_decision; state=x");
-    expect(column(`${DISPATCHED}\n${governor}`, thread())).toBe("waiting");
-    expect(column(`${DISPATCHED}\n${governor}\ndecision=none`, thread())).toBe(
-      "review",
-    );
-  });
-
-  it("reads decision=none with a reason as nothing for the Governor", () => {
-    const reason = "none; blocked on admin MCP capability; owner retained";
-    expect(column(`${DISPATCHED}\ndecision=${reason}`, thread())).toBe(
-      "blocked",
-    );
-    expect(column(`${DISPATCHED}\ndecision=none. PR merged`, thread())).toBe(
-      "review",
-    );
-    const card = buildBoard(
-      [bead({ notes: `${DISPATCHED}\ndecision=${reason}` })],
-      new Map([["thr_crew", thread()]]),
-      "all",
-      NOW,
-    ).find((entry) => entry.id === "blocked")?.cards[0];
-    expect(card?.status).toBe("blocked on admin MCP capability; owner retained");
-  });
-
-  it("puts external_blocker in Blocked, with its owner on the card", () => {
-    const blocker = reconciliation(
-      "disposition=external_blocker; owner=Hampus; state=needs a key",
-    );
-    const beads = [bead({ notes: `${DISPATCHED}\n${blocker}` })];
-    const blocked = buildBoard(
-      beads,
-      new Map([["thr_crew", thread()]]),
-      "all",
-      NOW,
-    ).find((entry) => entry.id === "blocked");
-    expect(blocked?.cards[0]).toMatchObject({
-      status: "Blocked on Hampus",
-      record: blocker,
-    });
-  });
-
-  it("lets a live pending interaction beat the newest record", () => {
-    const blocker = reconciliation("disposition=external_blocker; owner=x");
-    expect(
-      column(`${DISPATCHED}\n${blocker}`, thread({ pendingInteraction: true })),
-    ).toBe("waiting");
-  });
-
-  it("puts a failed Crew thread in Blocked, over a pending decision", () => {
-    expect(
-      column(`${DISPATCHED}\ndecision=merge?`, thread({ status: "error" })),
-    ).toBe("blocked");
-  });
-
-  it("puts an active thread, an in_progress bead, or progressing in In progress", () => {
-    expect(column(DISPATCHED, thread({ status: "active" }))).toBe("progress");
-    expect(column("", undefined, "in_progress")).toBe("progress");
-    expect(
-      column(
-        `${DISPATCHED}\n${reconciliation("disposition=progressing")}`,
-        thread(),
-      ),
-    ).toBe("progress");
-  });
-
-  it("puts an idle Crew thread, or a finished disposition, in Commander review", () => {
-    expect(column(DISPATCHED, thread())).toBe("review");
-    for (const disposition of [
-      "complete_preserved",
-      "complete_superseded_preserved",
-      "preserve_state",
-    ]) {
-      expect(
-        column(reconciliation(`disposition=${disposition}`), undefined),
-      ).toBe("review");
+  it("reads every no-PR marker, and a url that is not https, as no PR", () => {
+    for (const value of ["none", "-", "?", "n/a", "", undefined, 7]) {
+      expect(parsePr(value)).toBeNull();
     }
+    expect(parsePr("javascript:alert(1) open")).toBeNull();
+    expect(parsePr("https://github.com/x/y/pull/7")).toBeNull();
+  });
+});
+
+describe("toCard", () => {
+  it("carries the row fields, the view, and the progress details", () => {
+    expect(
+      card("active", {
+        pr: "https://github.com/x/y/pull/7 open",
+        progress: {
+          decision: "-",
+          note: "Halfway",
+          outcome: "unknown",
+          report: "-",
+          verdict: "-",
+        },
+      }),
+    ).toEqual({
+      id: "fixture-abc",
+      bead: "fixture-abc",
+      title: expect.any(String),
+      mission: "build",
+      project: "example",
+      threadId: "thr_crew",
+      threadStatus: expect.any(String),
+      pr: { url: "https://github.com/x/y/pull/7", state: "open" },
+      flags: [],
+      column: "progress",
+      stage: "Active",
+      tone: "working",
+      nextAction: "Check acceptance",
+      owner: "Crew thr_crew",
+      ownerIdle: false,
+      attention: [],
+      integrity: null,
+      problems: [],
+      outcome: null,
+      note: "Halfway",
+    });
   });
 
-  it("keeps a card whose thread is gone, unreadable, or archived, with a flag", () => {
+  it("shows a closed mission's bead status apart from its lifecycle", () => {
+    const closed = fullRow("recent-closed");
+    expect(closed.bead_status).toBe("closed");
+    expect(card("recent-closed")).toMatchObject({
+      column: "done",
+      tone: "quiet",
+      attention: [],
+    });
+  });
+
+  it("does not raise attention the core did not record", () => {
+    expect(card("quiet-complete")).toMatchObject({
+      column: "done",
+      attention: [],
+    });
+    expect(card("active").attention).toEqual([]);
+  });
+
+  it("keeps the core's failed-verification attention, and the source-error flag", () => {
+    expect(card("missing-verified-target")).toMatchObject({
+      column: "blocked",
+      tone: "alert",
+      flags: ["source-error"],
+      attention: [
+        {
+          kind: "verification-failed",
+          summary: expect.stringContaining("base-main"),
+          surfaced: expect.any(Boolean),
+        },
+      ],
+    });
+  });
+
+  it("puts a Crew thread that no bead claims on the board by its thread id", () => {
     expect(
-      classify(bead({ notes: DISPATCHED }), { kind: "gone" }, NOW),
-    ).toEqual({ column: "review", flags: ["thread-gone"] });
-    expect(
-      classify(bead({ notes: DISPATCHED }), { kind: "unreadable" }, NOW),
-    ).toEqual({ column: "review", flags: ["thread-unreadable"] });
-    expect(classify(bead({ notes: DISPATCHED }), undefined, NOW)).toEqual({
+      card("stale-conflict", {
+        bead: "-",
+        mission: "-",
+        flags: ["thread-without-bead"],
+      }),
+    ).toMatchObject({
+      id: "thr_crew",
+      bead: null,
+      mission: null,
+      threadId: "thr_crew",
+      flags: ["thread-without-bead"],
+    });
+  });
+
+  it("files a row the board cannot read in Commander review, never in a healthy column", () => {
+    const {
+      contract_version: _version,
+      mission_state: _state,
+      ...preV1
+    } = fullRow("quiet-complete");
+    expect(toCard(preV1)).toMatchObject({
       column: "review",
-      flags: ["thread-unreadable"],
+      tone: "warn",
+      integrity: "Pre-v1 row",
     });
     expect(
-      classify(
-        bead({ notes: DISPATCHED }),
-        thread({ status: "active", archived: true }),
-        NOW,
-      ),
-    ).toEqual({ column: "review", flags: ["thread-archived"] });
+      toCard(fullRow("quiet-complete", { contract_version: 2 })),
+    ).toMatchObject({
+      column: "review",
+      integrity: "Unsupported contract",
+    });
+    expect(
+      toCard(fullRow("quiet-complete", { mission_state: "complete" })),
+    ).toMatchObject({ column: "review", integrity: "Unreadable record" });
+  });
+
+  it("drops a value that is no row, or a row with neither bead nor thread", () => {
+    expect(
+      toCards([null, "x", [], fullRow("active", { bead: "-", thread: "-" })]),
+    ).toEqual([]);
+  });
+
+  it("clips a long title", () => {
+    expect(card("active", { title: "x".repeat(500) }).title).toHaveLength(200);
   });
 });
 
 describe("buildBoard", () => {
-  it("filters by project, sorts newest first, and caps a column with a total", () => {
-    const beads = [
-      bead({ id: "sb-a", updated_at: "2026-10-19T01:00:00Z" }),
-      bead({ id: "sb-b", updated_at: "2026-10-19T03:00:00Z" }),
-      bead({ id: "sb-c", updated_at: "2026-10-19T02:00:00Z" }),
-      bead({ id: "sb-d", labels: ["project:fia", "mission:build"] }),
-    ];
-    const board = buildBoard(beads, new Map(), "vaam-main", NOW, 2);
-    expect(board.map((entry) => entry.id)).toEqual([
-      "queued",
-      "progress",
-      "waiting",
-      "blocked",
-      "review",
-      "deploy",
-      "done",
-    ]);
-    const queued = board.find((entry) => entry.id === "queued");
-    expect(queued?.total).toBe(3);
-    expect(queued?.cards.map((card) => card.id)).toEqual(["sb-b", "sb-c"]);
-    expect(buildBoard(beads, new Map(), "all", NOW)[0].total).toBe(4);
-    expect(COLUMN_CARD_LIMIT).toBeGreaterThan(0);
+  const cards = toCards([
+    fullRow("active", { bead: "sb-1", project: "fia" }),
+    fullRow("survey-decision", { bead: "sb-2" }),
+    fullRow("recent-closed", { bead: "sb-3" }),
+    fullRow("quiet-complete", { bead: "sb-4" }),
+  ]);
+
+  it("returns every column in the wide order, Queued empty under v1", () => {
+    const board = buildBoard(cards, "all");
+    expect(board.map((column) => column.id)).toEqual([...COLUMN_IDS]);
+    expect(board[0]).toMatchObject({ id: "queued", total: 0, cards: [] });
   });
 
-  it("carries the PR, the status line, and the expand details on a card", () => {
-    const beads = [
-      bead({
-        notes: `${DISPATCHED}\noutcome=PR opened\nwaiting on CI\ndecision=merge PR #1?`,
-      }),
-    ];
-    const threads = new Map<string, ThreadInfo>([
-      [
-        "thr_crew",
-        thread({ pr: { url: "https://github.com/x/y/pull/1", state: "open" } }),
-      ],
+  it("filters by project and keeps the SITREP order", () => {
+    const done = buildBoard(cards, "example").find((c) => c.id === "done");
+    expect(done?.cards.map((c) => c.id)).toEqual(["sb-3", "sb-4"]);
+    const fia = buildBoard(cards, "fia");
+    expect(fia.flatMap((c) => c.cards.map((card) => card.id))).toEqual([
+      "sb-1",
     ]);
-    const card = buildBoard(beads, threads, "all", NOW).find(
-      (entry) => entry.id === "waiting",
-    )?.cards[0];
-    expect(card).toEqual({
-      id: "sb-1",
-      title: "A mission",
-      mission: "build",
-      project: "vaam-main",
-      status: "merge PR #1?",
-      threadId: "thr_crew",
-      pr: { url: "https://github.com/x/y/pull/1", state: "open" },
-      flags: [],
-      outcome: "PR opened",
-      note: "waiting on CI",
-      record: "decision=merge PR #1?",
-      updatedAt: "2026-10-19T10:00:00Z",
-      closedAt: null,
-    });
   });
 
-  it("uses the disposition state as the status line", () => {
-    const line = reconciliation(
-      "disposition=progressing; owner=crew; state=tests run; next=wait",
-    );
-    const card = buildBoard(
-      [bead({ notes: `${DISPATCHED}\n${line}` })],
-      new Map([["thr_crew", thread()]]),
-      "all",
-      NOW,
-    ).find((entry) => entry.id === "progress")?.cards[0];
-    expect(card?.status).toBe("tests run");
+  it("caps a column and still counts every card", () => {
+    const done = buildBoard(cards, "all", 1).find((c) => c.id === "done");
+    expect(done).toMatchObject({ total: 2 });
+    expect(done?.cards.map((c) => c.id)).toEqual(["sb-3"]);
   });
 });
 
 describe("inferProject", () => {
-  const crew = new Set(["thr_1", "thr_2", "thr_3"]);
-
-  it("takes the majority project among the Crew's beads", () => {
-    const beads = [
-      bead({
-        id: "a",
-        labels: ["project:fia", "mission:build"],
-        notes: "thread=thr_1",
-      }),
-      bead({
-        id: "b",
-        labels: ["project:vaam-main", "mission:build"],
-        notes: "thread=thr_2",
-      }),
-      bead({
-        id: "c",
-        labels: ["project:vaam-main", "mission:build"],
-        notes: "thread=thr_3",
-      }),
-      bead({
-        id: "d",
-        labels: ["project:fia", "mission:build"],
-        notes: "thread=thr_other",
-      }),
-      bead({
-        id: "e",
-        labels: ["project:fia", "mission:build"],
-        notes: "thread=thr_other2",
-      }),
-    ];
-    expect(inferProject(beads, crew)).toBe("vaam-main");
+  it("takes the majority project among the Crew's missions", () => {
+    const cards = toCards([
+      fullRow("active", { bead: "a", thread: "thr_1", project: "fia" }),
+      fullRow("active", { bead: "b", thread: "thr_2", project: "fia" }),
+      fullRow("active", { bead: "c", thread: "thr_3", project: "vaam-main" }),
+    ]);
+    expect(inferProject(cards, new Set(["thr_1", "thr_2", "thr_3"]))).toBe(
+      "fia",
+    );
   });
 
-  it("breaks a tie by slug order, and is null with no Crew bead", () => {
-    const beads = [
-      bead({
-        id: "a",
-        labels: ["project:vaam-main", "mission:build"],
-        notes: "thread=thr_1",
-      }),
-      bead({
-        id: "b",
-        labels: ["project:fia", "mission:build"],
-        notes: "thread=thr_2",
-      }),
-    ];
-    expect(inferProject(beads, crew)).toBe("fia");
-    expect(inferProject(beads, new Set(["thr_none"]))).toBeNull();
+  it("breaks a tie by slug order, and skips a thread no bead claims", () => {
+    const cards = toCards([
+      fullRow("active", { bead: "a", thread: "thr_1", project: "vaam-main" }),
+      fullRow("active", { bead: "b", thread: "thr_2", project: "fia" }),
+      fullRow("active", { bead: "-", thread: "thr_3", project: "zeta" }),
+      fullRow("active", { bead: "-", thread: "thr_4", project: "zeta" }),
+    ]);
+    const crew = new Set(["thr_1", "thr_2", "thr_3", "thr_4"]);
+    expect(inferProject(cards, crew)).toBe("fia");
+    expect(inferProject(cards, new Set(["thr_none"]))).toBeNull();
   });
 });
 

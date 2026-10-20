@@ -1,36 +1,28 @@
 // The Mission Queue board, as pure functions.
 //
-// The server reads the queue with `bd list` and reads each Crew thread through
-// the SDK; everything between those reads and the columns the panel renders
-// lives here, so the column rules are testable without bd or bb.
+// The server runs the Starbase SITREP; everything between its row array and
+// the columns the panel renders lives here, so the column rules are testable
+// without the SITREP, bd, or bb.
 //
-// A card is a mission: a bead labelled `mission:build` or `mission:survey` and
-// `project:<slug>`. Every other bead is left off the board and out of the
-// counts.
-//
-// The note parsing matches the Starbase scripts, which are the writers:
-//   thread / env  the latest `key=value` token anywhere in the notes, after a
-//                 line start or whitespace (scripts/lib.sh `bead_note_field`).
-//   outcome       the latest line that starts with `outcome=` (sitrep.sh).
-//   decision      the latest line that starts with `decision=` (sitrep.sh).
-//                 `decision=none` means nothing is pending.
-//   record        the latest Commander record: a `decision=` line, or a
-//                 reconciliation line with `disposition=<word>`, such as
-//                 `2026-10-16 15:00 reconciliation: disposition=progressing;
-//                 owner=thr_x; state=...; next=...`. Notes are append-only,
-//                 so the last such line is the newest.
-//   note          the latest line that is neither a `key=value` record nor a
-//                 reconciliation line: a hand note (sitrep.sh).
+// A card is one SITREP row: a mission bead, or a Crew thread under the
+// Commander that no mission bead claims. The core decides which rows exist
+// (every open mission and the most recent closed ones) and projects a
+// `mission_state` for each; mission.ts maps that state to a column. The board
+// derives no state of its own.
 
-/** How far back a closed mission still shows in Done. */
-export const DONE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+import {
+  readRowState,
+  viewMission,
+  type MissionTone,
+  type MissionView,
+} from "./mission.js";
 
 /** The most cards one column returns. The rest are counted, not sent. */
 export const COLUMN_CARD_LIMIT = 150;
 
-/** How much of a title, a status line, or a detail line one card carries. */
+/** How much of a title, a stage line, or a detail line one card carries. */
 const TITLE_MAX_CHARS = 200;
-const STATUS_MAX_CHARS = 240;
+const LINE_MAX_CHARS = 240;
 const DETAIL_MAX_CHARS = 600;
 
 /** The wide-layout order, left to right. */
@@ -55,73 +47,51 @@ export const COLUMN_TITLES: Record<ColumnId, string> = {
   done: "Done",
 };
 
-const MISSION_TYPES = new Set(["build", "survey"]);
+/**
+ * SITREP row flags that the card does not show. `ok` says nothing, and
+ * `output-not-recorded` is the Commander's own bookkeeping: the core turns an
+ * unrecorded report into attention when it needs some.
+ */
+const HIDDEN_FLAGS = new Set(["ok", "output-not-recorded"]);
 
-/** One `bd list --json` row. bd omits every empty field. */
-export interface RawBead {
-  id?: unknown;
-  title?: unknown;
-  notes?: unknown;
-  status?: unknown;
-  labels?: unknown;
-  updated_at?: unknown;
-  closed_at?: unknown;
+/** The SITREP's word for "no value" in a progress field. */
+const NO_VALUE = new Set(["", "-", "unknown"]);
+
+/** One pending event, as the card shows it. */
+export interface CardAttention {
+  kind: string;
+  summary: string;
+  /** The Commander saw it. It is still pending until resolved. */
+  surfaced: boolean;
 }
-
-/** The newest Commander record on a mission. */
-export type CommanderRecord =
-  | { kind: "decision"; text: string }
-  | {
-      kind: "disposition";
-      disposition: string;
-      owner: string | null;
-      state: string | null;
-      line: string;
-    };
-
-/** What the notes of one bead record. Null means "no record". */
-export interface ParsedNotes {
-  thread: string | null;
-  env: string | null;
-  outcome: string | null;
-  record: CommanderRecord | null;
-  note: string | null;
-}
-
-/** What bb said about one Crew thread. */
-export type ThreadInfo =
-  | {
-      kind: "ok";
-      status: string;
-      pendingInteraction: boolean;
-      archived: boolean;
-      pr: { url: string; state: string } | null;
-    }
-  /** bb answered with 404: it holds no such thread. */
-  | { kind: "gone" }
-  /** bb did not give the state: any other failure. */
-  | { kind: "unreadable" };
-
-/** Small marks for a Crew thread the board cannot follow. */
-export type CardFlag = "thread-gone" | "thread-unreadable" | "thread-archived";
 
 export interface BoardCard {
+  /** The bead id, or the thread id for a thread that no bead claims. */
   id: string;
+  /** Null for a thread that no bead claims. */
+  bead: string | null;
   title: string;
-  /** `build` or `survey`. */
-  mission: string;
+  /** `build` or `survey`; null for a thread that no bead claims. */
+  mission: string | null;
   project: string;
-  /** One line on where the mission stands; null when nothing says. */
-  status: string | null;
   threadId: string | null;
+  /** bb's status for the thread, as the SITREP read it. */
+  threadStatus: string | null;
   pr: { url: string; state: string } | null;
-  flags: CardFlag[];
+  /** SITREP row flags, as written, except the ones in HIDDEN_FLAGS. */
+  flags: string[];
+  column: ColumnId;
+  stage: string;
+  tone: MissionTone;
+  nextAction: string | null;
+  owner: string | null;
+  ownerIdle: boolean;
+  attention: CardAttention[];
+  /** A short label when the board cannot trust the record; else null. */
+  integrity: string | null;
+  problems: string[];
   outcome: string | null;
   note: string | null;
-  /** The newest Commander record, as written. */
-  record: string | null;
-  updatedAt: string;
-  closedAt: string | null;
 }
 
 export interface BoardColumn {
@@ -135,6 +105,8 @@ export interface BoardColumn {
 /** `"all"` or one project slug. */
 export type BoardScope = string;
 
+type Json = Record<string, unknown>;
+
 function text(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
@@ -144,319 +116,164 @@ export function clip(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
 }
 
-/** The value of the last `<key>=<token>` in the notes, as lib.sh reads it. */
-function lastToken(notes: string, key: string): string | null {
-  const pattern = new RegExp(`(?:^|\\s)${key}=(\\S+)`, "g");
-  let found: string | null = null;
-  for (const match of notes.matchAll(pattern)) found = match[1];
-  return found;
-}
-
-/** The text after `<key>=` on the last line that starts with it. */
-function lastLine(lines: readonly string[], key: string): string | null {
-  const prefix = `${key}=`;
-  let found: string | null = null;
-  for (const line of lines) {
-    if (line.startsWith(prefix)) found = line.slice(prefix.length);
-  }
-  return found === "" ? null : found;
-}
-
-const RECORD_LINE = /^[A-Za-z][A-Za-z0-9_.-]*=/;
-const DISPOSITION = /(?:^|\s)disposition=([A-Za-z0-9_-]+)/;
-/** A `; key=` boundary between the fields of a reconciliation line. */
-const FIELD_BOUNDARY = /;\s*(?=[a-z_]+=)/;
-
-/** The `key=value` fields of a reconciliation line, from `disposition=` on. */
-function dispositionRecord(line: string): CommanderRecord | null {
-  const match = DISPOSITION.exec(line);
-  if (match === null) return null;
-  const fields = new Map<string, string>();
-  for (const part of line.slice(match.index).trim().split(FIELD_BOUNDARY)) {
-    const eq = part.indexOf("=");
-    const value = part
-      .slice(eq + 1)
-      .replace(/;\s*$/, "")
-      .trim();
-    if (eq > 0 && value !== "") fields.set(part.slice(0, eq), value);
-  }
-  return {
-    kind: "disposition",
-    disposition: match[1],
-    owner: fields.get("owner") ?? null,
-    state: fields.get("state") ?? null,
-    line,
-  };
-}
-
-export function parseNotes(notes: string): ParsedNotes {
-  const lines = notes
-    .split("\n")
-    .map((line) => line.replace(/\s+$/, ""))
-    .filter((line) => line.length > 0);
-  let record: CommanderRecord | null = null;
-  let note: string | null = null;
-  for (const line of lines) {
-    if (line.startsWith("decision=")) {
-      const decision = line.slice("decision=".length);
-      if (decision !== "") record = { kind: "decision", text: decision };
-      continue;
-    }
-    const disposition = dispositionRecord(line);
-    if (disposition !== null) record = disposition;
-    else if (!RECORD_LINE.test(line)) note = line;
-  }
-  return {
-    thread: lastToken(notes, "thread"),
-    env: lastToken(notes, "env"),
-    outcome: lastLine(lines, "outcome"),
-    record,
-    note,
-  };
+/** A SITREP field, or null for "-" and empty. */
+function present(value: unknown): string | null {
+  const found = text(value).trim();
+  return found === "" || found === "-" ? null : found;
 }
 
 /**
- * A decision is pending when one is recorded and it is not `none`. Crews also
- * write `none; <reason>` (for example `none; blocked on ...`): nothing is asked
- * of the Governor, and the reason says why the mission waits.
+ * The SITREP `pr` field: `<url> <state>` when the forge gave one, else a
+ * marker (`none`, `-`, `?`, `n/a`) that the card shows as no PR.
  */
-export function decisionPending(decision: string | null): boolean {
-  return decision !== null && !/^none\b/i.test(decision.trim());
+export function parsePr(value: unknown): { url: string; state: string } | null {
+  const field = text(value).trim();
+  const space = field.lastIndexOf(" ");
+  if (space <= 0) return null;
+  const url = field.slice(0, space);
+  const state = field.slice(space + 1);
+  return /^https:\/\/\S+$/.test(url) && state !== "" ? { url, state } : null;
 }
 
-/** The reason after a `none; ...` decision, or null. */
-function noneReason(decision: string): string | null {
-  const reason = decision.trim().replace(/^none\b[\s;:,.\-–—]*/i, "");
-  return reason === decision.trim() || reason === "" ? null : reason;
+/**
+ * The view of a row that has no v1 state the board can read. It goes to
+ * Commander review, never to a column that reads as healthy.
+ */
+function untrustedView(integrity: string, problem: string): MissionView {
+  return {
+    column: "review",
+    stage: "No readable mission state",
+    tone: "warn",
+    nextAction: null,
+    owner: null,
+    ownerThread: null,
+    ownerIdle: false,
+    attention: [],
+    integrity,
+    problems: [problem],
+  };
 }
 
-function labelValue(labels: readonly string[], prefix: string): string | null {
-  const label = labels.find((entry) => entry.startsWith(prefix));
-  return label === undefined ? null : label.slice(prefix.length);
+function viewRow(row: Json): MissionView {
+  const read = readRowState(row);
+  switch (read.kind) {
+    case "v1":
+      return viewMission(read.state);
+    case "pre-v1":
+      return untrustedView(
+        "Pre-v1 row",
+        "The SITREP row has no contract_version.",
+      );
+    case "unsupported":
+      return untrustedView(
+        "Unsupported contract",
+        `The SITREP row has contract_version ${JSON.stringify(read.version)}.`,
+      );
+    case "unreadable":
+      return untrustedView("Unreadable record", read.problem);
+  }
 }
 
-/** A mission bead as the board reads it. */
-export interface MissionBead {
-  id: string;
-  title: string;
-  status: string;
-  project: string;
-  mission: string;
-  updatedAt: string;
-  closedAt: string | null;
-  notes: ParsedNotes;
-}
-
-/** Null for every bead that is not a mission with a project. */
-export function toMissionBead(raw: RawBead): MissionBead | null {
-  const id = text(raw.id);
-  if (id === "") return null;
-  const labels = Array.isArray(raw.labels) ? raw.labels.map(text) : [];
-  const project = labelValue(labels, "project:");
-  if (project === null || project === "") return null;
-  const mission = labels
-    .filter((label) => label.startsWith("mission:"))
-    .map((label) => label.slice("mission:".length))
-    .find((type) => MISSION_TYPES.has(type));
-  if (mission === undefined) return null;
-  const closedAt = text(raw.closed_at);
+/** One SITREP row as a card. A row that is not an object gives null. */
+export function toCard(row: unknown): BoardCard | null {
+  if (typeof row !== "object" || row === null || Array.isArray(row)) {
+    return null;
+  }
+  const raw = row as Json;
+  const bead = present(raw.bead);
+  const threadId = present(raw.thread);
+  const id = bead ?? threadId;
+  if (id === null) return null;
+  const view = viewRow(raw);
+  const progress =
+    typeof raw.progress === "object" && raw.progress !== null
+      ? (raw.progress as Json)
+      : {};
+  const detail = (value: unknown) => {
+    const found = text(value).trim();
+    return NO_VALUE.has(found) ? null : clip(found, DETAIL_MAX_CHARS);
+  };
+  const line = (value: string | null) =>
+    value === null ? null : clip(value, LINE_MAX_CHARS);
   return {
     id,
-    title: text(raw.title),
-    status: text(raw.status) || "open",
-    project,
-    mission,
-    updatedAt: text(raw.updated_at),
-    closedAt: closedAt === "" ? null : closedAt,
-    notes: parseNotes(text(raw.notes)),
+    bead,
+    title: clip(text(raw.title).replace(/\s+/g, " ").trim(), TITLE_MAX_CHARS),
+    mission: bead === null ? null : present(raw.mission),
+    project: text(raw.project),
+    threadId,
+    threadStatus: present(raw.status),
+    pr: parsePr(raw.pr),
+    flags: (Array.isArray(raw.flags) ? raw.flags.map(text) : []).filter(
+      (flag) => flag !== "" && !HIDDEN_FLAGS.has(flag),
+    ),
+    column: view.column,
+    stage: clip(view.stage, LINE_MAX_CHARS),
+    tone: view.tone,
+    nextAction: line(view.nextAction),
+    owner: view.owner,
+    ownerIdle: view.ownerIdle,
+    attention: view.attention.map((event) => ({
+      kind: event.kind,
+      summary: clip(event.summary, LINE_MAX_CHARS),
+      surfaced: event.surfaced,
+    })),
+    integrity: view.integrity,
+    problems: view.problems.map((problem) => clip(problem, DETAIL_MAX_CHARS)),
+    outcome: detail(progress.outcome),
+    note: detail(progress.note),
   };
 }
 
-export function inScope(bead: MissionBead, scope: BoardScope): boolean {
-  return scope === "all" || bead.project === scope;
+/** Every row of one SITREP run as a card, in the SITREP's order. */
+export function toCards(rows: readonly unknown[]): BoardCard[] {
+  return rows.map(toCard).filter((card): card is BoardCard => card !== null);
 }
 
-/** When a closed bead closed, in ms. bd always writes closed_at; updated_at is the fallback. */
-function closedTime(bead: MissionBead): number {
-  const parsed = Date.parse(bead.closedAt ?? bead.updatedAt);
-  return Number.isNaN(parsed) ? 0 : parsed;
-}
-
-/** Whether the board needs bb's view of this bead's Crew thread. */
-export function needsThreadRead(bead: MissionBead): boolean {
-  return bead.status !== "closed" && bead.notes.thread !== null;
-}
-
-const WORKING_STATUSES = new Set(["active", "starting", "stopping", "pending"]);
-
-/** Dispositions that hand the mission back to the Commander to review. */
-function reviewDisposition(disposition: string): boolean {
-  return disposition.startsWith("complete") || disposition === "preserve_state";
+export function inScope(card: BoardCard, scope: BoardScope): boolean {
+  return scope === "all" || card.project === scope;
 }
 
 /**
- * The column for one bead, or null when it does not belong on the board (a
- * closed bead older than the Done window).
- *
- * Precedence: Done > Waiting on you > Blocked > In progress > Commander review
- * > Queued. A live pending interaction or a failed Crew thread beats the
- * newest Commander record. A bead whose thread bb cannot show stays on the
- * board, in Commander review with a flag, unless a stronger rule puts it
- * elsewhere.
+ * The columns for one scope. Cards keep the SITREP's order: open missions
+ * first, then closed ones, newest close first.
  */
-export function classify(
-  bead: MissionBead,
-  thread: ThreadInfo | undefined,
-  now: number,
-): { column: ColumnId; flags: CardFlag[] } | null {
-  if (bead.status === "closed") {
-    if (now - closedTime(bead) > DONE_WINDOW_MS) return null;
-    return { column: "done", flags: [] };
-  }
-
-  const flags: CardFlag[] = [];
-  if (bead.notes.thread !== null) {
-    if (thread === undefined || thread.kind === "unreadable") {
-      flags.push("thread-unreadable");
-    } else if (thread.kind === "gone") {
-      flags.push("thread-gone");
-    } else if (thread.archived) {
-      flags.push("thread-archived");
-    }
-  }
-  // An archived thread is no longer live: it neither asks nor works.
-  const live = thread?.kind === "ok" && !thread.archived ? thread : null;
-  const record = bead.notes.record;
-  const disposition = record?.kind === "disposition" ? record.disposition : "";
-  const place = (column: ColumnId) => ({ column, flags });
-
-  if (live?.pendingInteraction) return place("waiting");
-  if (live?.status === "error") return place("blocked");
-  if (record?.kind === "decision" && decisionPending(record.text)) {
-    return place("waiting");
-  }
-  if (disposition === "governor_decision") return place("waiting");
-  if (disposition === "external_blocker") return place("blocked");
-  if (record?.kind === "decision" && /\bblocked\b/i.test(noneReason(record.text) ?? "")) {
-    return place("blocked");
-  }
-  if (
-    (live !== null && WORKING_STATUSES.has(live.status)) ||
-    bead.status === "in_progress" ||
-    disposition === "progressing"
-  ) {
-    return place("progress");
-  }
-  if (bead.notes.thread !== null || reviewDisposition(disposition)) {
-    return place("review");
-  }
-  return place("queued");
-}
-
-/** One line on where a mission stands, from the strongest signal it has. */
-function statusLine(
-  bead: MissionBead,
-  thread: ThreadInfo | undefined,
-  column: ColumnId,
-): string | null {
-  if (column === "done") return bead.notes.outcome;
-  const live = thread?.kind === "ok" && !thread.archived ? thread : null;
-  if (live?.pendingInteraction) return "The Crew thread waits for an answer.";
-  if (live?.status === "error") return "The Crew thread failed.";
-  const record = bead.notes.record;
-  if (record?.kind === "decision") {
-    if (decisionPending(record.text)) return record.text;
-    return noneReason(record.text) ?? bead.notes.outcome;
-  }
-  if (record?.disposition === "external_blocker") {
-    return `Blocked on ${record.owner ?? "an outside owner"}`;
-  }
-  return record?.state ?? bead.notes.outcome;
-}
-
-function recordText(record: CommanderRecord | null): string | null {
-  if (record === null) return null;
-  return record.kind === "decision" ? `decision=${record.text}` : record.line;
-}
-
-function toCard(
-  bead: MissionBead,
-  thread: ThreadInfo | undefined,
-  column: ColumnId,
-  flags: CardFlag[],
-): BoardCard {
-  const ok = thread?.kind === "ok" ? thread : null;
-  const detail = (value: string | null) =>
-    value === null ? null : clip(value, DETAIL_MAX_CHARS);
-  const status = statusLine(bead, thread, column);
-  return {
-    id: bead.id,
-    title: clip(bead.title.replace(/\s+/g, " ").trim(), TITLE_MAX_CHARS),
-    mission: bead.mission,
-    project: bead.project,
-    status: status === null ? null : clip(status, STATUS_MAX_CHARS),
-    threadId: bead.notes.thread,
-    pr: ok?.pr ?? null,
-    flags,
-    outcome: detail(bead.notes.outcome),
-    note: detail(bead.notes.note),
-    record: detail(recordText(bead.notes.record)),
-    updatedAt: bead.updatedAt,
-    closedAt: bead.closedAt,
-  };
-}
-
-/** Newest first; Done by close time, the rest by last update. */
-function sortKey(card: BoardCard): string {
-  return card.closedAt ?? card.updatedAt;
-}
-
 export function buildBoard(
-  beads: readonly MissionBead[],
-  threads: ReadonlyMap<string, ThreadInfo>,
+  cards: readonly BoardCard[],
   scope: BoardScope,
-  now: number,
   limit = COLUMN_CARD_LIMIT,
 ): BoardColumn[] {
   const byColumn = new Map<ColumnId, BoardCard[]>(
     COLUMN_IDS.map((id) => [id, []]),
   );
-  for (const bead of beads) {
-    if (!inScope(bead, scope)) continue;
-    const thread =
-      bead.notes.thread === null ? undefined : threads.get(bead.notes.thread);
-    const placed = classify(bead, thread, now);
-    if (placed === null) continue;
-    byColumn
-      .get(placed.column)
-      ?.push(toCard(bead, thread, placed.column, placed.flags));
+  for (const card of cards) {
+    if (inScope(card, scope)) byColumn.get(card.column)?.push(card);
   }
   return COLUMN_IDS.map((id) => {
-    const cards = byColumn.get(id) ?? [];
-    cards.sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
+    const found = byColumn.get(id) ?? [];
     return {
       id,
       title: COLUMN_TITLES[id],
-      total: cards.length,
-      cards: cards.slice(0, limit),
+      total: found.length,
+      cards: found.slice(0, limit),
     };
   });
 }
 
 /**
- * The project a Commander commands: the most common `project:` label among
- * the beads its Crew threads were dispatched for. A tie goes to the slug that
- * sorts first, so the answer is stable. Null when no bead names a Crew thread.
+ * The project a Commander commands: the most common project among the
+ * missions its Crew threads hold. A tie goes to the slug that sorts first, so
+ * the answer is stable. Null when no mission names a Crew thread.
  */
 export function inferProject(
-  beads: readonly MissionBead[],
+  cards: readonly BoardCard[],
   crewThreadIds: ReadonlySet<string>,
 ): string | null {
   const counts = new Map<string, number>();
-  for (const bead of beads) {
-    const thread = bead.notes.thread;
-    if (thread === null || !crewThreadIds.has(thread)) continue;
-    counts.set(bead.project, (counts.get(bead.project) ?? 0) + 1);
+  for (const card of cards) {
+    if (card.bead === null || card.threadId === null) continue;
+    if (!crewThreadIds.has(card.threadId)) continue;
+    counts.set(card.project, (counts.get(card.project) ?? 0) + 1);
   }
   let best: string | null = null;
   let bestCount = 0;

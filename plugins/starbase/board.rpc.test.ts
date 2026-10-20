@@ -1,8 +1,15 @@
-// The board rpcs, against an injected `bd` runner and a temporary Base with
-// two postures. The load-bearing parts are the read-only bd call, the warm
-// snapshot (one read at a time, served without waiting), the scope order
-// (saved pick > Crew > posture), and a missing thread staying on the board.
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+// The board rpcs, against a synthetic SITREP transport and a temporary Base
+// with two postures. The load-bearing parts are the exact read-only SITREP
+// command, the source states (current, partial, stale, unavailable), the warm
+// snapshot (one read at a time, served without waiting), and the scope order
+// (saved pick > Crew > posture).
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +17,7 @@ import {
   createFakePluginHost,
   makeThreadResponse,
 } from "@get-bb/plugin-sdk/testing";
-import plugin, { redact, type BdRunner } from "./server";
+import plugin, { redact, type SitrepResult, type SitrepRunner } from "./server";
 
 const COMMANDER_PROJECT = "proj_commander";
 const COMMANDER = "thr_commander";
@@ -31,41 +38,80 @@ function baseRoot(): string {
   return root;
 }
 
-const recent = new Date().toISOString();
+// Synthetic SITREP rows, made from the pinned core full-row fixtures: the
+// exact row shape and mission_state the core prints, with the bead, thread,
+// and project changed to place them on one board.
+const FULL_ROWS = join(
+  import.meta.dirname,
+  "fixtures/mission-state-v1/full-rows",
+);
 
-const beads = [
-  {
-    id: "sb-1",
+type Row = Record<string, unknown>;
+
+interface FullRun {
+  exit_code: number;
+  stdout: Row[];
+  stderr: string;
+}
+
+function fullRun(name: string): FullRun {
+  return JSON.parse(readFileSync(join(FULL_ROWS, `${name}.json`), "utf8"));
+}
+
+function fullRow(name: string, change: Row): Row {
+  return { ...structuredClone(fullRun(name).stdout[0]), ...change };
+}
+
+const rows: Row[] = [
+  fullRow("active", {
+    bead: "sb-1",
     title: "Working mission",
-    status: "in_progress",
-    labels: ["project:vaam-main", "mission:build"],
-    notes: "thread=thr_crew_1 env=env_1 mode=worktree",
-    updated_at: recent,
-  },
-  {
-    id: "sb-2",
-    title: "Lost mission",
-    status: "open",
-    labels: ["project:vaam-main", "mission:survey"],
-    notes: "thread=thr_gone env=env_2",
-    updated_at: recent,
-  },
-  {
-    id: "sb-3",
+    thread: "thr_crew_1",
+    project: "vaam-main",
+    pr: "https://github.com/x/y/pull/7 open",
+  }),
+  fullRow("survey-decision", {
+    bead: "sb-2",
+    title: "Survey waiting on a decision",
+    thread: "thr_crew_2",
+    project: "vaam-main",
+  }),
+  fullRow("ready-for-deploy", {
+    bead: "sb-4",
+    title: "Merged, not deployed",
+    thread: "thr_crew_4",
+    project: "fia",
+    pr: "https://github.com/x/y/pull/9 merged",
+  }),
+  fullRow("recent-closed", {
+    bead: "sb-3",
     title: "Shipped mission",
-    status: "closed",
-    labels: ["project:vaam-main", "mission:build"],
-    notes: "thread=thr_crew_old env=env_3\noutcome=merged",
-    updated_at: recent,
-    closed_at: recent,
-  },
-  {
-    id: "sb-4",
-    title: "Fia epic, not a mission",
-    status: "open",
-    labels: ["project:fia"],
-    updated_at: recent,
-  },
+    thread: "thr_crew_old",
+    project: "vaam-main",
+  }),
+  // A Crew thread that no mission bead claims, as the SITREP prints it.
+  fullRow("stale-conflict", {
+    bead: "-",
+    mission: "-",
+    bead_status: "unknown",
+    title: "Stray Crew thread",
+    thread: "thr_orphan",
+    project: "Vaam Main",
+    pr: "-",
+    flags: ["thread-without-bead"],
+  }),
+];
+
+/** The command the installed board is meant to run, from the Base root. */
+const SITREP_ARGS = [
+  "scripts/sitrep.sh",
+  "--project",
+  "all",
+  "--commander",
+  "thr_9mhukyfy2t",
+  "--recent-closed",
+  "50",
+  "--json",
 ];
 
 function notFound() {
@@ -109,41 +155,46 @@ function threadsList(args?: { parentThreadId?: string; archived?: boolean }) {
     : [{ id: "thr_crew_1" }];
 }
 
-function loadPlugin() {
-  const bd = {
-    calls: [] as string[][],
-    /** While true, a bd read waits for `release()`. */
+function loadPlugin(settings: Record<string, string> = {}) {
+  const root = baseRoot();
+  const sitrep = {
+    calls: [] as { args: string[]; cwd: string }[],
+    /** While true, a run waits for `release()`. */
     hold: false,
     release: () => {},
+    /** The next run's result; a function may throw, as a runner bug would. */
+    result: (): SitrepResult => ({
+      exitCode: 0,
+      stdout: JSON.stringify(rows),
+      stderr: "",
+    }),
   };
-  const runBd: BdRunner = async (args) => {
-    bd.calls.push(args);
-    if (bd.hold) {
+  const runSitrep: SitrepRunner = async (args, { cwd }) => {
+    sitrep.calls.push({ args, cwd });
+    if (sitrep.hold) {
       await new Promise<void>((resolve) => {
-        bd.release = resolve;
+        sitrep.release = resolve;
       });
     }
-    return JSON.stringify(beads);
+    return sitrep.result();
   };
   const fake = createFakePluginHost({
     pluginId: "starbase",
-    settings: { commanderProjectIds: COMMANDER_PROJECT, baseRoot: baseRoot() },
+    settings: {
+      commanderProjectIds: COMMANDER_PROJECT,
+      baseRoot: root,
+      ...settings,
+    },
     sdk: {
       threads: {
         get: threadsGet,
         list: threadsList,
         interactions: { list: () => [] },
       },
-      environments: {
-        pullRequest: () => ({
-          outcome: "available",
-          pullRequest: { url: "https://github.com/x/y/pull/7", state: "open" },
-        }),
-      },
     },
   });
-  plugin(fake.bb, { runBd });
-  return { fake, bd };
+  plugin(fake.bb, { runSitrep });
+  return { fake, sitrep, root };
 }
 
 interface Board {
@@ -152,9 +203,12 @@ interface Board {
   columns: {
     id: string;
     total: number;
-    cards: { id: string; flags: string[]; pr: unknown }[];
+    cards: (Record<string, unknown> & { id: string; column: string })[];
   }[];
   projects: string[];
+  source: string;
+  error: string | null;
+  generatedAt: number;
 }
 
 interface Panel {
@@ -180,15 +234,17 @@ afterEach(() => {
 });
 
 describe("board rpc", () => {
-  it("runs bd read-only and places every mission", async () => {
-    const { fake, bd } = loadPlugin();
+  it("runs the read-only SITREP in the Base and places every row", async () => {
+    const { fake, sitrep, root } = loadPlugin();
     const board = (await fake.harness.callRpc("board", {
       project: "vaam-main",
     })) as Board;
-    expect(bd.calls).toEqual([
-      ["--readonly", "list", "--all", "--json", "--limit", "0"],
-    ]);
-    expect(board.refreshing).toBe(false);
+    expect(sitrep.calls).toEqual([{ args: SITREP_ARGS, cwd: root }]);
+    expect(board).toMatchObject({
+      refreshing: false,
+      source: "current",
+      error: null,
+    });
     expect(board.columns.map((entry) => entry.id)).toEqual([
       "queued",
       "progress",
@@ -198,41 +254,95 @@ describe("board rpc", () => {
       "deploy",
       "done",
     ]);
-    expect(column(board, "progress")?.cards.map((card) => card.id)).toEqual([
-      "sb-1",
-    ]);
-    expect(column(board, "progress")?.cards[0].pr).toEqual({
-      url: "https://github.com/x/y/pull/7",
-      state: "open",
+    const placed = Object.fromEntries(
+      board.columns.map((entry) => [
+        entry.id,
+        entry.cards.map((card) => card.id),
+      ]),
+    );
+    expect(placed).toEqual({
+      queued: [],
+      progress: ["sb-1"],
+      waiting: ["sb-2"],
+      blocked: [],
+      review: [],
+      deploy: [],
+      done: ["sb-3"],
     });
-    expect(column(board, "review")?.cards).toEqual([
-      expect.objectContaining({ id: "sb-2", flags: ["thread-gone"] }),
-    ]);
-    expect(column(board, "done")?.cards.map((card) => card.id)).toEqual([
-      "sb-3",
-    ]);
     expect(board.projects).toEqual(["fia", "vaam-main"]);
   });
 
-  it("leaves out every bead that is not a mission", async () => {
+  it("carries the next action, owner, and pending attention on a card", async () => {
+    const { fake } = loadPlugin();
+    const board = (await fake.harness.callRpc("board", {
+      project: "vaam-main",
+    })) as Board;
+    expect(column(board, "progress")?.cards[0]).toMatchObject({
+      stage: "Active",
+      tone: "working",
+      nextAction: "Check acceptance",
+      owner: "Crew thr_crew",
+      ownerIdle: false,
+      attention: [],
+      pr: { url: "https://github.com/x/y/pull/7", state: "open" },
+      flags: [],
+    });
+    expect(column(board, "waiting")?.cards[0]).toMatchObject({
+      stage: "Awaiting decision",
+      tone: "alert",
+      owner: "Commander thr_root",
+      ownerIdle: true,
+      attention: [
+        { kind: "decision", summary: "Check acceptance", surfaced: false },
+      ],
+      threadStatus: "idle",
+    });
+    expect(column(board, "done")?.cards[0]).toMatchObject({
+      stage: "Complete",
+      tone: "quiet",
+      attention: [],
+      integrity: null,
+    });
+  });
+
+  it("keeps merged but undeployed work in Awaiting deploy", async () => {
+    const { fake } = loadPlugin();
+    const board = (await fake.harness.callRpc("board", {
+      project: "fia",
+    })) as Board;
+    expect(column(board, "deploy")?.cards).toEqual([
+      expect.objectContaining({
+        id: "sb-4",
+        stage: expect.stringMatching(/^Ready for deploy/),
+        pr: { url: "https://github.com/x/y/pull/9", state: "merged" },
+      }),
+    ]);
+    expect(column(board, "done")?.cards).toEqual([]);
+  });
+
+  it("shows a Crew thread with no mission bead in Commander review", async () => {
     const { fake } = loadPlugin();
     const board = (await fake.harness.callRpc("board", {
       project: "all",
     })) as Board;
-    const ids = board.columns.flatMap((entry) =>
-      entry.cards.map((card) => card.id),
-    );
-    expect(ids.sort()).toEqual(["sb-1", "sb-2", "sb-3"]);
+    expect(column(board, "review")?.cards).toEqual([
+      expect.objectContaining({
+        id: "thr_orphan",
+        bead: null,
+        mission: null,
+        threadId: "thr_orphan",
+        flags: ["thread-without-bead"],
+        integrity: "Changed outside checked update",
+      }),
+    ]);
+    // A bb project name is no slug: the picker leaves it out.
+    expect(board.projects).toEqual(["fia", "vaam-main"]);
   });
 
-  it("does not read the thread of a closed mission", async () => {
+  it("reads no thread through the SDK for the board", async () => {
     const { fake } = loadPlugin();
     await fake.harness.callRpc("board", { project: "all" });
-    const read = fake.harness.sdk
-      .callsTo("threads.get")
-      .map((call) => (call[0] as { threadId: string }).threadId);
-    expect(read).toContain("thr_crew_1");
-    expect(read).not.toContain("thr_crew_old");
+    expect(fake.harness.sdk.callsTo("threads.get")).toHaveLength(0);
   });
 
   it("refuses a project that is not a slug", async () => {
@@ -241,33 +351,241 @@ describe("board rpc", () => {
       fake.harness.callRpc("board", { project: "../etc" }),
     ).rejects.toThrow();
   });
+
+  it("does not pass a Commander setting that is not a thread id", async () => {
+    const { fake, sitrep } = loadPlugin({ sitrepCommander: "thr_x --full" });
+    const board = (await fake.harness.callRpc("board", {
+      project: "all",
+    })) as Board;
+    expect(sitrep.calls).toHaveLength(0);
+    expect(board.source).toBe("unavailable");
+    expect(board.error).toMatch(/not a thread id/);
+  });
+});
+
+describe("board source", () => {
+  const COLUMNS: Record<string, string> = {
+    active: "progress",
+    "changed-verified-target": "blocked",
+    "missing-verified-target": "blocked",
+    "new-blocker": "waiting",
+    "partial-source-failure": "waiting",
+    "quiet-complete": "done",
+    "ready-for-deploy": "deploy",
+    "recent-closed": "done",
+    "stale-conflict": "review",
+    "survey-decision": "waiting",
+  };
+
+  it("places every core full-row run, partial runs marked partial", async () => {
+    const names = readdirSync(FULL_ROWS).map((file) =>
+      file.replace(/\.json$/, ""),
+    );
+    expect(names.sort()).toEqual(Object.keys(COLUMNS).sort());
+    for (const name of names) {
+      const run = fullRun(name);
+      const { fake, sitrep } = loadPlugin();
+      sitrep.result = () => ({
+        exitCode: run.exit_code,
+        stdout: JSON.stringify(run.stdout),
+        stderr: run.stderr,
+      });
+      const board = (await fake.harness.callRpc("board", {
+        project: "all",
+      })) as Board;
+      expect(board.source, name).toBe(
+        run.exit_code === 0 ? "current" : "partial",
+      );
+      const card = board.columns.flatMap((entry) => entry.cards)[0];
+      expect(card.column, name).toBe(COLUMNS[name]);
+      // The card shows exactly the core's pending attention, no more.
+      const state = run.stdout[0].mission_state as {
+        pending_attention: { kind: string }[];
+      };
+      expect(
+        (card.attention as { kind: string }[]).map((a) => a.kind).sort(),
+        name,
+      ).toEqual(state.pending_attention.map((a) => a.kind).sort());
+    }
+  });
+
+  it("files a completion with failed target evidence in Blocked, not Done", async () => {
+    const run = fullRun("changed-verified-target");
+    const { fake, sitrep } = loadPlugin();
+    sitrep.result = () => ({
+      exitCode: run.exit_code,
+      stdout: JSON.stringify(run.stdout),
+      stderr: "",
+    });
+    const board = (await fake.harness.callRpc("board", {
+      project: "all",
+    })) as Board;
+    expect(board).toMatchObject({
+      source: "partial",
+      error: "partial source failure",
+    });
+    expect(column(board, "blocked")?.cards[0]).toMatchObject({
+      stage: "Complete",
+      tone: "alert",
+      attention: [expect.objectContaining({ kind: "verification-failed" })],
+      flags: ["source-error"],
+    });
+    expect(column(board, "done")?.cards).toEqual([]);
+  });
+
+  it("is unavailable, not empty, when the first run fails", async () => {
+    const { fake, sitrep } = loadPlugin();
+    sitrep.result = () => ({
+      exitCode: 2,
+      stdout: "",
+      stderr: "usage: bash scripts/sitrep.sh --project <slug|all>",
+    });
+    const board = (await fake.harness.callRpc("board", {
+      project: "all",
+    })) as Board;
+    expect(board).toMatchObject({
+      source: "unavailable",
+      error: "usage: bash scripts/sitrep.sh --project <slug|all>",
+    });
+    expect(board.columns.every((entry) => entry.total === 0)).toBe(true);
+  });
+
+  it("keeps the last good rows marked stale, with their own read time", async () => {
+    const { fake, sitrep } = loadPlugin();
+    const good = (await fake.harness.callRpc("board", {
+      project: "all",
+    })) as Board;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    sitrep.result = () => ({ exitCode: 1, stdout: "", stderr: "bd failed" });
+    const stale = (await fake.harness.callRpc("board", {
+      project: "all",
+      force: true,
+    })) as Board;
+    expect(stale).toMatchObject({ source: "stale", error: "bd failed" });
+    expect(stale.generatedAt).toBe(good.generatedAt);
+    expect(stale.columns).toEqual(good.columns);
+
+    // Still stale after a second failure; current again after a good run.
+    sitrep.result = () => {
+      throw new Error("runner broke");
+    };
+    const still = (await fake.harness.callRpc("board", {
+      project: "all",
+      force: true,
+    })) as Board;
+    expect(still).toMatchObject({ source: "stale", error: "runner broke" });
+    expect(still.generatedAt).toBe(good.generatedAt);
+    sitrep.result = () => ({
+      exitCode: 0,
+      stdout: JSON.stringify(rows),
+      stderr: "",
+    });
+    const again = (await fake.harness.callRpc("board", {
+      project: "all",
+      force: true,
+    })) as Board;
+    expect(again).toMatchObject({ source: "current", error: null });
+    expect(again.generatedAt).toBeGreaterThan(good.generatedAt);
+  });
+
+  it("fails the whole run on an unsupported contract version", async () => {
+    const { fake, sitrep } = loadPlugin();
+    sitrep.result = () => ({
+      exitCode: 0,
+      stdout: JSON.stringify([...rows, { ...rows[0], contract_version: 2 }]),
+      stderr: "",
+    });
+    const board = (await fake.harness.callRpc("board", {
+      project: "all",
+    })) as Board;
+    expect(board).toMatchObject({
+      source: "unavailable",
+      error: "source unavailable",
+    });
+  });
+
+  it("shows a row from a SITREP without mission state as pre-v1, in review", async () => {
+    const { fake, sitrep } = loadPlugin();
+    sitrep.result = () => ({
+      exitCode: 0,
+      stdout: JSON.stringify([
+        { bead: "sb-9", mission: "build", project: "fia", title: "Old row" },
+      ]),
+      stderr: "",
+    });
+    const board = (await fake.harness.callRpc("board", {
+      project: "all",
+    })) as Board;
+    expect(board.source).toBe("current");
+    expect(column(board, "review")?.cards[0]).toMatchObject({
+      id: "sb-9",
+      integrity: "Pre-v1 row",
+      tone: "warn",
+      attention: [],
+    });
+  });
+});
+
+describe("default SITREP runner", () => {
+  it("runs bash with the exact arguments and keeps a partial run's rows", async () => {
+    const root = baseRoot();
+    mkdirSync(join(root, "scripts"));
+    // A synthetic SITREP: it prints its arguments as a pre-v1 row title,
+    // reports a partial failure on stderr, and exits 1.
+    writeFileSync(
+      join(root, "scripts", "sitrep.sh"),
+      [
+        'printf \'[{"bead":"sb-9","mission":"build","project":"fia","title":"%s"}]\' "$*"',
+        "echo 'SOURCE FAILED: bb thread list' >&2",
+        "exit 1",
+      ].join("\n"),
+    );
+    const fake = createFakePluginHost({
+      pluginId: "starbase",
+      settings: { commanderProjectIds: COMMANDER_PROJECT, baseRoot: root },
+      sdk: { threads: { get: threadsGet, list: threadsList } },
+    });
+    plugin(fake.bb);
+    const board = (await fake.harness.callRpc("board", {
+      project: "all",
+    })) as Board;
+    expect(board).toMatchObject({
+      source: "partial",
+      error: "SOURCE FAILED: bb thread list",
+    });
+    expect(column(board, "review")?.cards[0]).toMatchObject({
+      id: "sb-9",
+      title: SITREP_ARGS.slice(1).join(" "),
+      integrity: "Pre-v1 row",
+    });
+  });
 });
 
 describe("board snapshot", () => {
   it("serves a second call from the snapshot, for any project", async () => {
-    const { fake, bd } = loadPlugin();
+    const { fake, sitrep } = loadPlugin();
     await fake.harness.callRpc("board", { project: "all" });
     await fake.harness.callRpc("board", { project: "fia" });
     await fake.harness.callRpc("panel", { threadId: "thr_crew_1" });
-    expect(bd.calls).toHaveLength(1);
+    expect(sitrep.calls).toHaveLength(1);
   });
 
   it("runs one read for calls that arrive together", async () => {
-    const { fake, bd } = loadPlugin();
+    const { fake, sitrep } = loadPlugin();
     await Promise.all([
       fake.harness.callRpc("board", { project: "all" }),
       fake.harness.callRpc("board", { project: "fia" }),
       fake.harness.callRpc("panel", { threadId: COMMANDER }),
     ]);
-    expect(bd.calls).toHaveLength(1);
+    expect(sitrep.calls).toHaveLength(1);
   });
 
   it("answers at once from a stale snapshot while one read runs behind it", async () => {
-    const { fake, bd } = loadPlugin();
+    const { fake, sitrep } = loadPlugin();
     await fake.harness.callRpc("board", { project: "all" });
 
     // A Crew thread on the board changes: the snapshot is stale.
-    bd.hold = true;
+    sitrep.hold = true;
     await fake.harness.emitThreadEvent(
       "thread.active",
       crewEvent("thr_crew_1"),
@@ -276,55 +594,55 @@ describe("board snapshot", () => {
       project: "all",
     })) as Board;
     expect(stale.refreshing).toBe(true);
-    expect(bd.calls).toHaveLength(2);
+    expect(sitrep.calls).toHaveLength(2);
 
     // A third call joins the running read; it does not start another.
     const third = (await fake.harness.callRpc("board", {
       project: "all",
     })) as Board;
     expect(third.refreshing).toBe(true);
-    expect(bd.calls).toHaveLength(2);
+    expect(sitrep.calls).toHaveLength(2);
 
-    bd.hold = false;
-    bd.release();
+    sitrep.hold = false;
+    sitrep.release();
     await vi.waitFor(async () => {
       const fresh = (await fake.harness.callRpc("board", {
         project: "all",
       })) as Board;
       expect(fresh.refreshing).toBe(false);
     });
-    expect(bd.calls).toHaveLength(2);
+    expect(sitrep.calls).toHaveLength(2);
   });
 
   it("ignores an event for a thread that is not on the board", async () => {
-    const { fake, bd } = loadPlugin();
+    const { fake, sitrep } = loadPlugin();
     await fake.harness.callRpc("board", { project: "all" });
     await fake.harness.emitThreadEvent("thread.active", crewEvent("thr_other"));
     await fake.harness.callRpc("board", { project: "all" });
-    expect(bd.calls).toHaveLength(1);
+    expect(sitrep.calls).toHaveLength(1);
   });
 
   it("waits for a new read on force", async () => {
-    const { fake, bd } = loadPlugin();
+    const { fake, sitrep } = loadPlugin();
     await fake.harness.callRpc("board", { project: "all" });
     await fake.harness.callRpc("board", { project: "all", force: true });
-    expect(bd.calls).toHaveLength(2);
+    expect(sitrep.calls).toHaveLength(2);
     await fake.harness.callRpc("panel", { threadId: COMMANDER, force: true });
-    expect(bd.calls).toHaveLength(3);
+    expect(sitrep.calls).toHaveLength(3);
   });
 
   it("reads again in the background while used, and stops on unload", async () => {
     vi.useFakeTimers();
-    const { fake, bd } = loadPlugin();
+    const { fake, sitrep } = loadPlugin();
     // No read before the first call.
     await vi.advanceTimersByTimeAsync(31_000);
-    expect(bd.calls).toHaveLength(0);
+    expect(sitrep.calls).toHaveLength(0);
     await fake.harness.callRpc("board", { project: "all" });
     await vi.advanceTimersByTimeAsync(31_000);
-    expect(bd.calls).toHaveLength(2);
+    expect(sitrep.calls).toHaveLength(2);
     await fake.harness.dispose();
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(bd.calls).toHaveLength(2);
+    expect(sitrep.calls).toHaveLength(2);
   });
 });
 

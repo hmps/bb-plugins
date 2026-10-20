@@ -1,16 +1,19 @@
-// A read-only smoke against the real Mission Queue: the real `bd` (through the
-// plugin's own runner, so the password path is the production one) and the
-// real bb threads, read with GETs on the local bb HTTP API. It prints column
-// counts and call timings only.
+// A read-only smoke against a real Base: the real SITREP (through the
+// plugin's own runner, so the password and PATH handling are the production
+// ones) and the real bb threads, read with GETs on the local bb HTTP API. It
+// prints column counts, the source state, and call timings only.
 //
-//   STARBASE_LIVE=1 npx vitest run board.live
+//   STARBASE_LIVE=1 STARBASE_LIVE_BASE=/path/to/starbase npx vitest run board.live
 //
-// Skipped otherwise, so `npm test` never touches the network.
+// The Base must carry the mission state v1 SITREP: an older one gives a
+// board of pre-v1 rows, and the smoke fails. Skipped otherwise, so `npm test`
+// never touches the network.
 import { describe, expect, it } from "vitest";
 import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
 import plugin from "./server";
 
 const LIVE = process.env.STARBASE_LIVE === "1";
+const BASE = process.env.STARBASE_LIVE_BASE ?? "";
 const API = `${process.env.BB_SERVER_URL ?? "http://127.0.0.1:38886"}/api/v1`;
 const VAAM_COMMANDER = "thr_9mhukyfy2t";
 const VAAM_COMMANDER_PROJECT = "proj_s9vk5k4c9u";
@@ -30,7 +33,7 @@ async function get(path: string): Promise<unknown> {
 function loadPlugin() {
   const fake = createFakePluginHost({
     pluginId: "starbase",
-    settings: { commanderProjectIds: VAAM_COMMANDER_PROJECT },
+    settings: { commanderProjectIds: VAAM_COMMANDER_PROJECT, baseRoot: BASE },
     sdk: {
       threads: {
         get: ({ threadId }: { threadId: string }) =>
@@ -66,14 +69,20 @@ function loadPlugin() {
 }
 
 interface Board {
-  columns: { id: string; total: number; cards: { flags: string[] }[] }[];
+  source: string;
+  error: string | null;
+  columns: {
+    id: string;
+    total: number;
+    cards: { flags: string[]; integrity: string | null }[];
+  }[];
 }
 
 function counts(board: Board): string {
   return board.columns
     .map((column) => {
       const flagged = column.cards.filter(
-        (card) => card.flags.length > 0,
+        (card) => card.flags.length > 0 || card.integrity !== null,
       ).length;
       return `${column.id}=${column.total}${flagged > 0 ? ` (${flagged} flagged)` : ""}`;
     })
@@ -94,6 +103,7 @@ function say(line: string): void {
 
 describe.skipIf(!LIVE)("live board", () => {
   it("prints the column counts and timings for vaam-main and all", async () => {
+    expect(BASE, "set STARBASE_LIVE_BASE to a v1 Base").not.toBe("");
     const fake = loadPlugin();
     const call = (name: string, input: unknown) =>
       fake.harness.callRpc(name, input) as Promise<unknown>;
@@ -105,8 +115,13 @@ describe.skipIf(!LIVE)("live board", () => {
       const board = (await timed(`warm board call (${project})`, () =>
         call("board", { project }),
       )) as Board;
-      say(`${project}: ${counts(board)}`);
-      expect(board.columns).toHaveLength(6);
+      say(`${project}: ${board.source} ${counts(board)}`);
+      expect(board.source).toMatch(/^(current|partial)$/);
+      expect(board.columns).toHaveLength(7);
+      const preV1 = board.columns
+        .flatMap((column) => column.cards)
+        .filter((card) => card.integrity === "Pre-v1 row");
+      expect(preV1, "the Base SITREP is older than v1").toEqual([]);
     }
     const panel = (await timed(`panel call (${VAAM_COMMANDER}, first)`, () =>
       call("panel", { threadId: VAAM_COMMANDER }),

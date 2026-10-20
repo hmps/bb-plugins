@@ -16,16 +16,16 @@
 // failed send releases the key so the next identical event tries again.
 //
 // The plugin also serves the Mission Queue board, read-only. It keeps a warm
-// snapshot: `bd --readonly list` in the Base, and the Crew thread of each
-// open mission through the SDK. The pure column rules in board.ts turn the
-// snapshot into columns. It never writes a bead and never runs a Starbase
-// script.
+// snapshot of one Starbase SITREP run in the Base: every mission row with
+// the `mission_state` the core projects (contract v1, mission.ts). The pure
+// rules in board.ts and mission.ts turn the rows into columns. The SITREP
+// only reads; the board never writes a bead, a receipt, or any state.
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 import {
   defineRpcContract,
   type BbPluginApi,
@@ -37,13 +37,11 @@ import {
   buildBoard,
   credentialPassword,
   inferProject,
-  needsThreadRead,
   postureValue,
-  toMissionBead,
-  type MissionBead,
-  type RawBead,
-  type ThreadInfo,
+  toCards,
+  type BoardCard,
 } from "./board.js";
+import { consumeSitrep, type SitrepRead } from "./mission.js";
 
 /**
  * The SDK does not export the pending-interaction DTO by name, so the event
@@ -61,13 +59,18 @@ interface Posture {
   projectId: string | null;
 }
 
-/** What the board answers from: one read of the queue and its Crew threads. */
+/** What the board answers from: the latest SITREP read, and the postures. */
 interface Snapshot {
+  /** When the SITREP last ran, whatever it gave. Drives the refresh. */
   fetchedAt: number;
-  beads: MissionBead[];
+  /** When the rows shown were read. Older than fetchedAt while stale. */
+  rowsAt: number | null;
+  read: SitrepRead;
+  /** The rows as cards, in SITREP order; null while the source is unavailable. */
+  cards: BoardCard[] | null;
+  /** Every thread a row names, so a thread event can mark the snapshot old. */
+  threadIds: Set<string>;
   postures: Posture[];
-  /** bb's view of the Crew thread of every open mission that names one. */
-  threads: Map<string, ThreadInfo>;
 }
 
 /** One row of `bb.sdk.threads.list`, which is not the same DTO as a thread. */
@@ -98,27 +101,44 @@ const LIST_MAX_PAGES = 50;
 /** The refusal when the descendant set could not be shown to be complete. */
 const ENUMERATION_FAILED = "settle: could not enumerate all descendants";
 
-/** The Base checkout: `bd` runs here, and `projects/` holds the postures. */
+/** The Base checkout: the SITREP runs here, and `projects/` holds the postures. */
 export const DEFAULT_BASE_ROOT = "/Users/hmps/dev/starbase";
 
 /**
  * Where the Mission Queue's Dolt password lives. The board reads it on every
- * `bd` run and passes it in the child's environment only; it is never stored,
- * logged, or returned.
+ * SITREP run and passes it in the child's environment only; it is never
+ * stored, logged, or returned.
  */
 const DOLT_CREDENTIALS_FILE = "~/.config/beads/credentials";
 const DOLT_CREDENTIALS_SECTION = "100.85.132.50:3307";
 
-/** `--readonly` makes bd itself refuse any write. */
-const BD_LIST_ARGS = ["--readonly", "list", "--all", "--json", "--limit", "0"];
-const BD_TIMEOUT_MS = 30_000;
-const BD_MAX_BUFFER = 50 * 1024 * 1024;
-/** How much of bd's stderr rides along in an error message. */
+/** The Commander whose Crew the SITREP reads, when the setting is not changed. */
+const DEFAULT_SITREP_COMMANDER = "thr_9mhukyfy2t";
+/** A thread id as bb writes it. Nothing else reaches the SITREP arguments. */
+const THREAD_ID_PATTERN = /^thr_[A-Za-z0-9]+$/;
+/** How many closed missions the SITREP adds after the open ones. */
+const SITREP_RECENT_CLOSED = "50";
+/** The SITREP, from the Base root. It reads only: no reconcile, no receipt. */
+function sitrepArgs(commander: string): string[] {
+  return [
+    "scripts/sitrep.sh",
+    "--project",
+    "all",
+    "--commander",
+    commander,
+    "--recent-closed",
+    SITREP_RECENT_CLOSED,
+    "--json",
+  ];
+}
+const SITREP_TIMEOUT_MS = 60_000;
+const SITREP_MAX_BUFFER = 50 * 1024 * 1024;
+/** How much of the SITREP's stderr rides along in an error message. */
 const STDERR_LIMIT = 2 * 1024;
 
 /**
- * The board answers from a warm snapshot of the queue and its Crew threads.
- * A snapshot older than this is served at once and read again behind it.
+ * The board answers from a warm snapshot of the last SITREP run. A snapshot
+ * older than this is served at once and read again behind it.
  */
 const SNAPSHOT_MAX_AGE_MS = 30_000;
 /** How often the snapshot is read again while somebody uses the board. */
@@ -127,9 +147,7 @@ const SNAPSHOT_REFRESH_MS = 30_000;
 const SNAPSHOT_IDLE_MS = 10 * 60_000;
 /** How long a Commander's project, inferred from its Crew, stays known. */
 const COMMANDER_PROJECT_CACHE_MS = 5 * 60_000;
-/** How many Crew thread reads run at once. */
-const THREAD_READ_CONCURRENCY = 8;
-/** Crew thread events that make the snapshot stale. */
+/** Thread events that make the snapshot old before its age does. */
 const THREAD_EVENTS = [
   "thread.active",
   "thread.idle",
@@ -151,31 +169,50 @@ const projectScopeSchema = z
 const boardCardSchema = z
   .object({
     id: z.string(),
+    bead: z.string().nullable(),
     title: z.string(),
-    mission: z.string(),
+    mission: z.string().nullable(),
     project: z.string(),
-    status: z.string().nullable(),
     threadId: z.string().nullable(),
+    threadStatus: z.string().nullable(),
     pr: z.object({ url: z.string(), state: z.string() }).strict().nullable(),
-    flags: z.array(
-      z.enum(["thread-gone", "thread-unreadable", "thread-archived"]),
+    flags: z.array(z.string()),
+    column: z.enum(COLUMN_IDS),
+    stage: z.string(),
+    tone: z.enum(["alert", "warn", "working", "waiting", "quiet"]),
+    nextAction: z.string().nullable(),
+    owner: z.string().nullable(),
+    ownerIdle: z.boolean(),
+    attention: z.array(
+      z
+        .object({ kind: z.string(), summary: z.string(), surfaced: z.boolean() })
+        .strict(),
     ),
+    integrity: z.string().nullable(),
+    problems: z.array(z.string()),
     outcome: z.string().nullable(),
     note: z.string().nullable(),
-    record: z.string().nullable(),
-    updatedAt: z.string(),
-    closedAt: z.string().nullable(),
   })
   .strict();
 
 const boardSchema = z
   .object({
     project: z.string(),
-    /** When the snapshot behind this board was read. */
+    /**
+     * When the rows on this board were read. While `source` is `stale` this
+     * is the last good read, not the failed one; with no rows, the last try.
+     */
     generatedAt: z.number(),
     /** True while a newer snapshot is being read; ask again shortly. */
     refreshing: z.boolean(),
-    /** Why the last background refresh failed, while an older snapshot shows. */
+    /**
+     * How far to trust the rows. `current`: the last SITREP run succeeded.
+     * `partial`: it ran, but a source failed, so some rows are incomplete.
+     * `stale`: it failed, and these are the rows of an older run.
+     * `unavailable`: no run gave rows yet; the columns are empty, not clear.
+     */
+    source: z.enum(["current", "partial", "stale", "unavailable"]),
+    /** What the last SITREP run reported on failure; null when it succeeded. */
     error: z.string().nullable(),
     projects: z.array(z.string()),
     columns: z.array(
@@ -245,15 +282,22 @@ export const starbaseRpcContract = defineRpcContract({
   },
 });
 
-/** How the plugin reaches `bd`. Injected in tests, execFile in production. */
-export type BdRunner = (
+/** One finished SITREP run. A run that could not start has no exit code. */
+export interface SitrepResult {
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+/** How the plugin runs the SITREP. Injected in tests, execFile in production. */
+export type SitrepRunner = (
   args: string[],
   options: { cwd: string },
-) => Promise<string>;
+) => Promise<SitrepResult>;
 
 export interface StarbasePluginOptions {
-  /** Overrides the execFile runner; tests pass a fake `bd`. */
-  runBd?: BdRunner;
+  /** Overrides the execFile runner; tests pass a synthetic SITREP. */
+  runSitrep?: SitrepRunner;
 }
 
 /**
@@ -524,75 +568,51 @@ async function readDoltPassword(): Promise<string | null> {
 }
 
 /**
- * Run bd with the Dolt password in the child's environment only. Every error
- * text is redacted before it leaves, in case bd echoes its connection string.
+ * Run the SITREP with `bash`, never a shell string, and the Dolt password in
+ * the child's environment only. The directory of the bd the settings name
+ * goes first on PATH, so the SITREP's own bd calls find it. A failed run
+ * resolves with its exit code and stderr: consumeSitrep decides what it
+ * means. Every error text is redacted before it leaves, in case a tool echoes
+ * its connection string.
  */
-function defaultRunBd(file: string): BdRunner {
+function defaultRunSitrep(bdFile: string): SitrepRunner {
   return async (args, { cwd }) => {
     const password = await readDoltPassword();
-    const env =
-      password === null
-        ? process.env
-        : { ...process.env, BEADS_DOLT_PASSWORD: password };
-    return new Promise<string>((resolve, reject) => {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    if (password !== null) env.BEADS_DOLT_PASSWORD = password;
+    if (isAbsolute(bdFile)) {
+      env.PATH = [dirname(bdFile), env.PATH ?? ""].join(delimiter);
+    }
+    return new Promise<SitrepResult>((resolve) => {
       execFile(
-        file,
+        "bash",
         args,
-        { cwd, env, timeout: BD_TIMEOUT_MS, maxBuffer: BD_MAX_BUFFER },
+        { cwd, env, timeout: SITREP_TIMEOUT_MS, maxBuffer: SITREP_MAX_BUFFER },
         (error, stdout, stderr) => {
+          const clean = (value: string) =>
+            shorten(redact(value, password), STDERR_LIMIT);
           if (error === null) {
-            resolve(stdout);
+            resolve({ exitCode: 0, stdout, stderr: clean(stderr) });
             return;
           }
           const code = (error as NodeJS.ErrnoException).code;
+          let detail = clean(stderr);
           if (code === "ENOENT") {
-            reject(
-              new Error(
-                `bd was not found at "${file}". Install the beads CLI, or set the "Beads CLI path" setting to its absolute path.`,
-              ),
-            );
-            return;
+            detail = `bash was not found, or the Base root "${cwd}" does not exist.`;
+          } else if (error.killed) {
+            detail = `The SITREP did not finish in ${SITREP_TIMEOUT_MS / 1000}s.`;
+          } else if (detail === "") {
+            detail = clean(error.message);
           }
-          const detail = shorten(stderr.trim(), STDERR_LIMIT) || error.message;
-          reject(
-            new Error(
-              redact(
-                `bd ${args.join(" ")} failed in ${cwd}: ${detail}`,
-                password,
-              ),
-            ),
-          );
+          resolve({
+            exitCode: typeof code === "number" && !error.killed ? code : null,
+            stdout,
+            stderr: detail,
+          });
         },
       );
     });
   };
-}
-
-/** Run `fn` over `items`, at most `limit` at a time. */
-async function mapLimit<T>(
-  items: readonly T[],
-  limit: number,
-  fn: (item: T) => Promise<void>,
-): Promise<void> {
-  let next = 0;
-  async function worker(): Promise<void> {
-    while (next < items.length) {
-      const item = items[next];
-      next += 1;
-      await fn(item);
-    }
-  }
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, worker),
-  );
-}
-
-function isNotFound(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as { status?: unknown }).status === 404
-  );
 }
 
 export default function plugin(
@@ -612,14 +632,21 @@ export default function plugin(
       type: "string",
       label: "Base root",
       description:
-        "The Starbase checkout. The board runs bd here and reads projects/*/posture.toml.",
+        "The Starbase checkout. The board runs scripts/sitrep.sh here and reads projects/*/posture.toml.",
       default: DEFAULT_BASE_ROOT,
+    },
+    sitrepCommander: {
+      type: "string",
+      label: "SITREP Commander thread",
+      description:
+        "The Commander thread whose Crew the board's SITREP reads (--commander). Its Crew without a mission bead show as their own cards.",
+      default: DEFAULT_SITREP_COMMANDER,
     },
     bdPath: {
       type: "string",
       label: "Beads CLI path",
       description:
-        "The bd executable. A bare name is looked up on PATH, then in the usual install locations.",
+        "The bd executable the SITREP uses. A bare name is looked up on PATH, then in the usual install locations; its directory goes first on the SITREP's PATH.",
       default: "bd",
     },
   });
@@ -1325,94 +1352,24 @@ export default function plugin(
     return root;
   }
 
-  async function runBd(args: string[], cwd: string): Promise<string> {
-    if (options.runBd !== undefined) return options.runBd(args, { cwd });
+  /** The Commander whose Crew the SITREP reads, checked before it is passed on. */
+  async function sitrepCommander(): Promise<string> {
+    const { sitrepCommander: value } = await settings.get();
+    const commander = value.trim();
+    if (!THREAD_ID_PATTERN.test(commander)) {
+      throw new Error(
+        `The SITREP Commander setting "${commander}" is not a thread id.`,
+      );
+    }
+    return commander;
+  }
+
+  async function runSitrep(): Promise<SitrepResult> {
+    const args = sitrepArgs(await sitrepCommander());
+    const cwd = await baseRoot();
+    if (options.runSitrep !== undefined) return options.runSitrep(args, { cwd });
     const { bdPath } = await settings.get();
-    return defaultRunBd(resolveBdPath(bdPath))(args, { cwd });
-  }
-
-  /** Every mission bead. Every other bead is dropped here. */
-  async function loadMissionBeads(): Promise<MissionBead[]> {
-    const stdout = await runBd(BD_LIST_ARGS, await baseRoot());
-    const parsed: unknown = JSON.parse(stdout.trim() === "" ? "[]" : stdout);
-    if (!Array.isArray(parsed)) {
-      throw new Error("bd list --json did not return an array.");
-    }
-    return (parsed as RawBead[])
-      .map(toMissionBead)
-      .filter((bead): bead is MissionBead => bead !== null);
-  }
-
-  /** Whether the thread waits on an answer; null when bb did not say. */
-  async function hasPendingInteraction(
-    threadId: string,
-  ): Promise<boolean | null> {
-    try {
-      const interactions = await bb.sdk.threads.interactions.list({ threadId });
-      return interactions.some((entry) => entry.status === "pending");
-    } catch {
-      return null;
-    }
-  }
-
-  /** The PR of a Crew environment. A failure only leaves it off the card. */
-  async function pullRequestOf(
-    environmentId: string | null | undefined,
-  ): Promise<{ url: string; state: string } | null> {
-    if (environmentId === null || environmentId === undefined) return null;
-    try {
-      const result = await bb.sdk.environments.pullRequest({ environmentId });
-      return result.outcome === "available"
-        ? { url: result.pullRequest.url, state: result.pullRequest.state }
-        : null;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * bb's view of one Crew thread. A 404 means bb holds no such thread; any
-   * other failure means bb did not say, and the card shows that instead of
-   * guessing a state.
-   */
-  async function readThread(threadId: string): Promise<ThreadInfo> {
-    let thread;
-    try {
-      thread = await bb.sdk.threads.get({ threadId });
-    } catch (error) {
-      return isNotFound(error) ? { kind: "gone" } : { kind: "unreadable" };
-    }
-    if (thread.deletedAt !== null && thread.deletedAt !== undefined) {
-      return { kind: "gone" };
-    }
-    const archived =
-      thread.archivedAt !== null && thread.archivedAt !== undefined;
-    const [pendingInteraction, pr] = await Promise.all([
-      archived ? false : hasPendingInteraction(threadId),
-      pullRequestOf(thread.environmentId),
-    ]);
-    if (pendingInteraction === null) return { kind: "unreadable" };
-    return {
-      kind: "ok",
-      status: thread.status,
-      pendingInteraction,
-      archived,
-      pr,
-    };
-  }
-
-  async function readThreads(
-    threadIds: readonly string[],
-  ): Promise<Map<string, ThreadInfo>> {
-    const found = new Map<string, ThreadInfo>();
-    await mapLimit(
-      [...new Set(threadIds)],
-      THREAD_READ_CONCURRENCY,
-      async (threadId) => {
-        found.set(threadId, await readThread(threadId));
-      },
-    );
-    return found;
+    return defaultRunSitrep(resolveBdPath(bdPath))(args, { cwd });
   }
 
   /** Every posture slug in the Base, with its bb project id when it names one. */
@@ -1445,55 +1402,74 @@ export default function plugin(
     return postures.sort((a, b) => a.slug.localeCompare(b.slug));
   }
 
-  // The snapshot: every mission bead, the postures, and bb's view of the Crew
-  // thread of every open mission. A board call answers from it at once and,
-  // when it is old or an event made it stale, reads a new one behind the
-  // answer. Only one read runs at a time; every caller in the meantime shares
-  // it. Only the first call after load, and a forced one, wait for a read.
+  // The snapshot: the last SITREP run and the postures. A board call answers
+  // from it at once and, when it is old or a thread event made it old, runs
+  // the SITREP again behind the answer. Only one run happens at a time; every
+  // caller in the meantime shares it. Only the first call after load, and a
+  // forced one, wait for a run. A failed run never throws: its rows, or the
+  // older rows marked stale, or no rows at all, are the snapshot.
 
   let snapshot: Snapshot | null = null;
   let inFlight: Promise<Snapshot> | null = null;
-  /** A Crew thread in the snapshot changed since the running read began. */
+  /** A thread in the snapshot changed since the running read began. */
   let stale = false;
-  /** Why the last read failed, until a read succeeds. */
-  let lastError: string | null = null;
   let lastUsedAt = 0;
   /** Bumped when the settings change, so a read of the old Base is dropped. */
   let generation = 0;
+
+  async function readSitrep(prior: Snapshot | null): Promise<Snapshot> {
+    const postures = loadPostures().catch(() => prior?.postures ?? []);
+    let result: SitrepResult;
+    try {
+      result = await runSitrep();
+    } catch (error) {
+      result = { exitCode: null, stdout: "", stderr: describe(error) };
+    }
+    const priorRows = prior?.read.rows ?? null;
+    const read = consumeSitrep(
+      result.exitCode ?? -1,
+      result.stdout,
+      result.stderr,
+      priorRows,
+    );
+    const now = Date.now();
+    const fresh = read.rows !== null && !read.stale;
+    const cards = fresh
+      ? toCards(read.rows ?? [])
+      : read.rows === null
+        ? null
+        : (prior?.cards ?? null);
+    if (read.error !== null) {
+      bb.log.warn(`starbase: SITREP read failed: ${read.error}`);
+    }
+    return {
+      fetchedAt: now,
+      rowsAt: fresh ? now : (prior?.rowsAt ?? null),
+      read,
+      cards,
+      threadIds: new Set(
+        (cards ?? [])
+          .map((card) => card.threadId)
+          .filter((id): id is string => id !== null),
+      ),
+      postures: await postures,
+    };
+  }
 
   function refresh(): Promise<Snapshot> {
     if (inFlight !== null) return inFlight;
     stale = false;
     const started = generation;
-    const read = (async (): Promise<Snapshot> => {
-      try {
-        const [beads, postures] = await Promise.all([
-          loadMissionBeads(),
-          loadPostures(),
-        ]);
-        const wanted = beads
-          .filter(needsThreadRead)
-          .map((bead) => bead.notes.thread as string);
-        const threads = await readThreads(wanted);
-        const next = { fetchedAt: Date.now(), beads, postures, threads };
-        if (started === generation) {
-          snapshot = next;
-          lastError = null;
-        }
-        return next;
-      } catch (error) {
-        if (started === generation) lastError = describe(error);
-        bb.log.warn(`starbase: board refresh failed: ${describe(error)}`);
-        throw error;
-      } finally {
-        // Cleared before any caller sees the answer, so it is not
-        // "refreshing". A settings change already dropped this read.
-        if (started === generation) inFlight = null;
+    const read = readSitrep(snapshot).then((next) => {
+      // Cleared before any caller sees the answer, so it is not
+      // "refreshing". A settings change already dropped this read.
+      if (started === generation) {
+        snapshot = next;
+        inFlight = null;
       }
-    })();
+      return next;
+    });
     inFlight = read;
-    // A background read has no caller; its failure is in lastError.
-    read.catch(() => {});
     return read;
   }
 
@@ -1515,25 +1491,36 @@ export default function plugin(
 
   for (const event of THREAD_EVENTS) {
     bb.events.on(event, ({ thread }) => {
-      if (snapshot?.threads.has(thread.id)) stale = true;
+      if (snapshot?.threadIds.has(thread.id)) stale = true;
     });
   }
 
   /** The picker's choices: every posture slug and every slug a mission carries. */
   function projectSlugs(snap: Snapshot): string[] {
     const slugs = new Set(snap.postures.map((posture) => posture.slug));
-    for (const bead of snap.beads) slugs.add(bead.project);
+    for (const card of snap.cards ?? []) {
+      if (card.bead !== null && PROJECT_SLUG_PATTERN.test(card.project)) {
+        slugs.add(card.project);
+      }
+    }
     return [...slugs].sort((a, b) => a.localeCompare(b));
+  }
+
+  function sourceOf(read: SitrepRead) {
+    if (read.rows === null) return "unavailable" as const;
+    if (read.stale) return "stale" as const;
+    return read.incomplete ? ("partial" as const) : ("current" as const);
   }
 
   function boardFor(snap: Snapshot, project: string) {
     return {
       project,
-      generatedAt: snap.fetchedAt,
+      generatedAt: snap.rowsAt ?? snap.fetchedAt,
       refreshing: inFlight !== null,
-      error: lastError,
+      source: sourceOf(snap.read),
+      error: snap.read.error,
       projects: projectSlugs(snap),
-      columns: buildBoard(snap.beads, snap.threads, project, Date.now()),
+      columns: buildBoard(snap.cards ?? [], project),
     };
   }
 
@@ -1562,7 +1549,7 @@ export default function plugin(
    */
   async function commanderProject(
     commanderId: string,
-    beads: readonly MissionBead[],
+    cards: readonly BoardCard[],
   ): Promise<string | null> {
     const cached = commanderProjects.get(commanderId);
     if (
@@ -1578,7 +1565,7 @@ export default function plugin(
     const crew = new Set(
       [...(live ?? []), ...(archived ?? [])].map((row) => row.id),
     );
-    const project = inferProject(beads, crew);
+    const project = inferProject(cards, crew);
     // A Commander with no Crew yet is asked again next time.
     if (project !== null) {
       commanderProjects.set(commanderId, { at: Date.now(), project });
@@ -1616,7 +1603,7 @@ export default function plugin(
     if (commanderId !== null) {
       const saved = savedScope(commanderId);
       const inferred =
-        saved === null ? await commanderProject(commanderId, snap.beads) : null;
+        saved === null ? await commanderProject(commanderId, snap.cards ?? []) : null;
       if (saved !== null) {
         scope = saved;
         source = "saved";
@@ -1670,7 +1657,6 @@ export default function plugin(
     generation += 1;
     snapshot = null;
     inFlight = null;
-    lastError = null;
     commanderProjects.clear();
   });
 
