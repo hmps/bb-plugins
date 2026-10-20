@@ -417,9 +417,11 @@ export function viewMission(state: MissionState): MissionView {
     stage += ` · ${verified}/${total} targets verified`;
   }
 
+  // Problems are shown, never raised: only canonical attention and the
+  // lifecycle make a card ask for the user's eye.
   let tone: MissionTone;
   if (column === "waiting" || column === "blocked") tone = "alert";
-  else if (column === "review" || state.problems.length > 0) tone = "warn";
+  else if (column === "review") tone = "warn";
   else if (column === "progress" && state.ownerActive) tone = "working";
   else if (column === "done") tone = "quiet";
   else tone = "waiting";
