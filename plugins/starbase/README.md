@@ -283,7 +283,7 @@ The board header says how far to trust the cards:
 | unavailable | No run has given rows yet. | No columns. A notice says the missions are unknown, not empty. |
 
 A run fails when the SITREP exits with any other code, prints no row array,
-times out after 60 seconds, or prints a row with an unsupported
+times out after 5 minutes, or prints a row with an unsupported
 `contract_version`. One such row fails the whole run.
 
 ### Warm snapshot
@@ -292,13 +292,16 @@ The board answers from a warm snapshot, so the panel opens fast:
 
 - The first board call after the plugin loads reads the snapshot and waits for
   it. Every later call answers at once from the snapshot.
-- When the snapshot is older than 30 seconds, or a thread on the board
-  changed (active, idle, failed, archived, deleted, or a pending interaction),
-  the next call answers from the old snapshot and reads a new one behind it.
-  The board then shows "Updating…" and asks again shortly.
+- No automatic read starts until the last read finished 5 minutes ago, also
+  when it failed. One full SITREP can take minutes, so reads must not run
+  back to back. A thread change does not start a read; Refresh reads it.
+- When the snapshot is 5 minutes old, the next call answers from the old
+  snapshot and reads a new one behind it. The board then shows "Updating…"
+  and asks again shortly.
 - While somebody used the board in the last 10 minutes, the snapshot is read
-  again every 30 seconds. Only one read runs at a time.
-- Refresh reads a new snapshot and waits for it.
+  again when it is 5 minutes old. Only one read runs at a time.
+- Refresh reads a new snapshot and waits for it. A Refresh while a read runs
+  waits for that read; it does not start a second one.
 - The thread panel gets its scope and its board in one call. A Commander's
   inferred project is cached for 5 minutes; a pick clears it.
 

@@ -135,5 +135,7 @@ describe.skipIf(!LIVE)("live board", () => {
       call("board", { project: "all", force: true }),
     );
     await fake.harness.dispose();
-  }, 300_000);
+    // Two full SITREP runs (the first call and the forced one) of up to five
+    // minutes each, plus the thread reads.
+  }, 900_000);
 });
