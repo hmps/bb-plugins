@@ -44,3 +44,28 @@ b9039ca568955f0d19e8dec27a8531faa09ab578fe17628ed91caac12912b789  subprocess-mal
 7a0d4396b8300b9ba99791202cc83766df21cd39834717c865d9e75097c139e6  unsupported-contract-version.json
 94059670e56aa69adf1c7388325eda4488738628148b27d7a4cfc047c06d519f  unsupported-schema-version.json
 ```
+
+## full-rows (provisional)
+
+`full-rows/*.json` hold one whole SITREP run each: `exit_code`, `stdout` (the
+row array), `stderr`, and the `command` the core ran. They are not committed
+in the core yet. They are copies of the uncommitted working files on top of
+core commit `78d68f2cbb4d0dd733558f9dc6ccd761ec978dd3`, and must be copied
+again from the stable committed core head before the final review.
+
+- Copied: 2026-10-20T08:05:10Z.
+- Working `docs/mission-state-v1.md`, sha256
+  `9f8f44f5fde29d11c1067b13f76305774113bae74c4a88c08871525c01147363`.
+- Working `scripts/sitrep.sh`, sha256
+  `b4c85df7347d82869cfea5236eae0213fca5d3df8d020022057df0ae118e6323`.
+
+```
+04d788285c3ff6004710ebd657899bbd13d7545551469f32a88f4345fa665375  active.json
+34894531fb73d2ec0c77dac5ea5fd7b54ecd856e1a732bee281c925e6ef657b0  new-blocker.json
+1c8838f231d3c31243a2a06421ac201cc048a8373fbe5471c4493e880b65ac5a  partial-source-failure.json
+11710a8aea1adf5947802920e2553c8e63ea54bc9532b5d9c6b504388699a267  quiet-complete.json
+b4653104cb9fc5eb2fbdb2988106e00aca1a63d4b4d940a6037b163c5d02e5a8  ready-for-deploy.json
+140ed2318dba6fd7aabb2ad50c1099fc6a577ea6be340d5fa561eda2f9817a6d  recent-closed.json
+bdd770165b7ccc35739f6a2dcd38922f1807cdeb2b17dcc4fc829cd1b2c9b945  stale-conflict.json
+b9ac1fc904bcbccc3829e25fed32898818f0f981e54c733bd97d7bd84ed9bc5d  survey-decision.json
+```
