@@ -1,0 +1,75 @@
+{
+  "synthetic": true,
+  "project": "example",
+  "issue": {
+    "id": "fixture-abc",
+    "notes": "thread=thr_crew env=env_fixture mode=direct merge=governor deploy=governor\nKeep this note.\nmission-audit=r1 op=adopt id=7c0d604ea3c4cdfcb0230f17",
+    "metadata": "{\"starbase_mission\":{\"attention\":[{\"evidence\":[],\"fingerprint\":\"4dba6863b61ab5cbbde1c2b1852c3ed7a81bde43eff721a4116d66f80efccb91\",\"id\":\"d5ead93f8671645367df1271\",\"kind\":\"decision\",\"receipt\":null,\"revision\":1,\"source\":\"lifecycle:decision\",\"summary\":\"Check acceptance\"}],\"cancellation\":null,\"disposition\":null,\"evidence\":[],\"guard\":\"8aa262ffd85ffdd5f463a64fe4158b5c6dc36d5817f9f92818fede6e7c512918\",\"history\":[],\"lifecycle\":\"awaiting-decision\",\"linkage\":{\"commander\":\"thr_root\",\"env\":\"env_fixture\",\"mission_type\":\"survey\",\"project\":\"example\",\"project_id\":\"proj_example\",\"thread\":\"thr_crew\"},\"next_action\":\"Check acceptance\",\"owner\":{\"role\":\"commander\",\"thread\":\"thr_root\"},\"report\":null,\"revision\":1,\"schema_version\":1,\"targets\":[]},\"unrelated\":{\"nested\":[\"keep\",2]}}",
+    "status": "open",
+    "closed_at": null,
+    "close_reason": "",
+    "updated_at": "2026-10-20T12:00:00Z",
+    "labels": [
+      "mission:survey",
+      "project:example"
+    ]
+  },
+  "observation": {
+    "worktree": "clean",
+    "pr": "merged",
+    "owner_status": "idle",
+    "failures": [],
+    "target_checks": [
+      {
+        "name": "base-main",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "file",
+        "ref": "/synthetic/accepted-target",
+        "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "available": true
+      }
+    ]
+  },
+  "bundles": {},
+  "expected": {
+    "integrity": "valid",
+    "problems": [],
+    "revision": 1,
+    "lifecycle": "awaiting-decision",
+    "owner": {
+      "role": "commander",
+      "thread": "thr_root"
+    },
+    "owner_active": false,
+    "next_action": "Check acceptance",
+    "evidence": [],
+    "targets": [],
+    "disposition": null,
+    "attention": [
+      {
+        "evidence": [],
+        "fingerprint": "4dba6863b61ab5cbbde1c2b1852c3ed7a81bde43eff721a4116d66f80efccb91",
+        "id": "d5ead93f8671645367df1271",
+        "kind": "decision",
+        "receipt": null,
+        "revision": 1,
+        "source": "lifecycle:decision",
+        "summary": "Check acceptance"
+      }
+    ],
+    "pending_attention": [
+      {
+        "evidence": [],
+        "fingerprint": "4dba6863b61ab5cbbde1c2b1852c3ed7a81bde43eff721a4116d66f80efccb91",
+        "id": "d5ead93f8671645367df1271",
+        "kind": "decision",
+        "receipt": null,
+        "revision": 1,
+        "source": "lifecycle:decision",
+        "summary": "Check acceptance"
+      }
+    ],
+    "report": null,
+    "archive_allowed": false
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "synthetic": true,
+  "project": "example",
+  "issue": {
+    "id": "fixture-abc",
+    "notes": "thread=thr_crew env=env_fixture mode=direct merge=governor deploy=governor\nKeep this note.\nmission-audit=r1 op=adopt id=7c0d604ea3c4cdfcb0230f17",
+    "metadata": "{\"starbase_mission\":{\"attention\":[],\"cancellation\":null,\"disposition\":null,\"evidence\":[],\"guard\":\"5a0e9780bb7df3ca04022653454d3323b3a532056eee37fcbbadee888b78881f\",\"history\":[],\"lifecycle\":\"ready-for-deploy\",\"linkage\":{\"commander\":\"thr_root\",\"env\":\"env_fixture\",\"mission_type\":\"build\",\"project\":\"example\",\"project_id\":\"proj_example\",\"thread\":\"thr_crew\"},\"next_action\":\"Check acceptance\",\"owner\":{\"role\":\"crew\",\"thread\":\"thr_crew\"},\"report\":null,\"revision\":1,\"schema_version\":1,\"targets\":[{\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence\":[{\"checked_at\":\"2026-10-20T12:00:00Z\",\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"digest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"kind\":\"file\",\"ref\":\"/synthetic/accepted-target\",\"target\":\"base-main\"}],\"name\":\"base-main\",\"status\":\"verified\"},{\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence\":[],\"name\":\"second-install\",\"status\":\"pending\"}]},\"unrelated\":{\"nested\":[\"keep\",2]}}",
+    "status": "open",
+    "closed_at": null,
+    "close_reason": "",
+    "updated_at": "2026-10-20T12:00:00Z",
+    "labels": [
+      "mission:build",
+      "project:example"
+    ]
+  },
+  "observation": {
+    "worktree": "clean",
+    "pr": "merged",
+    "owner_status": "idle",
+    "failures": [],
+    "target_checks": [
+      {
+        "name": "base-main",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "file",
+        "ref": "/synthetic/accepted-target",
+        "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "available": true
+      }
+    ]
+  },
+  "bundles": {},
+  "expected": {
+    "integrity": "valid",
+    "problems": [],
+    "revision": 1,
+    "lifecycle": "ready-for-deploy",
+    "owner": {
+      "role": "crew",
+      "thread": "thr_crew"
+    },
+    "owner_active": false,
+    "next_action": "Check acceptance",
+    "evidence": [],
+    "targets": [
+      {
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence": [
+          {
+            "checked_at": "2026-10-20T12:00:00Z",
+            "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "kind": "file",
+            "ref": "/synthetic/accepted-target",
+            "target": "base-main"
+          }
+        ],
+        "name": "base-main",
+        "status": "verified"
+      },
+      {
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence": [],
+        "name": "second-install",
+        "status": "pending"
+      }
+    ],
+    "disposition": null,
+    "attention": [],
+    "pending_attention": [],
+    "report": null,
+    "archive_allowed": false
+  }
+}

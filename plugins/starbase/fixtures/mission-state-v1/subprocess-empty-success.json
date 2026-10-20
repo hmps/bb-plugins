@@ -1,0 +1,17 @@
+{
+  "synthetic": true,
+  "exit_code": 0,
+  "stdout": "[]",
+  "stderr": "",
+  "prior": [
+    {
+      "bead": "prior"
+    }
+  ],
+  "expected": {
+    "rows": [],
+    "incomplete": false,
+    "stale": false,
+    "error": null
+  }
+}

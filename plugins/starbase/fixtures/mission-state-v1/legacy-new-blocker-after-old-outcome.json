@@ -1,0 +1,75 @@
+{
+  "synthetic": true,
+  "project": "example",
+  "issue": {
+    "id": "fixture-abc",
+    "notes": "thread=thr_crew env=env_fixture mode=direct merge=governor deploy=governor\nKeep this note.\noutcome=old report complete",
+    "metadata": "{\"unrelated\": {\"nested\": [\"keep\", 2]}}",
+    "status": "open",
+    "closed_at": null,
+    "close_reason": "",
+    "updated_at": "2026-10-20T12:00:00Z",
+    "labels": [
+      "mission:build",
+      "project:example"
+    ]
+  },
+  "observation": {
+    "worktree": "clean",
+    "pr": "merged",
+    "owner_status": "idle",
+    "failures": [],
+    "target_checks": [
+      {
+        "name": "base-main",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "file",
+        "ref": "/synthetic/accepted-target",
+        "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "available": true
+      }
+    ],
+    "report_output": "new\nMISSION fixture-abc BLOCKED"
+  },
+  "bundles": {},
+  "expected": {
+    "integrity": "legacy",
+    "problems": [
+      "legacy mission requires explicit adoption"
+    ],
+    "revision": null,
+    "lifecycle": "unverified",
+    "owner": null,
+    "owner_active": false,
+    "next_action": null,
+    "evidence": [],
+    "targets": [],
+    "disposition": null,
+    "attention": [
+      {
+        "kind": "blocker",
+        "source": "report",
+        "fingerprint": "f54a30fbbcb81b40388e90ee8ed20b284e63547b7bf8922485f1db3cfb3ea46a",
+        "summary": "Current report requires checked reconciliation",
+        "evidence": [],
+        "id": "18f7607731fc5f596a840c18",
+        "revision": 1,
+        "receipt": null
+      }
+    ],
+    "pending_attention": [
+      {
+        "kind": "blocker",
+        "source": "report",
+        "fingerprint": "f54a30fbbcb81b40388e90ee8ed20b284e63547b7bf8922485f1db3cfb3ea46a",
+        "summary": "Current report requires checked reconciliation",
+        "evidence": [],
+        "id": "18f7607731fc5f596a840c18",
+        "revision": 1,
+        "receipt": null
+      }
+    ],
+    "report": null,
+    "archive_allowed": false
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "id": "fixture-abc",
+  "notes": "thread=thr_crew env=env_fixture mode=direct merge=governor deploy=governor\nKeep this note.",
+  "metadata": "{\"unrelated\": {\"nested\": [\"keep\", 2]}}",
+  "status": "open",
+  "closed_at": null,
+  "close_reason": "",
+  "updated_at": "2026-10-20T12:00:00Z",
+  "labels": [
+    "mission:build",
+    "project:example"
+  ]
+}
