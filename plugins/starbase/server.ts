@@ -68,8 +68,6 @@ interface Snapshot {
   read: SitrepRead;
   /** The rows as cards, in SITREP order; null while the source is unavailable. */
   cards: BoardCard[] | null;
-  /** Every thread a row names, so a thread event can mark the snapshot old. */
-  threadIds: Set<string>;
   postures: Posture[];
 }
 
@@ -131,31 +129,26 @@ function sitrepArgs(commander: string): string[] {
     "--json",
   ];
 }
-const SITREP_TIMEOUT_MS = 60_000;
+/** A full SITREP of a large Base takes minutes; a longer run fails. */
+const SITREP_TIMEOUT_MS = 5 * 60_000;
 const SITREP_MAX_BUFFER = 50 * 1024 * 1024;
 /** How much of the SITREP's stderr rides along in an error message. */
 const STDERR_LIMIT = 2 * 1024;
 
 /**
- * The board answers from a warm snapshot of the last SITREP run. A snapshot
- * older than this is served at once and read again behind it.
+ * The board answers from a warm snapshot of the last SITREP run. No automatic
+ * read starts until the last run finished this long ago, also when it failed:
+ * one run can take minutes, and back-to-back runs would keep the Base busy.
+ * A snapshot this old is served at once and read again behind it. Refresh
+ * still reads at once.
  */
-const SNAPSHOT_MAX_AGE_MS = 30_000;
-/** How often the snapshot is read again while somebody uses the board. */
+const SNAPSHOT_MAX_AGE_MS = 5 * 60_000;
+/** How often the timer checks the snapshot's age while somebody uses the board. */
 const SNAPSHOT_REFRESH_MS = 30_000;
 /** With no board call for this long, the background reads stop. */
 const SNAPSHOT_IDLE_MS = 10 * 60_000;
 /** How long a Commander's project, inferred from its Crew, stays known. */
 const COMMANDER_PROJECT_CACHE_MS = 5 * 60_000;
-/** Thread events that make the snapshot old before its age does. */
-const THREAD_EVENTS = [
-  "thread.active",
-  "thread.idle",
-  "thread.failed",
-  "thread.archived",
-  "thread.deleted",
-  "interaction.pending",
-] as const;
 
 /** A project slug as a posture directory names it. Nothing else reaches a path. */
 const PROJECT_SLUG_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -1403,16 +1396,14 @@ export default function plugin(
   }
 
   // The snapshot: the last SITREP run and the postures. A board call answers
-  // from it at once and, when it is old or a thread event made it old, runs
-  // the SITREP again behind the answer. Only one run happens at a time; every
+  // from it at once and, when it is old, runs the SITREP again behind the
+  // answer. Only one run happens at a time; every
   // caller in the meantime shares it. Only the first call after load, and a
   // forced one, wait for a run. A failed run never throws: its rows, or the
   // older rows marked stale, or no rows at all, are the snapshot.
 
   let snapshot: Snapshot | null = null;
   let inFlight: Promise<Snapshot> | null = null;
-  /** A thread in the snapshot changed since the running read began. */
-  let stale = false;
   let lastUsedAt = 0;
   /** Bumped when the settings change, so a read of the old Base is dropped. */
   let generation = 0;
@@ -1447,18 +1438,12 @@ export default function plugin(
       rowsAt: fresh ? now : (prior?.rowsAt ?? null),
       read,
       cards,
-      threadIds: new Set(
-        (cards ?? [])
-          .map((card) => card.threadId)
-          .filter((id): id is string => id !== null),
-      ),
       postures: await postures,
     };
   }
 
   function refresh(): Promise<Snapshot> {
     if (inFlight !== null) return inFlight;
-    stale = false;
     const started = generation;
     const read = readSitrep(snapshot).then((next) => {
       // Cleared before any caller sees the answer, so it is not
@@ -1473,27 +1458,27 @@ export default function plugin(
     return read;
   }
 
+  /** Whether an automatic read may start: the last run finished long enough ago. */
+  function due(): boolean {
+    return (
+      snapshot !== null &&
+      Date.now() - snapshot.fetchedAt >= SNAPSHOT_MAX_AGE_MS
+    );
+  }
+
   /** The snapshot to answer from now. Waits only when there is none, or on force. */
   async function currentSnapshot(force: boolean): Promise<Snapshot> {
     lastUsedAt = Date.now();
     if (force || snapshot === null) return refresh();
-    if (stale || Date.now() - snapshot.fetchedAt >= SNAPSHOT_MAX_AGE_MS) {
-      void refresh();
-    }
+    if (due()) void refresh();
     return snapshot;
   }
 
   const refreshTimer = setInterval(() => {
-    if (Date.now() - lastUsedAt < SNAPSHOT_IDLE_MS) void refresh();
+    if (Date.now() - lastUsedAt < SNAPSHOT_IDLE_MS && due()) void refresh();
   }, SNAPSHOT_REFRESH_MS);
   refreshTimer.unref?.();
   bb.onDispose(() => clearInterval(refreshTimer));
-
-  for (const event of THREAD_EVENTS) {
-    bb.events.on(event, ({ thread }) => {
-      if (snapshot?.threadIds.has(thread.id)) stale = true;
-    });
-  }
 
   /** The picker's choices: every posture slug and every slug a mission carries. */
   function projectSlugs(snap: Snapshot): string[] {

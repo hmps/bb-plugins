@@ -10,6 +10,7 @@ import {
   readdirSync,
   writeFileSync,
 } from "node:fs";
+import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +19,13 @@ import {
   makeThreadResponse,
 } from "@get-bb/plugin-sdk/testing";
 import plugin, { redact, type SitrepResult, type SitrepRunner } from "./server";
+
+// The real execFile, behind a spy: a test can read the options the default
+// runner passes, or answer one call as a run that timed out.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, execFile: vi.fn(actual.execFile) };
+});
 
 const COMMANDER_PROJECT = "proj_commander";
 const COMMANDER = "thr_commander";
@@ -238,6 +246,23 @@ function crewEvent(threadId: string) {
 afterEach(() => {
   vi.useRealTimers();
 });
+
+/** The automatic-read floor: five minutes after the last run finished. */
+const FLOOR_MS = 5 * 60_000;
+
+/** Board calls every 30 seconds from `startMs` to `untilMs`, the last at `untilMs`. */
+async function useBoardUntil(
+  fake: ReturnType<typeof loadPlugin>["fake"],
+  startMs: number,
+  untilMs: number,
+) {
+  for (let at = startMs; at < untilMs; ) {
+    const step = Math.min(30_000, untilMs - at);
+    await vi.advanceTimersByTimeAsync(step);
+    at += step;
+    await fake.harness.callRpc("board", { project: "all" });
+  }
+}
 
 describe("board rpc", () => {
   it("runs the read-only SITREP in the Base and places every row", async () => {
@@ -564,6 +589,44 @@ describe("default SITREP runner", () => {
       integrity: "Pre-v1 row",
     });
   });
+
+  it("gives the SITREP five minutes, and says so when a run times out", async () => {
+    const run = vi.mocked(execFile);
+    run.mockClear();
+    run.mockImplementationOnce(((...args: unknown[]) => {
+      const callback = args.at(-1) as (
+        error: Error,
+        stdout: string,
+        stderr: string,
+      ) => void;
+      // What execFile reports when it kills a run at its timeout.
+      callback(
+        Object.assign(new Error("Command failed"), {
+          killed: true,
+          signal: "SIGTERM",
+        }),
+        "",
+        "",
+      );
+      return {};
+    }) as never);
+    const fake = createFakePluginHost({
+      pluginId: "starbase",
+      settings: { commanderProjectIds: COMMANDER_PROJECT, baseRoot: baseRoot() },
+      sdk: { threads: { get: threadsGet, list: threadsList } },
+    });
+    plugin(fake.bb);
+    const board = (await fake.harness.callRpc("board", {
+      project: "all",
+    })) as Board;
+    const sitrepCall = run.mock.calls.find((call) => call[0] === "bash");
+    expect(sitrepCall?.[1]).toEqual(SITREP_ARGS);
+    expect(sitrepCall?.[2]).toMatchObject({ timeout: 300_000 });
+    expect(board).toMatchObject({
+      source: "unavailable",
+      error: "The SITREP did not finish in 300s.",
+    });
+  });
 });
 
 describe("board snapshot", () => {
@@ -585,27 +648,31 @@ describe("board snapshot", () => {
     expect(sitrep.calls).toHaveLength(1);
   });
 
-  it("answers at once from a stale snapshot while one read runs behind it", async () => {
+  it("reads again behind a call once the last run is five minutes old", async () => {
+    vi.useFakeTimers();
     const { fake, sitrep } = loadPlugin();
+    // The first run finishes 10 seconds in, off the timer's 30-second beat.
+    await vi.advanceTimersByTimeAsync(10_000);
     await fake.harness.callRpc("board", { project: "all" });
+    await vi.advanceTimersByTimeAsync(FLOOR_MS - 1_000);
+    await fake.harness.callRpc("board", { project: "all" });
+    expect(sitrep.calls).toHaveLength(1);
 
-    // A Crew thread on the board changes: the snapshot is stale.
+    // At the floor, a call answers from the old snapshot and reads behind it.
     sitrep.hold = true;
-    await fake.harness.emitThreadEvent(
-      "thread.active",
-      crewEvent("thr_crew_1"),
-    );
-    const stale = (await fake.harness.callRpc("board", {
+    await vi.advanceTimersByTimeAsync(1_000);
+    const old = (await fake.harness.callRpc("board", {
       project: "all",
     })) as Board;
-    expect(stale.refreshing).toBe(true);
+    expect(old.refreshing).toBe(true);
+    expect(old.source).toBe("current");
     expect(sitrep.calls).toHaveLength(2);
 
-    // A third call joins the running read; it does not start another.
-    const third = (await fake.harness.callRpc("board", {
-      project: "all",
-    })) as Board;
-    expect(third.refreshing).toBe(true);
+    // A call in the meantime joins the running read; it does not start another.
+    const joined = (await fake.harness.callRpc("panel", {
+      threadId: COMMANDER,
+    })) as Panel;
+    expect(joined.board?.refreshing).toBe(true);
     expect(sitrep.calls).toHaveLength(2);
 
     sitrep.hold = false;
@@ -619,12 +686,77 @@ describe("board snapshot", () => {
     expect(sitrep.calls).toHaveLength(2);
   });
 
-  it("ignores an event for a thread that is not on the board", async () => {
+  it("reads again on the timer only once the last run is five minutes old", async () => {
+    vi.useFakeTimers();
+    const { fake, sitrep } = loadPlugin();
+    // No read before the first call.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(sitrep.calls).toHaveLength(0);
+    await fake.harness.callRpc("board", { project: "all" });
+    // The ticks at 30 seconds ... 300 seconds find the run too recent.
+    await vi.advanceTimersByTimeAsync(300_000 - 10_000);
+    expect(sitrep.calls).toHaveLength(1);
+    // The tick at 330 seconds finds it 320 seconds old.
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(sitrep.calls).toHaveLength(2);
+    await fake.harness.dispose();
+    await vi.advanceTimersByTimeAsync(2 * FLOOR_MS);
+    expect(sitrep.calls).toHaveLength(2);
+  });
+
+  it("counts the five minutes from when a slow run finished", async () => {
+    vi.useFakeTimers();
+    const { fake, sitrep } = loadPlugin();
+    // A first run of 152 seconds, as a full SITREP of a large Base takes.
+    sitrep.hold = true;
+    const first = fake.harness.callRpc("board", { project: "all" });
+    await vi.advanceTimersByTimeAsync(152_000);
+    sitrep.hold = false;
+    sitrep.release();
+    await first;
+    await useBoardUntil(fake, 152_000, 152_000 + FLOOR_MS - 1_000);
+    expect(sitrep.calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await fake.harness.callRpc("board", { project: "all" });
+    expect(sitrep.calls).toHaveLength(2);
+  });
+
+  it("starts no read on thread changes before the five minutes pass", async () => {
+    vi.useFakeTimers();
     const { fake, sitrep } = loadPlugin();
     await fake.harness.callRpc("board", { project: "all" });
-    await fake.harness.emitThreadEvent("thread.active", crewEvent("thr_other"));
+    for (const event of ["thread.active", "thread.archived"] as const) {
+      await fake.harness.emitThreadEvent(event, crewEvent("thr_crew_1"));
+    }
+    await vi.advanceTimersByTimeAsync(60_000);
     await fake.harness.callRpc("board", { project: "all" });
+    await fake.harness.callRpc("panel", { threadId: "thr_crew_1" });
     expect(sitrep.calls).toHaveLength(1);
+  });
+
+  it("waits five minutes after a failed run too, and keeps its error", async () => {
+    vi.useFakeTimers();
+    const { fake, sitrep } = loadPlugin();
+    const good = (await fake.harness.callRpc("board", {
+      project: "all",
+    })) as Board;
+    await vi.advanceTimersByTimeAsync(10_000);
+    sitrep.result = () => ({ exitCode: 1, stdout: "", stderr: "bd failed" });
+    await fake.harness.callRpc("board", { project: "all", force: true });
+    expect(sitrep.calls).toHaveLength(2);
+
+    // Until the floor, every call shows the old rows as stale, with the error.
+    await useBoardUntil(fake, 10_000, 10_000 + FLOOR_MS - 1_000);
+    const stale = (await fake.harness.callRpc("board", {
+      project: "all",
+    })) as Board;
+    expect(stale).toMatchObject({ source: "stale", error: "bd failed" });
+    expect(stale.generatedAt).toBe(good.generatedAt);
+    expect(sitrep.calls).toHaveLength(2);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await fake.harness.callRpc("board", { project: "all" });
+    expect(sitrep.calls).toHaveLength(3);
   });
 
   it("waits for a new read on force", async () => {
@@ -636,17 +768,28 @@ describe("board snapshot", () => {
     expect(sitrep.calls).toHaveLength(3);
   });
 
-  it("reads again in the background while used, and stops on unload", async () => {
-    vi.useFakeTimers();
+  it("joins a running read on force, and starts no second one", async () => {
     const { fake, sitrep } = loadPlugin();
-    // No read before the first call.
-    await vi.advanceTimersByTimeAsync(31_000);
-    expect(sitrep.calls).toHaveLength(0);
     await fake.harness.callRpc("board", { project: "all" });
-    await vi.advanceTimersByTimeAsync(31_000);
-    expect(sitrep.calls).toHaveLength(2);
-    await fake.harness.dispose();
-    await vi.advanceTimersByTimeAsync(120_000);
+    sitrep.hold = true;
+    const forced = fake.harness.callRpc("board", { project: "all", force: true });
+    const again = fake.harness.callRpc("panel", {
+      threadId: COMMANDER,
+      force: true,
+    });
+    const plain = (await fake.harness.callRpc("board", {
+      project: "all",
+    })) as Board;
+    expect(plain.refreshing).toBe(true);
+    await vi.waitFor(() => expect(sitrep.calls).toHaveLength(2));
+    sitrep.hold = false;
+    sitrep.release();
+    const [first, second] = (await Promise.all([forced, again])) as [
+      Board,
+      Panel,
+    ];
+    expect(first.refreshing).toBe(false);
+    expect(second.board?.refreshing).toBe(false);
     expect(sitrep.calls).toHaveLength(2);
   });
 });
