@@ -35,7 +35,8 @@
   "expected": {
     "integrity": "valid",
     "problems": [
-      "current report fingerprint is not recorded"
+      "current report fingerprint is not recorded",
+      "idle mission requires checked continuation"
     ],
     "revision": 2,
     "lifecycle": "active",
@@ -60,7 +61,7 @@
         "kind": "blocker",
         "source": "report",
         "fingerprint": "f54a30fbbcb81b40388e90ee8ed20b284e63547b7bf8922485f1db3cfb3ea46a",
-        "summary": "Current report requires checked reconciliation",
+        "summary": "Current Crew report is blocked",
         "evidence": [],
         "id": "18f7607731fc5f596a840c18",
         "revision": 2,
@@ -72,7 +73,7 @@
         "kind": "blocker",
         "source": "report",
         "fingerprint": "f54a30fbbcb81b40388e90ee8ed20b284e63547b7bf8922485f1db3cfb3ea46a",
-        "summary": "Current report requires checked reconciliation",
+        "summary": "Current Crew report is blocked",
         "evidence": [],
         "id": "18f7607731fc5f596a840c18",
         "revision": 2,

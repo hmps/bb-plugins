@@ -75,7 +75,9 @@
   },
   "expected": {
     "integrity": "valid",
-    "problems": [],
+    "problems": [
+      "idle mission requires checked continuation"
+    ],
     "revision": 3,
     "lifecycle": "active",
     "owner": {

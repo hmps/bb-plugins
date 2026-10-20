@@ -34,7 +34,8 @@
   "expected": {
     "integrity": "conflict",
     "problems": [
-      "protected record changed outside checked update"
+      "protected record changed outside checked update",
+      "idle mission requires checked continuation"
     ],
     "revision": 1,
     "lifecycle": "active",

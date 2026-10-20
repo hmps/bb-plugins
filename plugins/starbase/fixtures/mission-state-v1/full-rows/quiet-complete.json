@@ -38,11 +38,11 @@
             "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "evidence": [
               {
-                "checked_at": "2026-10-20T08:04:53Z",
+                "checked_at": "2026-10-20T08:10:19Z",
                 "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "digest": "02df6de594d3f4294eaf1083f922896bb0dd8d936272413bd0a7100ade57936b",
                 "kind": "file",
-                "ref": "/tmp/mission-lifecycle-wbt8ffrm/accepted-target.txt",
+                "ref": "/tmp/mission-lifecycle-ug3hsumw/accepted-target.txt",
                 "target": "base-main"
               }
             ],
