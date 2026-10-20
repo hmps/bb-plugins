@@ -72,15 +72,13 @@ const NARROW_ORDER: Record<ColumnId, string> = {
   progress: "order-3",
   review: "order-4",
   deploy: "order-5",
-  queued: "order-6",
-  done: "order-7",
+  done: "order-6",
 };
 
 /** Columns that start collapsed in the narrow layout. */
-const COLLAPSED_WHEN_NARROW = new Set<ColumnId>(["queued", "done"]);
+const COLLAPSED_WHEN_NARROW = new Set<ColumnId>(["done"]);
 
 const COLUMN_DOTS: Record<ColumnId, string> = {
-  queued: "bg-muted-foreground/40",
   progress: "bg-primary",
   waiting: "bg-amber-500",
   blocked: "bg-destructive",

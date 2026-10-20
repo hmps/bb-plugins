@@ -252,7 +252,6 @@ describe("board rpc", () => {
       error: null,
     });
     expect(board.columns.map((entry) => entry.id)).toEqual([
-      "queued",
       "progress",
       "waiting",
       "blocked",
@@ -267,7 +266,6 @@ describe("board rpc", () => {
       ]),
     );
     expect(placed).toEqual({
-      queued: [],
       progress: ["sb-1"],
       waiting: ["sb-2"],
       blocked: [],

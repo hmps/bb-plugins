@@ -32,7 +32,6 @@ const NEXT_ACTION_MAX_CHARS = 2000;
 
 /** The wide-layout order, left to right. */
 export const COLUMN_IDS = [
-  "queued",
   "progress",
   "waiting",
   "blocked",
@@ -43,7 +42,6 @@ export const COLUMN_IDS = [
 export type ColumnId = (typeof COLUMN_IDS)[number];
 
 export const COLUMN_TITLES: Record<ColumnId, string> = {
-  queued: "Queued",
   progress: "In progress",
   waiting: "Waiting on you",
   blocked: "Blocked",

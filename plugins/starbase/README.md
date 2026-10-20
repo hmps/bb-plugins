@@ -245,13 +245,12 @@ you. A legacy mission that no checked update adopted is `unverified`, so it
 stays in Commander review with a "Legacy record" badge. A direct root
 discussion has the Commander as its owner and shows under it.
 
-No v1 lifecycle means "queued", so the Queued column is always empty. It
-stays to keep the layout.
+The board has no Queued column, because no v1 lifecycle means "queued".
 
-The wide board shows the columns from Queued to Done. A narrow panel stacks
-them: Waiting on you, Blocked, In progress, Commander review, Awaiting deploy,
-Queued, Done.
-Queued and Done start collapsed there; click the header to open them.
+The wide board shows the columns from In progress to Done. A narrow panel
+stacks them: Waiting on you, Blocked, In progress, Commander review, Awaiting
+deploy, Done.
+Done starts collapsed there; click the header to open it.
 
 A card shows:
 

@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
 import plugin from "./server";
+import { COLUMN_IDS } from "./board";
 
 const LIVE = process.env.STARBASE_LIVE === "1";
 const BASE = process.env.STARBASE_LIVE_BASE ?? "";
@@ -117,7 +118,7 @@ describe.skipIf(!LIVE)("live board", () => {
       )) as Board;
       say(`${project}: ${board.source} ${counts(board)}`);
       expect(board.source).toMatch(/^(current|partial)$/);
-      expect(board.columns).toHaveLength(7);
+      expect(board.columns).toHaveLength(COLUMN_IDS.length);
       const preV1 = board.columns
         .flatMap((column) => column.cards)
         .filter((card) => card.integrity === "Pre-v1 row");

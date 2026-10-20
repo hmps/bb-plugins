@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  COLUMN_IDS,
   buildBoard,
   credentialPassword,
   inferProject,
@@ -189,10 +188,16 @@ describe("buildBoard", () => {
     fullRow("quiet-complete", { bead: "sb-4" }),
   ]);
 
-  it("returns every column in the wide order, Queued empty under v1", () => {
+  it("returns every column in the wide order, with no Queued column", () => {
     const board = buildBoard(cards, "all");
-    expect(board.map((column) => column.id)).toEqual([...COLUMN_IDS]);
-    expect(board[0]).toMatchObject({ id: "queued", total: 0, cards: [] });
+    expect(board.map((column) => column.id)).toEqual([
+      "progress",
+      "waiting",
+      "blocked",
+      "review",
+      "deploy",
+      "done",
+    ]);
   });
 
   it("filters by project and keeps the SITREP order", () => {
