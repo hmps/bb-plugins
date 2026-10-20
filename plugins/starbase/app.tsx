@@ -376,7 +376,12 @@ function CardView(props: { card: BoardCard; showProject: boolean }) {
           <span className="break-words">{card.stage}</span>
         </div>
         {card.nextAction === null ? null : (
-          <div className="line-clamp-2 break-words text-xs text-foreground">
+          <div
+            className={cn(
+              "break-words text-xs text-foreground",
+              !open && "line-clamp-2",
+            )}
+          >
             <span className="text-muted-foreground">Next: </span>
             {card.nextAction}
           </div>
