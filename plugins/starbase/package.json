@@ -1,7 +1,7 @@
 {
   "name": "bb-plugin-starbase",
-  "version": "0.1.0",
-  "description": "The Starbase Sentinel: relays Crew failures and pending interactions to the Commander thread, reports a SITREP, and settles finished Crew.",
+  "version": "0.3.0",
+  "description": "The Starbase Sentinel and Mission Queue board: relays Crew failures and pending interactions to the Commander, reports a SITREP, settles finished Crew, and shows the Mission Queue as a read-only Kanban board.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -10,11 +10,12 @@
   },
   "bb": {
     "name": "Starbase",
-    "description": "Sentinel for the Starbase orchestration model. Relays Crew failures and pending interactions to the Commander, and adds `bb starbase sitrep` and `bb starbase settle`.",
+    "description": "Sentinel and Mission Queue board for the Starbase orchestration model. Relays Crew failures and pending interactions to the Commander, adds `bb starbase sitrep` and `bb starbase settle`, and shows a read-only Kanban board of the Mission Queue.",
     "branding": {
       "icon": "Satellite"
     },
-    "server": "./server.ts"
+    "server": "./server.ts",
+    "app": "./app.tsx"
   },
   "keywords": [
     "bb-plugin"
@@ -24,16 +25,25 @@
     "test": "vitest run --config vitest.config.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
+  "dependencies": {
+    "@radix-ui/react-slot": "^1.3.0",
+    "zod": "^4.3.6"
+  },
   "devDependencies": {
-    "@get-bb/plugin-sdk": "0.4.47",
+    "@get-bb/plugin-sdk": "0.6.37",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
     "better-sqlite3": "^12.11.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
     "cron-parser": "^5.10.0",
     "hono": "^4.13.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwind-merge": "^3.4.0",
     "typescript": "^5.7.0",
-    "vitest": "^4.1.11",
-    "zod": "^4.3.6"
+    "vitest": "^4.1.11"
   }
 }

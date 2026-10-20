@@ -1,0 +1,118 @@
+{
+  "synthetic": true,
+  "command": "bash scripts/sitrep.sh --project all --commander thr_root --recent-closed 50 --json",
+  "exit_code": 1,
+  "stdout": [
+    {
+      "bead": "fixture-abc",
+      "bead_status": "open",
+      "contract_version": 1,
+      "env": "env_fixture",
+      "flags": [
+        "source-error"
+      ],
+      "mission": "build",
+      "mission_state": {
+        "archive_allowed": false,
+        "attention": [
+          {
+            "evidence": [
+              {
+                "checked_at": "2026-10-20T08:45:33Z",
+                "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "digest": "02df6de594d3f4294eaf1083f922896bb0dd8d936272413bd0a7100ade57936b",
+                "kind": "file",
+                "ref": "/tmp/mission-lifecycle-ovsi8g_0/accepted-target.txt",
+                "target": "base-main"
+              }
+            ],
+            "fingerprint": "1f2c28197abda2f885c4a55c9a8083049cd873b8aadb221ddbef5f661ba9bfac",
+            "id": "bf3f36ab6fb8e59ba8dfa8b9",
+            "kind": "verification-failed",
+            "receipt": null,
+            "revision": 1,
+            "source": "target:base-main",
+            "summary": "current target evidence unavailable: base-main"
+          }
+        ],
+        "disposition": null,
+        "evidence": [],
+        "integrity": "valid",
+        "lifecycle": "complete",
+        "next_action": null,
+        "owner": {
+          "role": "crew",
+          "thread": "thr_crew"
+        },
+        "owner_active": false,
+        "pending_attention": [
+          {
+            "evidence": [
+              {
+                "checked_at": "2026-10-20T08:45:33Z",
+                "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "digest": "02df6de594d3f4294eaf1083f922896bb0dd8d936272413bd0a7100ade57936b",
+                "kind": "file",
+                "ref": "/tmp/mission-lifecycle-ovsi8g_0/accepted-target.txt",
+                "target": "base-main"
+              }
+            ],
+            "fingerprint": "1f2c28197abda2f885c4a55c9a8083049cd873b8aadb221ddbef5f661ba9bfac",
+            "id": "bf3f36ab6fb8e59ba8dfa8b9",
+            "kind": "verification-failed",
+            "receipt": null,
+            "revision": 1,
+            "source": "target:base-main",
+            "summary": "current target evidence unavailable: base-main"
+          }
+        ],
+        "problems": [
+          "current target evidence unavailable: base-main"
+        ],
+        "report": {
+          "fingerprint": "d42e7570324eee4b418cf6d1f55cbf61a8cfefb50c510294b9bf28060a332a60",
+          "reference": "synthetic-current-output",
+          "verdict": "complete"
+        },
+        "revision": 1,
+        "targets": [
+          {
+            "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence": [
+              {
+                "checked_at": "2026-10-20T08:45:33Z",
+                "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "digest": "02df6de594d3f4294eaf1083f922896bb0dd8d936272413bd0a7100ade57936b",
+                "kind": "file",
+                "ref": "/tmp/mission-lifecycle-ovsi8g_0/accepted-target.txt",
+                "target": "base-main"
+              }
+            ],
+            "name": "base-main",
+            "status": "verified"
+          }
+        ]
+      },
+      "pr": "none",
+      "progress": {
+        "decision": "unknown",
+        "note": "Keep this note.",
+        "outcome": "unknown",
+        "report": "unknown",
+        "verdict": "unknown"
+      },
+      "project": "example",
+      "source": {
+        "canonical": "failed",
+        "env": "ok",
+        "output": "ok",
+        "thread": "ok"
+      },
+      "status": "idle",
+      "thread": "thr_crew",
+      "title": "Fixture mission",
+      "worktree": "clean"
+    }
+  ],
+  "stderr": ""
+}

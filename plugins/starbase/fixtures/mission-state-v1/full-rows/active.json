@@ -1,0 +1,67 @@
+{
+  "synthetic": true,
+  "command": "bash scripts/sitrep.sh --project all --commander thr_root --recent-closed 50 --json",
+  "exit_code": 0,
+  "stdout": [
+    {
+      "bead": "fixture-abc",
+      "bead_status": "open",
+      "contract_version": 1,
+      "env": "env_fixture",
+      "flags": [
+        "ok"
+      ],
+      "mission": "build",
+      "mission_state": {
+        "archive_allowed": false,
+        "attention": [],
+        "disposition": null,
+        "evidence": [],
+        "integrity": "valid",
+        "lifecycle": "active",
+        "next_action": "Check acceptance",
+        "owner": {
+          "role": "crew",
+          "thread": "thr_crew"
+        },
+        "owner_active": true,
+        "pending_attention": [],
+        "problems": [],
+        "report": {
+          "fingerprint": "110df99a8319c02230cf5e9adffd28d31f690b6dc3ad80510a3ad984ab5a66da",
+          "reference": "synthetic-current-output",
+          "verdict": "progress"
+        },
+        "revision": 1,
+        "targets": [
+          {
+            "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "evidence": [],
+            "name": "base-main",
+            "status": "pending"
+          }
+        ]
+      },
+      "pr": "none",
+      "progress": {
+        "decision": "unknown",
+        "note": "Keep this note.",
+        "outcome": "unknown",
+        "report": "unknown",
+        "verdict": "unknown"
+      },
+      "project": "example",
+      "source": {
+        "canonical": "ok",
+        "env": "ok",
+        "output": "ok",
+        "thread": "ok"
+      },
+      "status": "active",
+      "thread": "thr_crew",
+      "title": "Fixture mission",
+      "worktree": "clean"
+    }
+  ],
+  "stderr": ""
+}

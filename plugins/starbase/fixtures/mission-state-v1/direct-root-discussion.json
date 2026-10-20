@@ -1,0 +1,75 @@
+{
+  "synthetic": true,
+  "project": "example",
+  "issue": {
+    "id": "fixture-abc",
+    "notes": "thread=thr_root env=env_fixture mode=direct merge=governor deploy=governor\nKeep this note.\nmission-audit=r1 op=adopt id=7c0d604ea3c4cdfcb0230f17",
+    "metadata": "{\"starbase_mission\":{\"attention\":[{\"evidence\":[],\"fingerprint\":\"cdf8a00081ab81be0b57fd75439c441770fae439502b3ded003ebdaec53b3caf\",\"id\":\"d5ead93f8671645367df1271\",\"kind\":\"decision\",\"receipt\":null,\"revision\":1,\"source\":\"lifecycle:decision\",\"summary\":\"Record Governor choice\"}],\"cancellation\":null,\"disposition\":null,\"evidence\":[],\"guard\":\"cff132acfce957069eca1a436e7d76f67f3dc4955f980332874118009e4fafa8\",\"history\":[],\"lifecycle\":\"awaiting-decision\",\"linkage\":{\"commander\":\"thr_root\",\"env\":\"env_fixture\",\"mission_type\":\"survey\",\"project\":\"example\",\"project_id\":\"proj_example\",\"thread\":\"thr_root\"},\"next_action\":\"Record Governor choice\",\"owner\":{\"role\":\"commander\",\"thread\":\"thr_root\"},\"report\":null,\"revision\":1,\"schema_version\":1,\"targets\":[]},\"unrelated\":{\"nested\":[\"keep\",2]}}",
+    "status": "open",
+    "closed_at": null,
+    "close_reason": "",
+    "updated_at": "2026-10-20T12:00:00Z",
+    "labels": [
+      "mission:survey",
+      "project:example"
+    ]
+  },
+  "observation": {
+    "worktree": "clean",
+    "pr": "merged",
+    "owner_status": "idle",
+    "failures": [],
+    "target_checks": [
+      {
+        "name": "base-main",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "file",
+        "ref": "/synthetic/accepted-target",
+        "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "available": true
+      }
+    ]
+  },
+  "bundles": {},
+  "expected": {
+    "integrity": "valid",
+    "problems": [],
+    "revision": 1,
+    "lifecycle": "awaiting-decision",
+    "owner": {
+      "role": "commander",
+      "thread": "thr_root"
+    },
+    "owner_active": false,
+    "next_action": "Record Governor choice",
+    "evidence": [],
+    "targets": [],
+    "disposition": null,
+    "attention": [
+      {
+        "evidence": [],
+        "fingerprint": "cdf8a00081ab81be0b57fd75439c441770fae439502b3ded003ebdaec53b3caf",
+        "id": "d5ead93f8671645367df1271",
+        "kind": "decision",
+        "receipt": null,
+        "revision": 1,
+        "source": "lifecycle:decision",
+        "summary": "Record Governor choice"
+      }
+    ],
+    "pending_attention": [
+      {
+        "evidence": [],
+        "fingerprint": "cdf8a00081ab81be0b57fd75439c441770fae439502b3ded003ebdaec53b3caf",
+        "id": "d5ead93f8671645367df1271",
+        "kind": "decision",
+        "receipt": null,
+        "revision": 1,
+        "source": "lifecycle:decision",
+        "summary": "Record Governor choice"
+      }
+    ],
+    "report": null,
+    "archive_allowed": false
+  }
+}

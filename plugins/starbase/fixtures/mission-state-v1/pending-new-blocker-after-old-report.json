@@ -1,0 +1,110 @@
+{
+  "synthetic": true,
+  "project": "example",
+  "issue": {
+    "id": "fixture-abc",
+    "notes": "thread=thr_crew env=env_fixture mode=direct merge=governor deploy=governor\nKeep this note.\nmission-audit=r1 op=adopt id=7c0d604ea3c4cdfcb0230f17\noutcome=old complete report\nmission-audit=r2 op=observe id=7c0d604ea3c4cdfcb0230f17",
+    "metadata": "{\"starbase_mission\":{\"attention\":[{\"evidence\":[],\"fingerprint\":\"d6d13014ef18d45030eec6ac0a66eab592e7f07e1feda93538935b3b434a8de8\",\"id\":\"18f7607731fc5f596a840c18\",\"kind\":\"blocker\",\"receipt\":null,\"revision\":1,\"source\":\"report\",\"summary\":\"old\"}],\"cancellation\":null,\"disposition\":null,\"evidence\":[],\"guard\":\"c24406e52ad3c6ea26640f38c93417a2394363f7ffae6badb48dede60237fc53\",\"history\":[{\"digest\":\"23570bcefd8a1eb5f4b34499bc02c0e0eb573ca8e05b8781db16599e51055cbb\",\"op\":\"observe\",\"report\":null,\"revision\":1}],\"lifecycle\":\"active\",\"linkage\":{\"commander\":\"thr_root\",\"env\":\"env_fixture\",\"mission_type\":\"build\",\"project\":\"example\",\"project_id\":\"proj_example\",\"thread\":\"thr_crew\"},\"next_action\":\"Check acceptance\",\"owner\":{\"role\":\"crew\",\"thread\":\"thr_crew\"},\"report\":{\"fingerprint\":\"33523c5137dc7f5de301e60bc75b1f1edafd4e7a1b63c33c5549e492dddd65ac\",\"reference\":\"old-report\",\"verdict\":\"complete\"},\"revision\":2,\"schema_version\":1,\"targets\":[{\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence\":[],\"name\":\"base-main\",\"status\":\"pending\"}]},\"unrelated\":{\"nested\":[\"keep\",2]}}",
+    "status": "open",
+    "closed_at": null,
+    "close_reason": "",
+    "updated_at": "2026-10-20T12:00:00Z",
+    "labels": [
+      "mission:build",
+      "project:example"
+    ]
+  },
+  "observation": {
+    "worktree": "clean",
+    "pr": "merged",
+    "owner_status": "idle",
+    "failures": [],
+    "target_checks": [
+      {
+        "name": "base-main",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "file",
+        "ref": "/synthetic/accepted-target",
+        "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "available": true
+      }
+    ],
+    "report_output": "new\nMISSION fixture-abc BLOCKED"
+  },
+  "bundles": {},
+  "expected": {
+    "integrity": "valid",
+    "problems": [
+      "current report fingerprint is not recorded",
+      "idle mission requires checked continuation"
+    ],
+    "revision": 2,
+    "lifecycle": "active",
+    "owner": {
+      "role": "crew",
+      "thread": "thr_crew"
+    },
+    "owner_active": false,
+    "next_action": "Check acceptance",
+    "evidence": [],
+    "targets": [
+      {
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence": [],
+        "name": "base-main",
+        "status": "pending"
+      }
+    ],
+    "disposition": null,
+    "attention": [
+      {
+        "evidence": [],
+        "fingerprint": "d6d13014ef18d45030eec6ac0a66eab592e7f07e1feda93538935b3b434a8de8",
+        "id": "18f7607731fc5f596a840c18",
+        "kind": "blocker",
+        "receipt": null,
+        "revision": 1,
+        "source": "report",
+        "summary": "old"
+      },
+      {
+        "kind": "blocker",
+        "source": "lifecycle:blocker",
+        "fingerprint": "76f2748c75b2d5e26b17766f76e8906e836eae77286fa4c991d5540c84051546",
+        "summary": "Current Crew report is blocked",
+        "evidence": [],
+        "id": "0a3e71fe16b96271e920e7bc",
+        "revision": 1,
+        "receipt": null
+      }
+    ],
+    "pending_attention": [
+      {
+        "evidence": [],
+        "fingerprint": "d6d13014ef18d45030eec6ac0a66eab592e7f07e1feda93538935b3b434a8de8",
+        "id": "18f7607731fc5f596a840c18",
+        "kind": "blocker",
+        "receipt": null,
+        "revision": 1,
+        "source": "report",
+        "summary": "old"
+      },
+      {
+        "kind": "blocker",
+        "source": "lifecycle:blocker",
+        "fingerprint": "76f2748c75b2d5e26b17766f76e8906e836eae77286fa4c991d5540c84051546",
+        "summary": "Current Crew report is blocked",
+        "evidence": [],
+        "id": "0a3e71fe16b96271e920e7bc",
+        "revision": 1,
+        "receipt": null
+      }
+    ],
+    "report": {
+      "fingerprint": "33523c5137dc7f5de301e60bc75b1f1edafd4e7a1b63c33c5549e492dddd65ac",
+      "reference": "old-report",
+      "verdict": "complete"
+    },
+    "archive_allowed": false
+  }
+}

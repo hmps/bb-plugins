@@ -1,0 +1,126 @@
+{
+  "synthetic": true,
+  "project": "example",
+  "issue": {
+    "id": "fixture-abc",
+    "notes": "thread=thr_crew env=env_fixture mode=direct merge=governor deploy=governor\nKeep this note.\nmission-audit=r1 op=adopt id=7c0d604ea3c4cdfcb0230f17\nmission-audit=r2 op=observe id=7c0d604ea3c4cdfcb0230f17\nmission-audit=r3 op=receipt id=7c0d604ea3c4cdfcb0230f17",
+    "metadata": "{\"starbase_mission\":{\"attention\":[{\"evidence\":[],\"fingerprint\":\"b7d114d68102e2ead91152d228dd1a45980efb28f5b014e93995ddded79272ae\",\"id\":\"18f7607731fc5f596a840c18\",\"kind\":\"blocker\",\"receipt\":{\"event_fingerprint\":\"b7d114d68102e2ead91152d228dd1a45980efb28f5b014e93995ddded79272ae\",\"event_id\":\"18f7607731fc5f596a840c18\",\"event_revision\":2,\"message_digest\":\"ac4434bda1be78b581e212ee970af7839da97475061698a317804db6c40b1019\",\"message_ref\":\"@thread:thr_root#msg=30\",\"turn_id\":\"turn-final\",\"verified_at\":\"2026-10-20T07:40:51Z\"},\"revision\":2,\"source\":\"report\",\"summary\":\"first unpersisted\"}],\"cancellation\":null,\"disposition\":null,\"evidence\":[],\"guard\":\"a654ae06c4d8dd01e02866d3f3baef4171d5c494f9fe8c2222eb2b4274232e0e\",\"history\":[{\"digest\":\"23570bcefd8a1eb5f4b34499bc02c0e0eb573ca8e05b8781db16599e51055cbb\",\"op\":\"observe\",\"report\":null,\"revision\":1},{\"digest\":\"ea55ed14ca3bcab9f7f102227efabc40ccf12847f67031f78b73457da1892d07\",\"op\":\"receipt\",\"report\":null,\"revision\":2}],\"lifecycle\":\"active\",\"linkage\":{\"commander\":\"thr_root\",\"env\":\"env_fixture\",\"mission_type\":\"build\",\"project\":\"example\",\"project_id\":\"proj_example\",\"thread\":\"thr_crew\"},\"next_action\":\"Check acceptance\",\"owner\":{\"role\":\"crew\",\"thread\":\"thr_crew\"},\"report\":null,\"revision\":3,\"schema_version\":1,\"targets\":[{\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence\":[],\"name\":\"base-main\",\"status\":\"pending\"}]},\"unrelated\":{\"nested\":[\"keep\",2]}}",
+    "status": "open",
+    "closed_at": null,
+    "close_reason": "",
+    "updated_at": "2026-10-20T12:00:00Z",
+    "labels": [
+      "mission:build",
+      "project:example"
+    ]
+  },
+  "observation": {
+    "worktree": "clean",
+    "pr": "merged",
+    "owner_status": "idle",
+    "failures": [],
+    "target_checks": [
+      {
+        "name": "base-main",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "file",
+        "ref": "/synthetic/accepted-target",
+        "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "available": true
+      }
+    ],
+    "events": [
+      {
+        "kind": "blocker",
+        "source": "report",
+        "fingerprint": "16c17017d4b47c5e36b29bfa7992dbf98089134092961b3da82a4a101fe70e7a",
+        "summary": "different unpersisted",
+        "evidence": []
+      }
+    ]
+  },
+  "bundles": {
+    "@thread:thr_root#msg=30": {
+      "thread": {
+        "id": "thr_root",
+        "projectId": "proj_example",
+        "parentThreadId": null,
+        "visibility": "visible",
+        "deletedAt": null,
+        "archivedAt": null
+      },
+      "message": {
+        "threadId": "thr_root",
+        "turnId": "turn-final",
+        "kind": "conversation",
+        "role": "assistant",
+        "messageSeq": 30,
+        "text": "attention:18f7607731fc5f596a840c18@2#b7d114d68102e2ead91152d228dd1a45980efb28f5b014e93995ddded79272ae",
+        "turnRequest": null
+      },
+      "events_complete": true,
+      "events": [
+        {
+          "seq": 32,
+          "type": "turn/completed",
+          "scope": {
+            "turnId": "turn-final"
+          },
+          "data": {
+            "status": "completed"
+          }
+        }
+      ]
+    }
+  },
+  "expected": {
+    "integrity": "valid",
+    "problems": [
+      "idle mission requires checked continuation"
+    ],
+    "revision": 3,
+    "lifecycle": "active",
+    "owner": {
+      "role": "crew",
+      "thread": "thr_crew"
+    },
+    "owner_active": false,
+    "next_action": "Check acceptance",
+    "evidence": [],
+    "targets": [
+      {
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence": [],
+        "name": "base-main",
+        "status": "pending"
+      }
+    ],
+    "disposition": null,
+    "attention": [
+      {
+        "kind": "blocker",
+        "source": "report",
+        "fingerprint": "16c17017d4b47c5e36b29bfa7992dbf98089134092961b3da82a4a101fe70e7a",
+        "summary": "different unpersisted",
+        "evidence": [],
+        "id": "18f7607731fc5f596a840c18",
+        "revision": 3,
+        "receipt": null
+      }
+    ],
+    "pending_attention": [
+      {
+        "kind": "blocker",
+        "source": "report",
+        "fingerprint": "16c17017d4b47c5e36b29bfa7992dbf98089134092961b3da82a4a101fe70e7a",
+        "summary": "different unpersisted",
+        "evidence": [],
+        "id": "18f7607731fc5f596a840c18",
+        "revision": 3,
+        "receipt": null
+      }
+    ],
+    "report": null,
+    "archive_allowed": false
+  }
+}

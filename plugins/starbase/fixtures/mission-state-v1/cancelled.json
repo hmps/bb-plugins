@@ -1,0 +1,125 @@
+{
+  "synthetic": true,
+  "project": "example",
+  "issue": {
+    "id": "fixture-abc",
+    "notes": "thread=thr_crew env=env_fixture mode=direct merge=governor deploy=governor\nKeep this note.\nmission-audit=r1 op=adopt id=7c0d604ea3c4cdfcb0230f17",
+    "metadata": "{\"starbase_mission\":{\"attention\":[],\"cancellation\":{\"action\":\"cancel\",\"answer_ref\":\"@thread:thr_root#msg=20\",\"attested_by\":\"thr_root\",\"authorship\":\"context-only-not-human-proof\",\"go_mapping\":true,\"implementation_mission\":null,\"message_digest\":\"b6f740c66379877455f4242f8f681413ce7b05d91c047b2807cfa310ab876ee7\",\"message_ref\":\"@thread:thr_root#msg=20\",\"no_intervening_question\":true,\"question_digest\":\"2594dacc6372c855682b313bd0a876782fbf04c832debe4dfee0d72b7a58f4d3\",\"question_marker\":\"attention:aaaaaaaaaaaaaaaaaaaaaaaa@1#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"question_ref\":\"@thread:thr_root#msg=10\",\"question_turn_id\":\"turn-final\",\"quoted_decision\":\"go\",\"recommendation\":\"Defer this survey?\",\"scope\":\"Survey fixture-abc only\",\"turn_id\":\"turn-final\",\"verification\":\"commander-attested\"},\"disposition\":null,\"evidence\":[],\"guard\":\"f61c102479ad963f565eaa98e7b865fcac0b1dc6b490da3012566c06abe29e37\",\"history\":[],\"lifecycle\":\"cancelled\",\"linkage\":{\"commander\":\"thr_root\",\"env\":\"env_fixture\",\"mission_type\":\"build\",\"project\":\"example\",\"project_id\":\"proj_example\",\"thread\":\"thr_crew\"},\"next_action\":null,\"owner\":{\"role\":\"crew\",\"thread\":\"thr_crew\"},\"report\":null,\"revision\":1,\"schema_version\":1,\"targets\":[{\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"evidence\":[],\"name\":\"base-main\",\"status\":\"pending\"}]},\"unrelated\":{\"nested\":[\"keep\",2]}}",
+    "status": "open",
+    "closed_at": null,
+    "close_reason": "",
+    "updated_at": "2026-10-20T12:00:00Z",
+    "labels": [
+      "mission:build",
+      "project:example"
+    ]
+  },
+  "observation": {
+    "worktree": "clean",
+    "pr": "merged",
+    "owner_status": "idle",
+    "failures": [],
+    "target_checks": [
+      {
+        "name": "base-main",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "file",
+        "ref": "/synthetic/accepted-target",
+        "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "available": true
+      }
+    ]
+  },
+  "bundles": {
+    "@thread:thr_root#msg=10": {
+      "thread": {
+        "id": "thr_root",
+        "projectId": "proj_example",
+        "parentThreadId": null,
+        "visibility": "visible",
+        "deletedAt": null,
+        "archivedAt": null
+      },
+      "message": {
+        "threadId": "thr_root",
+        "turnId": "turn-final",
+        "kind": "conversation",
+        "role": "assistant",
+        "messageSeq": 10,
+        "text": "attention:aaaaaaaaaaaaaaaaaaaaaaaa@1#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb Defer this survey?",
+        "turnRequest": null
+      },
+      "events_complete": true,
+      "events": [
+        {
+          "seq": 12,
+          "type": "turn/completed",
+          "scope": {
+            "turnId": "turn-final"
+          },
+          "data": {
+            "status": "completed"
+          }
+        }
+      ]
+    },
+    "@thread:thr_root#msg=20": {
+      "thread": {
+        "id": "thr_root",
+        "projectId": "proj_example",
+        "parentThreadId": null,
+        "visibility": "visible",
+        "deletedAt": null,
+        "archivedAt": null
+      },
+      "message": {
+        "threadId": "thr_root",
+        "turnId": "turn-final",
+        "kind": "conversation",
+        "role": "user",
+        "messageSeq": 20,
+        "text": "go",
+        "turnRequest": null
+      },
+      "events_complete": true,
+      "events": [
+        {
+          "seq": 22,
+          "type": "turn/completed",
+          "scope": {
+            "turnId": "turn-final"
+          },
+          "data": {
+            "status": "completed"
+          }
+        }
+      ]
+    }
+  },
+  "expected": {
+    "integrity": "valid",
+    "problems": [],
+    "revision": 1,
+    "lifecycle": "cancelled",
+    "owner": {
+      "role": "crew",
+      "thread": "thr_crew"
+    },
+    "owner_active": false,
+    "next_action": null,
+    "evidence": [],
+    "targets": [
+      {
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence": [],
+        "name": "base-main",
+        "status": "pending"
+      }
+    ],
+    "disposition": null,
+    "attention": [],
+    "pending_attention": [],
+    "report": null,
+    "archive_allowed": true
+  }
+}

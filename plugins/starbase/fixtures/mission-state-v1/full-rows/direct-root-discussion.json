@@ -1,0 +1,82 @@
+{
+  "synthetic": true,
+  "command": "bash scripts/sitrep.sh --project all --commander thr_root --recent-closed 50 --json",
+  "exit_code": 0,
+  "stdout": [
+    {
+      "bead": "fixture-abc",
+      "bead_status": "open",
+      "contract_version": 1,
+      "env": "env_fixture",
+      "flags": [
+        "ok"
+      ],
+      "mission": "survey",
+      "mission_state": {
+        "archive_allowed": false,
+        "attention": [
+          {
+            "evidence": [],
+            "fingerprint": "a9b2c2751204184ac1f1b01f0cb6dc6cc43926b7532aa49fce2866d114ff3e62",
+            "id": "d5ead93f8671645367df1271",
+            "kind": "decision",
+            "receipt": null,
+            "revision": 1,
+            "source": "lifecycle:decision",
+            "summary": "Record the scoped Governor choice"
+          }
+        ],
+        "disposition": null,
+        "evidence": [],
+        "integrity": "valid",
+        "lifecycle": "awaiting-decision",
+        "next_action": "Record the scoped Governor choice",
+        "owner": {
+          "role": "commander",
+          "thread": "thr_root"
+        },
+        "owner_active": false,
+        "pending_attention": [
+          {
+            "evidence": [],
+            "fingerprint": "a9b2c2751204184ac1f1b01f0cb6dc6cc43926b7532aa49fce2866d114ff3e62",
+            "id": "d5ead93f8671645367df1271",
+            "kind": "decision",
+            "receipt": null,
+            "revision": 1,
+            "source": "lifecycle:decision",
+            "summary": "Record the scoped Governor choice"
+          }
+        ],
+        "problems": [],
+        "report": {
+          "fingerprint": "d42e7570324eee4b418cf6d1f55cbf61a8cfefb50c510294b9bf28060a332a60",
+          "reference": "synthetic-current-output",
+          "verdict": "complete"
+        },
+        "revision": 1,
+        "targets": []
+      },
+      "pr": "none",
+      "progress": {
+        "decision": "unknown",
+        "note": "Keep this note.",
+        "outcome": "unknown",
+        "report": "unknown",
+        "verdict": "unknown"
+      },
+      "project": "example",
+      "source": {
+        "canonical": "ok",
+        "env": "ok",
+        "output": "ok",
+        "thread": "ok"
+      },
+      "status": "idle",
+      "thread": "thr_root",
+      "title": "Fixture mission",
+      "worktree": "clean"
+    }
+  ],
+  "stderr": ""
+}

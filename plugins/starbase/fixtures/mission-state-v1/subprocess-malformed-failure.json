@@ -1,0 +1,21 @@
+{
+  "synthetic": true,
+  "exit_code": 0,
+  "stdout": "{broken",
+  "stderr": "",
+  "prior": [
+    {
+      "bead": "prior"
+    }
+  ],
+  "expected": {
+    "rows": [
+      {
+        "bead": "prior"
+      }
+    ],
+    "incomplete": true,
+    "stale": true,
+    "error": "source unavailable"
+  }
+}

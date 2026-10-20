@@ -1,0 +1,5 @@
+{
+  "synthetic": true,
+  "contract_version": 2,
+  "expected": "reject unsupported contract version"
+}

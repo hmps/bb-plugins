@@ -1,0 +1,52 @@
+{
+  "synthetic": true,
+  "project": "example",
+  "issue": {
+    "id": "fixture-abc",
+    "notes": "thread=thr_crew env=env_fixture mode=direct merge=governor deploy=governor\nKeep this note.",
+    "metadata": "not JSON",
+    "status": "open",
+    "closed_at": null,
+    "close_reason": "",
+    "updated_at": "2026-10-20T12:00:00Z",
+    "labels": [
+      "mission:build",
+      "project:example"
+    ]
+  },
+  "observation": {
+    "worktree": "clean",
+    "pr": "merged",
+    "owner_status": "idle",
+    "failures": [],
+    "target_checks": [
+      {
+        "name": "base-main",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "file",
+        "ref": "/synthetic/accepted-target",
+        "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "available": true
+      }
+    ]
+  },
+  "bundles": {},
+  "expected": {
+    "integrity": "invalid",
+    "problems": [
+      "malformed metadata JSON"
+    ],
+    "revision": null,
+    "lifecycle": "unverified",
+    "owner": null,
+    "owner_active": false,
+    "next_action": null,
+    "evidence": [],
+    "targets": [],
+    "disposition": null,
+    "attention": [],
+    "pending_attention": [],
+    "report": null,
+    "archive_allowed": false
+  }
+}

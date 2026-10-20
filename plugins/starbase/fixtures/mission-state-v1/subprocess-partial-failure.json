@@ -1,0 +1,22 @@
+{
+  "synthetic": true,
+  "exit_code": 1,
+  "stdout": "[{\"bead\":\"fixture-abc\",\"flags\":\"bb-error\"}]",
+  "stderr": "synthetic source failed",
+  "prior": [
+    {
+      "bead": "prior"
+    }
+  ],
+  "expected": {
+    "rows": [
+      {
+        "bead": "fixture-abc",
+        "flags": "bb-error"
+      }
+    ],
+    "incomplete": true,
+    "stale": false,
+    "error": "synthetic source failed"
+  }
+}

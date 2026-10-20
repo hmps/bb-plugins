@@ -14,11 +14,34 @@
 // Every relay is written to the plugin's own SQLite database first. The insert
 // carries a unique dedupe key, so a replay of the same event is ignored; a
 // failed send releases the key so the next identical event tries again.
+//
+// The plugin also serves the Mission Queue board, read-only. It keeps a warm
+// snapshot of one Starbase SITREP run in the Base: every mission row with
+// the `mission_state` the core projects (contract v1, mission.ts). The pure
+// rules in board.ts and mission.ts turn the rows into columns. The SITREP
+// only reads; the board never writes a bead, a receipt, or any state.
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import type {
-  BbPluginApi,
-  PluginThreadEventPayloads,
+import { existsSync } from "node:fs";
+import { readFile, readdir } from "node:fs/promises";
+import { homedir } from "node:os";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
+import {
+  defineRpcContract,
+  type BbPluginApi,
+  type PluginThreadEventPayloads,
 } from "@get-bb/plugin-sdk";
+import { z } from "zod";
+import {
+  COLUMN_IDS,
+  buildBoard,
+  credentialPassword,
+  inferProject,
+  postureValue,
+  toCards,
+  type BoardCard,
+} from "./board.js";
+import { consumeSitrep, type SitrepRead } from "./mission.js";
 
 /**
  * The SDK does not export the pending-interaction DTO by name, so the event
@@ -26,6 +49,29 @@ import type {
  */
 type PendingInteraction =
   PluginThreadEventPayloads["interaction.pending"]["interaction"];
+
+/** One thread as `bb.sdk.threads.get` returns it. */
+type ThreadRow = Awaited<ReturnType<BbPluginApi["sdk"]["threads"]["get"]>>;
+
+/** A project directory in the Base, and the bb project its posture names. */
+interface Posture {
+  slug: string;
+  projectId: string | null;
+}
+
+/** What the board answers from: the latest SITREP read, and the postures. */
+interface Snapshot {
+  /** When the SITREP last ran, whatever it gave. Drives the refresh. */
+  fetchedAt: number;
+  /** When the rows shown were read. Older than fetchedAt while stale. */
+  rowsAt: number | null;
+  read: SitrepRead;
+  /** The rows as cards, in SITREP order; null while the source is unavailable. */
+  cards: BoardCard[] | null;
+  /** Every thread a row names, so a thread event can mark the snapshot old. */
+  threadIds: Set<string>;
+  postures: Posture[];
+}
 
 /** One row of `bb.sdk.threads.list`, which is not the same DTO as a thread. */
 type ThreadListRow = Awaited<
@@ -54,6 +100,205 @@ const LIST_MAX_PAGES = 50;
 
 /** The refusal when the descendant set could not be shown to be complete. */
 const ENUMERATION_FAILED = "settle: could not enumerate all descendants";
+
+/** The Base checkout: the SITREP runs here, and `projects/` holds the postures. */
+export const DEFAULT_BASE_ROOT = "/Users/hmps/dev/starbase";
+
+/**
+ * Where the Mission Queue's Dolt password lives. The board reads it on every
+ * SITREP run and passes it in the child's environment only; it is never
+ * stored, logged, or returned.
+ */
+const DOLT_CREDENTIALS_FILE = "~/.config/beads/credentials";
+const DOLT_CREDENTIALS_SECTION = "100.85.132.50:3307";
+
+/** The Commander whose Crew the SITREP reads, when the setting is not changed. */
+const DEFAULT_SITREP_COMMANDER = "thr_9mhukyfy2t";
+/** A thread id as bb writes it. Nothing else reaches the SITREP arguments. */
+const THREAD_ID_PATTERN = /^thr_[A-Za-z0-9]+$/;
+/** How many closed missions the SITREP adds after the open ones. */
+const SITREP_RECENT_CLOSED = "50";
+/** The SITREP, from the Base root. It reads only: no reconcile, no receipt. */
+function sitrepArgs(commander: string): string[] {
+  return [
+    "scripts/sitrep.sh",
+    "--project",
+    "all",
+    "--commander",
+    commander,
+    "--recent-closed",
+    SITREP_RECENT_CLOSED,
+    "--json",
+  ];
+}
+const SITREP_TIMEOUT_MS = 60_000;
+const SITREP_MAX_BUFFER = 50 * 1024 * 1024;
+/** How much of the SITREP's stderr rides along in an error message. */
+const STDERR_LIMIT = 2 * 1024;
+
+/**
+ * The board answers from a warm snapshot of the last SITREP run. A snapshot
+ * older than this is served at once and read again behind it.
+ */
+const SNAPSHOT_MAX_AGE_MS = 30_000;
+/** How often the snapshot is read again while somebody uses the board. */
+const SNAPSHOT_REFRESH_MS = 30_000;
+/** With no board call for this long, the background reads stop. */
+const SNAPSHOT_IDLE_MS = 10 * 60_000;
+/** How long a Commander's project, inferred from its Crew, stays known. */
+const COMMANDER_PROJECT_CACHE_MS = 5 * 60_000;
+/** Thread events that make the snapshot old before its age does. */
+const THREAD_EVENTS = [
+  "thread.active",
+  "thread.idle",
+  "thread.failed",
+  "thread.archived",
+  "thread.deleted",
+  "interaction.pending",
+] as const;
+
+/** A project slug as a posture directory names it. Nothing else reaches a path. */
+const PROJECT_SLUG_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+const projectScopeSchema = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(PROJECT_SLUG_PATTERN);
+
+const boardCardSchema = z
+  .object({
+    id: z.string(),
+    bead: z.string().nullable(),
+    title: z.string(),
+    mission: z.string().nullable(),
+    project: z.string(),
+    threadId: z.string().nullable(),
+    threadStatus: z.string().nullable(),
+    pr: z.object({ url: z.string(), state: z.string() }).strict().nullable(),
+    flags: z.array(z.string()),
+    column: z.enum(COLUMN_IDS),
+    stage: z.string(),
+    tone: z.enum(["alert", "warn", "working", "waiting", "quiet"]),
+    nextAction: z.string().nullable(),
+    owner: z.string().nullable(),
+    ownerIdle: z.boolean(),
+    attention: z.array(
+      z
+        .object({ kind: z.string(), summary: z.string(), surfaced: z.boolean() })
+        .strict(),
+    ),
+    integrity: z.string().nullable(),
+    problems: z.array(z.string()),
+    outcome: z.string().nullable(),
+    note: z.string().nullable(),
+  })
+  .strict();
+
+const boardSchema = z
+  .object({
+    project: z.string(),
+    /**
+     * When the rows on this board were read. While `source` is `stale` this
+     * is the last good read, not the failed one; with no rows, the last try.
+     */
+    generatedAt: z.number(),
+    /** True while a newer snapshot is being read; ask again shortly. */
+    refreshing: z.boolean(),
+    /**
+     * How far to trust the rows. `current`: the last SITREP run succeeded.
+     * `partial`: it ran, but a source failed, so some rows are incomplete.
+     * `stale`: it failed, and these are the rows of an older run.
+     * `unavailable`: no run gave rows yet; the columns are empty, not clear.
+     */
+    source: z.enum(["current", "partial", "stale", "unavailable"]),
+    /** What the last SITREP run reported on failure; null when it succeeded. */
+    error: z.string().nullable(),
+    projects: z.array(z.string()),
+    columns: z.array(
+      z
+        .object({
+          id: z.enum(COLUMN_IDS),
+          title: z.string(),
+          total: z.number().int(),
+          cards: z.array(boardCardSchema),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+const scopeSchema = z
+  .object({
+    /** The thread's Command project, or null when nothing decides it. */
+    scope: projectScopeSchema.nullable(),
+    source: z.enum(["commander", "saved", "posture", "unresolved"]),
+    commanderId: z.string().nullable(),
+    /** True only on a Commander: a pick there is saved for it. */
+    canSave: z.boolean(),
+    projects: z.array(z.string()),
+  })
+  .strict();
+
+export const starbaseRpcContract = defineRpcContract({
+  /**
+   * The thread panel in one round trip: the thread's board scope, and the
+   * board for `project` when given, else for that scope. The board is null
+   * when no scope is decided and no project is given.
+   */
+  panel: {
+    input: z
+      .object({
+        threadId: z.string().min(1).max(200),
+        project: projectScopeSchema.optional(),
+        /** Read a new snapshot and wait for it. */
+        force: z.boolean().optional(),
+      })
+      .strict(),
+    output: z
+      .object({ scope: scopeSchema, board: boardSchema.nullable() })
+      .strict(),
+  },
+  /** Remember a Commander's pick; it wins over the Crew majority. */
+  saveScope: {
+    input: z
+      .object({
+        threadId: z.string().min(1).max(200),
+        project: projectScopeSchema,
+      })
+      .strict(),
+    output: z.object({ saved: z.boolean() }).strict(),
+  },
+  /** The board for one project slug, or `"all"`. */
+  board: {
+    input: z
+      .object({
+        project: projectScopeSchema,
+        /** Read a new snapshot and wait for it. */
+        force: z.boolean().optional(),
+      })
+      .strict(),
+    output: boardSchema,
+  },
+});
+
+/** One finished SITREP run. A run that could not start has no exit code. */
+export interface SitrepResult {
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+/** How the plugin runs the SITREP. Injected in tests, execFile in production. */
+export type SitrepRunner = (
+  args: string[],
+  options: { cwd: string },
+) => Promise<SitrepResult>;
+
+export interface StarbasePluginOptions {
+  /** Overrides the execFile runner; tests pass a synthetic SITREP. */
+  runSitrep?: SitrepRunner;
+}
 
 /**
  * How bb reports "you asked to start a turn on a thread that is already
@@ -96,6 +341,11 @@ const migrations = [
    )`,
   `CREATE INDEX IF NOT EXISTS mission_event_thread
      ON mission_event (thread_id, created_at)`,
+  `CREATE TABLE IF NOT EXISTS board_scope (
+     commander_id TEXT PRIMARY KEY,
+     project      TEXT NOT NULL,
+     updated_at   INTEGER NOT NULL
+   )`,
 ];
 
 /** A mission event as the CLI reports it. */
@@ -246,7 +496,129 @@ export function formatSitrepRow(row: SitrepRow): string {
   ].join(" · ");
 }
 
-export default function plugin(bb: BbPluginApi) {
+/** `~/dev/x` becomes `/Users/me/dev/x`. Anything else is returned unchanged. */
+export function expandHome(value: string, home: string = homedir()): string {
+  const trimmed = value.trim();
+  if (trimmed === "~") return home;
+  if (trimmed.startsWith("~/")) return `${home}/${trimmed.slice(2)}`;
+  return trimmed;
+}
+
+/**
+ * Where `bd` usually lives when the bb server's PATH does not carry it. The
+ * server is a launchd/daemon process, so mise shims and user bin dirs are
+ * often missing from its PATH even though the shell finds them.
+ */
+export function bdCandidates(home: string = homedir()): string[] {
+  return [
+    join(home, ".local/share/mise/shims/bd"),
+    join(home, ".local/bin/bd"),
+    join(home, "go/bin/bd"),
+    "/opt/homebrew/bin/bd",
+    "/usr/local/bin/bd",
+  ];
+}
+
+/**
+ * The executable to run. A configured value with a slash is used as is. A bare
+ * name is looked up on PATH, then in the usual install locations; when nothing
+ * matches, the bare name is returned so execFile reports ENOENT with a clear
+ * message.
+ */
+export function resolveBdPath(
+  configured: string,
+  options: {
+    path?: string;
+    home?: string;
+    exists?: (file: string) => boolean;
+  } = {},
+): string {
+  const name = expandHome(configured, options.home) || "bd";
+  if (name.includes("/")) return name;
+  const exists = options.exists ?? existsSync;
+  const pathValue = options.path ?? process.env.PATH ?? "";
+  for (const dir of pathValue.split(delimiter)) {
+    if (dir !== "" && exists(join(dir, name))) return join(dir, name);
+  }
+  if (name === "bd") {
+    const found = bdCandidates(options.home).find((file) => exists(file));
+    if (found !== undefined) return found;
+  }
+  return name;
+}
+
+/** Replace every copy of a secret in text that may reach a log or a client. */
+export function redact(value: string, secret: string | null): string {
+  return secret === null || secret === ""
+    ? value
+    : value.split(secret).join("***");
+}
+
+/**
+ * The Mission Queue's Dolt password, read fresh from the credentials file.
+ * Null when the file or the entry is absent; bd then reports its own error.
+ */
+async function readDoltPassword(): Promise<string | null> {
+  try {
+    const ini = await readFile(expandHome(DOLT_CREDENTIALS_FILE), "utf8");
+    return credentialPassword(ini, DOLT_CREDENTIALS_SECTION);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Run the SITREP with `bash`, never a shell string, and the Dolt password in
+ * the child's environment only. The directory of the bd the settings name
+ * goes first on PATH, so the SITREP's own bd calls find it. A failed run
+ * resolves with its exit code and stderr: consumeSitrep decides what it
+ * means. Every error text is redacted before it leaves, in case a tool echoes
+ * its connection string.
+ */
+function defaultRunSitrep(bdFile: string): SitrepRunner {
+  return async (args, { cwd }) => {
+    const password = await readDoltPassword();
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    if (password !== null) env.BEADS_DOLT_PASSWORD = password;
+    if (isAbsolute(bdFile)) {
+      env.PATH = [dirname(bdFile), env.PATH ?? ""].join(delimiter);
+    }
+    return new Promise<SitrepResult>((resolve) => {
+      execFile(
+        "bash",
+        args,
+        { cwd, env, timeout: SITREP_TIMEOUT_MS, maxBuffer: SITREP_MAX_BUFFER },
+        (error, stdout, stderr) => {
+          const clean = (value: string) =>
+            shorten(redact(value, password), STDERR_LIMIT);
+          if (error === null) {
+            resolve({ exitCode: 0, stdout, stderr: clean(stderr) });
+            return;
+          }
+          const code = (error as NodeJS.ErrnoException).code;
+          let detail = clean(stderr);
+          if (code === "ENOENT") {
+            detail = `bash was not found, or the Base root "${cwd}" does not exist.`;
+          } else if (error.killed) {
+            detail = `The SITREP did not finish in ${SITREP_TIMEOUT_MS / 1000}s.`;
+          } else if (detail === "") {
+            detail = clean(error.message);
+          }
+          resolve({
+            exitCode: typeof code === "number" && !error.killed ? code : null,
+            stdout,
+            stderr: detail,
+          });
+        },
+      );
+    });
+  };
+}
+
+export default function plugin(
+  bb: BbPluginApi,
+  options: StarbasePluginOptions = {},
+) {
   const settings = bb.settings.define({
     [COMMANDER_PROJECTS_SETTING]: {
       type: "string",
@@ -255,6 +627,27 @@ export default function plugin(bb: BbPluginApi) {
         "Projects whose threads act as Commanders. One project id per line, or separated by commas. A thread whose parent runs in one of these projects is Crew.",
       experimental_multiline: true,
       default: DEFAULT_COMMANDER_PROJECT_IDS,
+    },
+    baseRoot: {
+      type: "string",
+      label: "Base root",
+      description:
+        "The Starbase checkout. The board runs scripts/sitrep.sh here and reads projects/*/posture.toml.",
+      default: DEFAULT_BASE_ROOT,
+    },
+    sitrepCommander: {
+      type: "string",
+      label: "SITREP Commander thread",
+      description:
+        "The Commander thread whose Crew the board's SITREP reads (--commander). Its Crew without a mission bead show as their own cards.",
+      default: DEFAULT_SITREP_COMMANDER,
+    },
+    bdPath: {
+      type: "string",
+      label: "Beads CLI path",
+      description:
+        "The bd executable the SITREP uses. A bare name is looked up on PATH, then in the usual install locations; its directory goes first on the SITREP's PATH.",
+      default: "bd",
     },
   });
 
@@ -947,6 +1340,328 @@ export default function plugin(bb: BbPluginApi) {
     });
     return outcome;
   }
+
+  // ------------------------------------------------------------------
+  // The Mission Queue board, read-only.
+  // ------------------------------------------------------------------
+
+  async function baseRoot(): Promise<string> {
+    const values = await settings.get();
+    const root = expandHome(values.baseRoot);
+    if (root === "") throw new Error("The Base root setting is empty.");
+    return root;
+  }
+
+  /** The Commander whose Crew the SITREP reads, checked before it is passed on. */
+  async function sitrepCommander(): Promise<string> {
+    const { sitrepCommander: value } = await settings.get();
+    const commander = value.trim();
+    if (!THREAD_ID_PATTERN.test(commander)) {
+      throw new Error(
+        `The SITREP Commander setting "${commander}" is not a thread id.`,
+      );
+    }
+    return commander;
+  }
+
+  async function runSitrep(): Promise<SitrepResult> {
+    const args = sitrepArgs(await sitrepCommander());
+    const cwd = await baseRoot();
+    if (options.runSitrep !== undefined) return options.runSitrep(args, { cwd });
+    const { bdPath } = await settings.get();
+    return defaultRunSitrep(resolveBdPath(bdPath))(args, { cwd });
+  }
+
+  /** Every posture slug in the Base, with its bb project id when it names one. */
+  async function loadPostures(): Promise<Posture[]> {
+    const projectsDir = join(await baseRoot(), "projects");
+    let entries;
+    try {
+      entries = await readdir(projectsDir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    const postures: Posture[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !PROJECT_SLUG_PATTERN.test(entry.name)) {
+        continue;
+      }
+      try {
+        const toml = await readFile(
+          join(projectsDir, entry.name, "posture.toml"),
+          "utf8",
+        );
+        postures.push({
+          slug: entry.name,
+          projectId: postureValue(toml, "project_id"),
+        });
+      } catch {
+        // A directory without a posture is not a project.
+      }
+    }
+    return postures.sort((a, b) => a.slug.localeCompare(b.slug));
+  }
+
+  // The snapshot: the last SITREP run and the postures. A board call answers
+  // from it at once and, when it is old or a thread event made it old, runs
+  // the SITREP again behind the answer. Only one run happens at a time; every
+  // caller in the meantime shares it. Only the first call after load, and a
+  // forced one, wait for a run. A failed run never throws: its rows, or the
+  // older rows marked stale, or no rows at all, are the snapshot.
+
+  let snapshot: Snapshot | null = null;
+  let inFlight: Promise<Snapshot> | null = null;
+  /** A thread in the snapshot changed since the running read began. */
+  let stale = false;
+  let lastUsedAt = 0;
+  /** Bumped when the settings change, so a read of the old Base is dropped. */
+  let generation = 0;
+
+  async function readSitrep(prior: Snapshot | null): Promise<Snapshot> {
+    const postures = loadPostures().catch(() => prior?.postures ?? []);
+    let result: SitrepResult;
+    try {
+      result = await runSitrep();
+    } catch (error) {
+      result = { exitCode: null, stdout: "", stderr: describe(error) };
+    }
+    const priorRows = prior?.read.rows ?? null;
+    const read = consumeSitrep(
+      result.exitCode ?? -1,
+      result.stdout,
+      result.stderr,
+      priorRows,
+    );
+    const now = Date.now();
+    const fresh = read.rows !== null && !read.stale;
+    const cards = fresh
+      ? toCards(read.rows ?? [])
+      : read.rows === null
+        ? null
+        : (prior?.cards ?? null);
+    if (read.error !== null) {
+      bb.log.warn(`starbase: SITREP read failed: ${read.error}`);
+    }
+    return {
+      fetchedAt: now,
+      rowsAt: fresh ? now : (prior?.rowsAt ?? null),
+      read,
+      cards,
+      threadIds: new Set(
+        (cards ?? [])
+          .map((card) => card.threadId)
+          .filter((id): id is string => id !== null),
+      ),
+      postures: await postures,
+    };
+  }
+
+  function refresh(): Promise<Snapshot> {
+    if (inFlight !== null) return inFlight;
+    stale = false;
+    const started = generation;
+    const read = readSitrep(snapshot).then((next) => {
+      // Cleared before any caller sees the answer, so it is not
+      // "refreshing". A settings change already dropped this read.
+      if (started === generation) {
+        snapshot = next;
+        inFlight = null;
+      }
+      return next;
+    });
+    inFlight = read;
+    return read;
+  }
+
+  /** The snapshot to answer from now. Waits only when there is none, or on force. */
+  async function currentSnapshot(force: boolean): Promise<Snapshot> {
+    lastUsedAt = Date.now();
+    if (force || snapshot === null) return refresh();
+    if (stale || Date.now() - snapshot.fetchedAt >= SNAPSHOT_MAX_AGE_MS) {
+      void refresh();
+    }
+    return snapshot;
+  }
+
+  const refreshTimer = setInterval(() => {
+    if (Date.now() - lastUsedAt < SNAPSHOT_IDLE_MS) void refresh();
+  }, SNAPSHOT_REFRESH_MS);
+  refreshTimer.unref?.();
+  bb.onDispose(() => clearInterval(refreshTimer));
+
+  for (const event of THREAD_EVENTS) {
+    bb.events.on(event, ({ thread }) => {
+      if (snapshot?.threadIds.has(thread.id)) stale = true;
+    });
+  }
+
+  /** The picker's choices: every posture slug and every slug a mission carries. */
+  function projectSlugs(snap: Snapshot): string[] {
+    const slugs = new Set(snap.postures.map((posture) => posture.slug));
+    for (const card of snap.cards ?? []) {
+      if (card.bead !== null && PROJECT_SLUG_PATTERN.test(card.project)) {
+        slugs.add(card.project);
+      }
+    }
+    return [...slugs].sort((a, b) => a.localeCompare(b));
+  }
+
+  function sourceOf(read: SitrepRead) {
+    if (read.rows === null) return "unavailable" as const;
+    if (read.stale) return "stale" as const;
+    return read.incomplete ? ("partial" as const) : ("current" as const);
+  }
+
+  function boardFor(snap: Snapshot, project: string) {
+    return {
+      project,
+      generatedAt: snap.rowsAt ?? snap.fetchedAt,
+      refreshing: inFlight !== null,
+      source: sourceOf(snap.read),
+      error: snap.read.error,
+      projects: projectSlugs(snap),
+      columns: buildBoard(snap.cards ?? [], project),
+    };
+  }
+
+  const selectScope = db.prepare(
+    `SELECT project FROM board_scope WHERE commander_id = ?`,
+  );
+  const upsertScope = db.prepare(
+    `INSERT INTO board_scope (commander_id, project, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT (commander_id) DO UPDATE
+       SET project = excluded.project, updated_at = excluded.updated_at`,
+  );
+
+  function savedScope(commanderId: string): string | null {
+    const row = selectScope.get(commanderId) as { project: string } | undefined;
+    return row?.project ?? null;
+  }
+
+  /** A Commander's inferred project. It changes rarely, and a pick clears it. */
+  const commanderProjects = new Map<string, { at: number; project: string }>();
+
+  /**
+   * The project a Commander commands, from the missions its Crew were
+   * dispatched for. Archived Crew count too: a Commander whose missions are
+   * all settled still commands the same project. A mission bead that links
+   * the Commander's own thread (a root discussion) counts as well, so a
+   * Commander with no Crew still finds its project.
+   */
+  async function commanderProject(
+    commanderId: string,
+    cards: readonly BoardCard[],
+  ): Promise<string | null> {
+    const cached = commanderProjects.get(commanderId);
+    if (
+      cached !== undefined &&
+      Date.now() - cached.at < COMMANDER_PROJECT_CACHE_MS
+    ) {
+      return cached.project;
+    }
+    const [live, archived] = await Promise.all([
+      listAllPages({ parentThreadId: commanderId }),
+      listAllPages({ parentThreadId: commanderId, archived: true }),
+    ]);
+    const crew = new Set([
+      commanderId,
+      ...[...(live ?? []), ...(archived ?? [])].map((row) => row.id),
+    ]);
+    const project = inferProject(cards, crew);
+    // A Commander with no Crew yet is asked again next time.
+    if (project !== null) {
+      commanderProjects.set(commanderId, { at: Date.now(), project });
+    }
+    return project;
+  }
+
+  /** Who a thread is to the board: a Commander, Crew of one, or neither. */
+  async function boardRole(threadId: string): Promise<{
+    thread: ThreadRow;
+    commanderId: string | null;
+    canSave: boolean;
+  }> {
+    const thread = await bb.sdk.threads.get({ threadId });
+    const canSave = isCommander(thread, await commanderProjectIds());
+    // A Crew thread whose Commander bb cannot read falls back to posture.
+    const commanderId = canSave
+      ? thread.id
+      : await commanderFor(thread).catch(() => null);
+    return { thread, commanderId, canSave };
+  }
+
+  /**
+   * The board scope for a thread. On a Commander, or a Crew thread of one, a
+   * saved pick wins; otherwise the Crew decide. Any other thread uses the
+   * posture of its own project.
+   */
+  async function resolveScope(
+    role: Awaited<ReturnType<typeof boardRole>>,
+    snap: Snapshot,
+  ) {
+    const { thread, commanderId, canSave } = role;
+    let scope: string | null = null;
+    let source: "commander" | "saved" | "posture" | "unresolved" = "unresolved";
+    if (commanderId !== null) {
+      const saved = savedScope(commanderId);
+      const inferred =
+        saved === null ? await commanderProject(commanderId, snap.cards ?? []) : null;
+      if (saved !== null) {
+        scope = saved;
+        source = "saved";
+      } else if (inferred !== null) {
+        scope = inferred;
+        source = "commander";
+      }
+    } else {
+      const posture = snap.postures.find(
+        (entry) => entry.projectId === thread.projectId,
+      );
+      if (posture !== undefined) {
+        scope = posture.slug;
+        source = "posture";
+      }
+    }
+    return {
+      scope,
+      source,
+      commanderId,
+      canSave,
+      projects: projectSlugs(snap),
+    };
+  }
+
+  bb.rpc.register(starbaseRpcContract, {
+    async panel({ threadId, project, force }) {
+      const [snap, role] = await Promise.all([
+        currentSnapshot(force === true),
+        boardRole(threadId),
+      ]);
+      const scope = await resolveScope(role, snap);
+      const shown = project ?? scope.scope;
+      return { scope, board: shown === null ? null : boardFor(snap, shown) };
+    },
+    async saveScope({ threadId, project }) {
+      const thread = await bb.sdk.threads.get({ threadId });
+      if (!isCommander(thread, await commanderProjectIds())) {
+        return { saved: false };
+      }
+      upsertScope.run(thread.id, project, Date.now());
+      commanderProjects.delete(thread.id);
+      return { saved: true };
+    },
+    async board({ project, force }) {
+      return boardFor(await currentSnapshot(force === true), project);
+    },
+  });
+
+  settings.onChange(() => {
+    generation += 1;
+    snapshot = null;
+    inFlight = null;
+    commanderProjects.clear();
+  });
 
   bb.cli.register({
     name: "starbase",
