@@ -14,11 +14,36 @@
 // Every relay is written to the plugin's own SQLite database first. The insert
 // carries a unique dedupe key, so a replay of the same event is ignored; a
 // failed send releases the key so the next identical event tries again.
+//
+// The plugin also serves the Mission Queue board, read-only. It keeps a warm
+// snapshot: `bd --readonly list` in the Base, and the Crew thread of each
+// open mission through the SDK. The pure column rules in board.ts turn the
+// snapshot into columns. It never writes a bead and never runs a Starbase
+// script.
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import type {
-  BbPluginApi,
-  PluginThreadEventPayloads,
+import { existsSync } from "node:fs";
+import { readFile, readdir } from "node:fs/promises";
+import { homedir } from "node:os";
+import { delimiter, join } from "node:path";
+import {
+  defineRpcContract,
+  type BbPluginApi,
+  type PluginThreadEventPayloads,
 } from "@get-bb/plugin-sdk";
+import { z } from "zod";
+import {
+  COLUMN_IDS,
+  buildBoard,
+  credentialPassword,
+  inferProject,
+  needsThreadRead,
+  postureValue,
+  toMissionBead,
+  type MissionBead,
+  type RawBead,
+  type ThreadInfo,
+} from "./board.js";
 
 /**
  * The SDK does not export the pending-interaction DTO by name, so the event
@@ -26,6 +51,24 @@ import type {
  */
 type PendingInteraction =
   PluginThreadEventPayloads["interaction.pending"]["interaction"];
+
+/** One thread as `bb.sdk.threads.get` returns it. */
+type ThreadRow = Awaited<ReturnType<BbPluginApi["sdk"]["threads"]["get"]>>;
+
+/** A project directory in the Base, and the bb project its posture names. */
+interface Posture {
+  slug: string;
+  projectId: string | null;
+}
+
+/** What the board answers from: one read of the queue and its Crew threads. */
+interface Snapshot {
+  fetchedAt: number;
+  beads: MissionBead[];
+  postures: Posture[];
+  /** bb's view of the Crew thread of every open mission that names one. */
+  threads: Map<string, ThreadInfo>;
+}
 
 /** One row of `bb.sdk.threads.list`, which is not the same DTO as a thread. */
 type ThreadListRow = Awaited<
@@ -54,6 +97,164 @@ const LIST_MAX_PAGES = 50;
 
 /** The refusal when the descendant set could not be shown to be complete. */
 const ENUMERATION_FAILED = "settle: could not enumerate all descendants";
+
+/** The Base checkout: `bd` runs here, and `projects/` holds the postures. */
+export const DEFAULT_BASE_ROOT = "/Users/hmps/dev/starbase";
+
+/**
+ * Where the Mission Queue's Dolt password lives. The board reads it on every
+ * `bd` run and passes it in the child's environment only; it is never stored,
+ * logged, or returned.
+ */
+const DOLT_CREDENTIALS_FILE = "~/.config/beads/credentials";
+const DOLT_CREDENTIALS_SECTION = "100.85.132.50:3307";
+
+/** `--readonly` makes bd itself refuse any write. */
+const BD_LIST_ARGS = ["--readonly", "list", "--all", "--json", "--limit", "0"];
+const BD_TIMEOUT_MS = 30_000;
+const BD_MAX_BUFFER = 50 * 1024 * 1024;
+/** How much of bd's stderr rides along in an error message. */
+const STDERR_LIMIT = 2 * 1024;
+
+/**
+ * The board answers from a warm snapshot of the queue and its Crew threads.
+ * A snapshot older than this is served at once and read again behind it.
+ */
+const SNAPSHOT_MAX_AGE_MS = 30_000;
+/** How often the snapshot is read again while somebody uses the board. */
+const SNAPSHOT_REFRESH_MS = 30_000;
+/** With no board call for this long, the background reads stop. */
+const SNAPSHOT_IDLE_MS = 10 * 60_000;
+/** How long a Commander's project, inferred from its Crew, stays known. */
+const COMMANDER_PROJECT_CACHE_MS = 5 * 60_000;
+/** How many Crew thread reads run at once. */
+const THREAD_READ_CONCURRENCY = 8;
+/** Crew thread events that make the snapshot stale. */
+const THREAD_EVENTS = [
+  "thread.active",
+  "thread.idle",
+  "thread.failed",
+  "thread.archived",
+  "thread.deleted",
+  "interaction.pending",
+] as const;
+
+/** A project slug as a posture directory names it. Nothing else reaches a path. */
+const PROJECT_SLUG_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+const projectScopeSchema = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(PROJECT_SLUG_PATTERN);
+
+const boardCardSchema = z
+  .object({
+    id: z.string(),
+    title: z.string(),
+    mission: z.string(),
+    project: z.string(),
+    status: z.string().nullable(),
+    threadId: z.string().nullable(),
+    pr: z.object({ url: z.string(), state: z.string() }).strict().nullable(),
+    flags: z.array(
+      z.enum(["thread-gone", "thread-unreadable", "thread-archived"]),
+    ),
+    outcome: z.string().nullable(),
+    note: z.string().nullable(),
+    record: z.string().nullable(),
+    updatedAt: z.string(),
+    closedAt: z.string().nullable(),
+  })
+  .strict();
+
+const boardSchema = z
+  .object({
+    project: z.string(),
+    /** When the snapshot behind this board was read. */
+    generatedAt: z.number(),
+    /** True while a newer snapshot is being read; ask again shortly. */
+    refreshing: z.boolean(),
+    /** Why the last background refresh failed, while an older snapshot shows. */
+    error: z.string().nullable(),
+    projects: z.array(z.string()),
+    columns: z.array(
+      z
+        .object({
+          id: z.enum(COLUMN_IDS),
+          title: z.string(),
+          total: z.number().int(),
+          cards: z.array(boardCardSchema),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+const scopeSchema = z
+  .object({
+    /** The thread's Command project, or null when nothing decides it. */
+    scope: projectScopeSchema.nullable(),
+    source: z.enum(["commander", "saved", "posture", "unresolved"]),
+    commanderId: z.string().nullable(),
+    /** True only on a Commander: a pick there is saved for it. */
+    canSave: z.boolean(),
+    projects: z.array(z.string()),
+  })
+  .strict();
+
+export const starbaseRpcContract = defineRpcContract({
+  /**
+   * The thread panel in one round trip: the thread's board scope, and the
+   * board for `project` when given, else for that scope. The board is null
+   * when no scope is decided and no project is given.
+   */
+  panel: {
+    input: z
+      .object({
+        threadId: z.string().min(1).max(200),
+        project: projectScopeSchema.optional(),
+        /** Read a new snapshot and wait for it. */
+        force: z.boolean().optional(),
+      })
+      .strict(),
+    output: z
+      .object({ scope: scopeSchema, board: boardSchema.nullable() })
+      .strict(),
+  },
+  /** Remember a Commander's pick; it wins over the Crew majority. */
+  saveScope: {
+    input: z
+      .object({
+        threadId: z.string().min(1).max(200),
+        project: projectScopeSchema,
+      })
+      .strict(),
+    output: z.object({ saved: z.boolean() }).strict(),
+  },
+  /** The board for one project slug, or `"all"`. */
+  board: {
+    input: z
+      .object({
+        project: projectScopeSchema,
+        /** Read a new snapshot and wait for it. */
+        force: z.boolean().optional(),
+      })
+      .strict(),
+    output: boardSchema,
+  },
+});
+
+/** How the plugin reaches `bd`. Injected in tests, execFile in production. */
+export type BdRunner = (
+  args: string[],
+  options: { cwd: string },
+) => Promise<string>;
+
+export interface StarbasePluginOptions {
+  /** Overrides the execFile runner; tests pass a fake `bd`. */
+  runBd?: BdRunner;
+}
 
 /**
  * How bb reports "you asked to start a turn on a thread that is already
@@ -96,6 +297,11 @@ const migrations = [
    )`,
   `CREATE INDEX IF NOT EXISTS mission_event_thread
      ON mission_event (thread_id, created_at)`,
+  `CREATE TABLE IF NOT EXISTS board_scope (
+     commander_id TEXT PRIMARY KEY,
+     project      TEXT NOT NULL,
+     updated_at   INTEGER NOT NULL
+   )`,
 ];
 
 /** A mission event as the CLI reports it. */
@@ -246,7 +452,153 @@ export function formatSitrepRow(row: SitrepRow): string {
   ].join(" · ");
 }
 
-export default function plugin(bb: BbPluginApi) {
+/** `~/dev/x` becomes `/Users/me/dev/x`. Anything else is returned unchanged. */
+export function expandHome(value: string, home: string = homedir()): string {
+  const trimmed = value.trim();
+  if (trimmed === "~") return home;
+  if (trimmed.startsWith("~/")) return `${home}/${trimmed.slice(2)}`;
+  return trimmed;
+}
+
+/**
+ * Where `bd` usually lives when the bb server's PATH does not carry it. The
+ * server is a launchd/daemon process, so mise shims and user bin dirs are
+ * often missing from its PATH even though the shell finds them.
+ */
+export function bdCandidates(home: string = homedir()): string[] {
+  return [
+    join(home, ".local/share/mise/shims/bd"),
+    join(home, ".local/bin/bd"),
+    join(home, "go/bin/bd"),
+    "/opt/homebrew/bin/bd",
+    "/usr/local/bin/bd",
+  ];
+}
+
+/**
+ * The executable to run. A configured value with a slash is used as is. A bare
+ * name is looked up on PATH, then in the usual install locations; when nothing
+ * matches, the bare name is returned so execFile reports ENOENT with a clear
+ * message.
+ */
+export function resolveBdPath(
+  configured: string,
+  options: {
+    path?: string;
+    home?: string;
+    exists?: (file: string) => boolean;
+  } = {},
+): string {
+  const name = expandHome(configured, options.home) || "bd";
+  if (name.includes("/")) return name;
+  const exists = options.exists ?? existsSync;
+  const pathValue = options.path ?? process.env.PATH ?? "";
+  for (const dir of pathValue.split(delimiter)) {
+    if (dir !== "" && exists(join(dir, name))) return join(dir, name);
+  }
+  if (name === "bd") {
+    const found = bdCandidates(options.home).find((file) => exists(file));
+    if (found !== undefined) return found;
+  }
+  return name;
+}
+
+/** Replace every copy of a secret in text that may reach a log or a client. */
+export function redact(value: string, secret: string | null): string {
+  return secret === null || secret === ""
+    ? value
+    : value.split(secret).join("***");
+}
+
+/**
+ * The Mission Queue's Dolt password, read fresh from the credentials file.
+ * Null when the file or the entry is absent; bd then reports its own error.
+ */
+async function readDoltPassword(): Promise<string | null> {
+  try {
+    const ini = await readFile(expandHome(DOLT_CREDENTIALS_FILE), "utf8");
+    return credentialPassword(ini, DOLT_CREDENTIALS_SECTION);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Run bd with the Dolt password in the child's environment only. Every error
+ * text is redacted before it leaves, in case bd echoes its connection string.
+ */
+function defaultRunBd(file: string): BdRunner {
+  return async (args, { cwd }) => {
+    const password = await readDoltPassword();
+    const env =
+      password === null
+        ? process.env
+        : { ...process.env, BEADS_DOLT_PASSWORD: password };
+    return new Promise<string>((resolve, reject) => {
+      execFile(
+        file,
+        args,
+        { cwd, env, timeout: BD_TIMEOUT_MS, maxBuffer: BD_MAX_BUFFER },
+        (error, stdout, stderr) => {
+          if (error === null) {
+            resolve(stdout);
+            return;
+          }
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === "ENOENT") {
+            reject(
+              new Error(
+                `bd was not found at "${file}". Install the beads CLI, or set the "Beads CLI path" setting to its absolute path.`,
+              ),
+            );
+            return;
+          }
+          const detail = shorten(stderr.trim(), STDERR_LIMIT) || error.message;
+          reject(
+            new Error(
+              redact(
+                `bd ${args.join(" ")} failed in ${cwd}: ${detail}`,
+                password,
+              ),
+            ),
+          );
+        },
+      );
+    });
+  };
+}
+
+/** Run `fn` over `items`, at most `limit` at a time. */
+async function mapLimit<T>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < items.length) {
+      const item = items[next];
+      next += 1;
+      await fn(item);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, worker),
+  );
+}
+
+function isNotFound(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { status?: unknown }).status === 404
+  );
+}
+
+export default function plugin(
+  bb: BbPluginApi,
+  options: StarbasePluginOptions = {},
+) {
   const settings = bb.settings.define({
     [COMMANDER_PROJECTS_SETTING]: {
       type: "string",
@@ -255,6 +607,20 @@ export default function plugin(bb: BbPluginApi) {
         "Projects whose threads act as Commanders. One project id per line, or separated by commas. A thread whose parent runs in one of these projects is Crew.",
       experimental_multiline: true,
       default: DEFAULT_COMMANDER_PROJECT_IDS,
+    },
+    baseRoot: {
+      type: "string",
+      label: "Base root",
+      description:
+        "The Starbase checkout. The board runs bd here and reads projects/*/posture.toml.",
+      default: DEFAULT_BASE_ROOT,
+    },
+    bdPath: {
+      type: "string",
+      label: "Beads CLI path",
+      description:
+        "The bd executable. A bare name is looked up on PATH, then in the usual install locations.",
+      default: "bd",
     },
   });
 
@@ -947,6 +1313,366 @@ export default function plugin(bb: BbPluginApi) {
     });
     return outcome;
   }
+
+  // ------------------------------------------------------------------
+  // The Mission Queue board, read-only.
+  // ------------------------------------------------------------------
+
+  async function baseRoot(): Promise<string> {
+    const values = await settings.get();
+    const root = expandHome(values.baseRoot);
+    if (root === "") throw new Error("The Base root setting is empty.");
+    return root;
+  }
+
+  async function runBd(args: string[], cwd: string): Promise<string> {
+    if (options.runBd !== undefined) return options.runBd(args, { cwd });
+    const { bdPath } = await settings.get();
+    return defaultRunBd(resolveBdPath(bdPath))(args, { cwd });
+  }
+
+  /** Every mission bead. Every other bead is dropped here. */
+  async function loadMissionBeads(): Promise<MissionBead[]> {
+    const stdout = await runBd(BD_LIST_ARGS, await baseRoot());
+    const parsed: unknown = JSON.parse(stdout.trim() === "" ? "[]" : stdout);
+    if (!Array.isArray(parsed)) {
+      throw new Error("bd list --json did not return an array.");
+    }
+    return (parsed as RawBead[])
+      .map(toMissionBead)
+      .filter((bead): bead is MissionBead => bead !== null);
+  }
+
+  /** Whether the thread waits on an answer; null when bb did not say. */
+  async function hasPendingInteraction(
+    threadId: string,
+  ): Promise<boolean | null> {
+    try {
+      const interactions = await bb.sdk.threads.interactions.list({ threadId });
+      return interactions.some((entry) => entry.status === "pending");
+    } catch {
+      return null;
+    }
+  }
+
+  /** The PR of a Crew environment. A failure only leaves it off the card. */
+  async function pullRequestOf(
+    environmentId: string | null | undefined,
+  ): Promise<{ url: string; state: string } | null> {
+    if (environmentId === null || environmentId === undefined) return null;
+    try {
+      const result = await bb.sdk.environments.pullRequest({ environmentId });
+      return result.outcome === "available"
+        ? { url: result.pullRequest.url, state: result.pullRequest.state }
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * bb's view of one Crew thread. A 404 means bb holds no such thread; any
+   * other failure means bb did not say, and the card shows that instead of
+   * guessing a state.
+   */
+  async function readThread(threadId: string): Promise<ThreadInfo> {
+    let thread;
+    try {
+      thread = await bb.sdk.threads.get({ threadId });
+    } catch (error) {
+      return isNotFound(error) ? { kind: "gone" } : { kind: "unreadable" };
+    }
+    if (thread.deletedAt !== null && thread.deletedAt !== undefined) {
+      return { kind: "gone" };
+    }
+    const archived =
+      thread.archivedAt !== null && thread.archivedAt !== undefined;
+    const [pendingInteraction, pr] = await Promise.all([
+      archived ? false : hasPendingInteraction(threadId),
+      pullRequestOf(thread.environmentId),
+    ]);
+    if (pendingInteraction === null) return { kind: "unreadable" };
+    return {
+      kind: "ok",
+      status: thread.status,
+      pendingInteraction,
+      archived,
+      pr,
+    };
+  }
+
+  async function readThreads(
+    threadIds: readonly string[],
+  ): Promise<Map<string, ThreadInfo>> {
+    const found = new Map<string, ThreadInfo>();
+    await mapLimit(
+      [...new Set(threadIds)],
+      THREAD_READ_CONCURRENCY,
+      async (threadId) => {
+        found.set(threadId, await readThread(threadId));
+      },
+    );
+    return found;
+  }
+
+  /** Every posture slug in the Base, with its bb project id when it names one. */
+  async function loadPostures(): Promise<Posture[]> {
+    const projectsDir = join(await baseRoot(), "projects");
+    let entries;
+    try {
+      entries = await readdir(projectsDir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    const postures: Posture[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !PROJECT_SLUG_PATTERN.test(entry.name)) {
+        continue;
+      }
+      try {
+        const toml = await readFile(
+          join(projectsDir, entry.name, "posture.toml"),
+          "utf8",
+        );
+        postures.push({
+          slug: entry.name,
+          projectId: postureValue(toml, "project_id"),
+        });
+      } catch {
+        // A directory without a posture is not a project.
+      }
+    }
+    return postures.sort((a, b) => a.slug.localeCompare(b.slug));
+  }
+
+  // The snapshot: every mission bead, the postures, and bb's view of the Crew
+  // thread of every open mission. A board call answers from it at once and,
+  // when it is old or an event made it stale, reads a new one behind the
+  // answer. Only one read runs at a time; every caller in the meantime shares
+  // it. Only the first call after load, and a forced one, wait for a read.
+
+  let snapshot: Snapshot | null = null;
+  let inFlight: Promise<Snapshot> | null = null;
+  /** A Crew thread in the snapshot changed since the running read began. */
+  let stale = false;
+  /** Why the last read failed, until a read succeeds. */
+  let lastError: string | null = null;
+  let lastUsedAt = 0;
+  /** Bumped when the settings change, so a read of the old Base is dropped. */
+  let generation = 0;
+
+  function refresh(): Promise<Snapshot> {
+    if (inFlight !== null) return inFlight;
+    stale = false;
+    const started = generation;
+    const read = (async (): Promise<Snapshot> => {
+      try {
+        const [beads, postures] = await Promise.all([
+          loadMissionBeads(),
+          loadPostures(),
+        ]);
+        const wanted = beads
+          .filter(needsThreadRead)
+          .map((bead) => bead.notes.thread as string);
+        const threads = await readThreads(wanted);
+        const next = { fetchedAt: Date.now(), beads, postures, threads };
+        if (started === generation) {
+          snapshot = next;
+          lastError = null;
+        }
+        return next;
+      } catch (error) {
+        if (started === generation) lastError = describe(error);
+        bb.log.warn(`starbase: board refresh failed: ${describe(error)}`);
+        throw error;
+      } finally {
+        // Cleared before any caller sees the answer, so it is not
+        // "refreshing". A settings change already dropped this read.
+        if (started === generation) inFlight = null;
+      }
+    })();
+    inFlight = read;
+    // A background read has no caller; its failure is in lastError.
+    read.catch(() => {});
+    return read;
+  }
+
+  /** The snapshot to answer from now. Waits only when there is none, or on force. */
+  async function currentSnapshot(force: boolean): Promise<Snapshot> {
+    lastUsedAt = Date.now();
+    if (force || snapshot === null) return refresh();
+    if (stale || Date.now() - snapshot.fetchedAt >= SNAPSHOT_MAX_AGE_MS) {
+      void refresh();
+    }
+    return snapshot;
+  }
+
+  const refreshTimer = setInterval(() => {
+    if (Date.now() - lastUsedAt < SNAPSHOT_IDLE_MS) void refresh();
+  }, SNAPSHOT_REFRESH_MS);
+  refreshTimer.unref?.();
+  bb.onDispose(() => clearInterval(refreshTimer));
+
+  for (const event of THREAD_EVENTS) {
+    bb.events.on(event, ({ thread }) => {
+      if (snapshot?.threads.has(thread.id)) stale = true;
+    });
+  }
+
+  /** The picker's choices: every posture slug and every slug a mission carries. */
+  function projectSlugs(snap: Snapshot): string[] {
+    const slugs = new Set(snap.postures.map((posture) => posture.slug));
+    for (const bead of snap.beads) slugs.add(bead.project);
+    return [...slugs].sort((a, b) => a.localeCompare(b));
+  }
+
+  function boardFor(snap: Snapshot, project: string) {
+    return {
+      project,
+      generatedAt: snap.fetchedAt,
+      refreshing: inFlight !== null,
+      error: lastError,
+      projects: projectSlugs(snap),
+      columns: buildBoard(snap.beads, snap.threads, project, Date.now()),
+    };
+  }
+
+  const selectScope = db.prepare(
+    `SELECT project FROM board_scope WHERE commander_id = ?`,
+  );
+  const upsertScope = db.prepare(
+    `INSERT INTO board_scope (commander_id, project, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT (commander_id) DO UPDATE
+       SET project = excluded.project, updated_at = excluded.updated_at`,
+  );
+
+  function savedScope(commanderId: string): string | null {
+    const row = selectScope.get(commanderId) as { project: string } | undefined;
+    return row?.project ?? null;
+  }
+
+  /** A Commander's inferred project. It changes rarely, and a pick clears it. */
+  const commanderProjects = new Map<string, { at: number; project: string }>();
+
+  /**
+   * The project a Commander commands, from the missions its Crew were
+   * dispatched for. Archived Crew count too: a Commander whose missions are
+   * all settled still commands the same project.
+   */
+  async function commanderProject(
+    commanderId: string,
+    beads: readonly MissionBead[],
+  ): Promise<string | null> {
+    const cached = commanderProjects.get(commanderId);
+    if (
+      cached !== undefined &&
+      Date.now() - cached.at < COMMANDER_PROJECT_CACHE_MS
+    ) {
+      return cached.project;
+    }
+    const [live, archived] = await Promise.all([
+      listAllPages({ parentThreadId: commanderId }),
+      listAllPages({ parentThreadId: commanderId, archived: true }),
+    ]);
+    const crew = new Set(
+      [...(live ?? []), ...(archived ?? [])].map((row) => row.id),
+    );
+    const project = inferProject(beads, crew);
+    // A Commander with no Crew yet is asked again next time.
+    if (project !== null) {
+      commanderProjects.set(commanderId, { at: Date.now(), project });
+    }
+    return project;
+  }
+
+  /** Who a thread is to the board: a Commander, Crew of one, or neither. */
+  async function boardRole(threadId: string): Promise<{
+    thread: ThreadRow;
+    commanderId: string | null;
+    canSave: boolean;
+  }> {
+    const thread = await bb.sdk.threads.get({ threadId });
+    const canSave = isCommander(thread, await commanderProjectIds());
+    // A Crew thread whose Commander bb cannot read falls back to posture.
+    const commanderId = canSave
+      ? thread.id
+      : await commanderFor(thread).catch(() => null);
+    return { thread, commanderId, canSave };
+  }
+
+  /**
+   * The board scope for a thread. On a Commander, or a Crew thread of one, a
+   * saved pick wins; otherwise the Crew decide. Any other thread uses the
+   * posture of its own project.
+   */
+  async function resolveScope(
+    role: Awaited<ReturnType<typeof boardRole>>,
+    snap: Snapshot,
+  ) {
+    const { thread, commanderId, canSave } = role;
+    let scope: string | null = null;
+    let source: "commander" | "saved" | "posture" | "unresolved" = "unresolved";
+    if (commanderId !== null) {
+      const saved = savedScope(commanderId);
+      const inferred =
+        saved === null ? await commanderProject(commanderId, snap.beads) : null;
+      if (saved !== null) {
+        scope = saved;
+        source = "saved";
+      } else if (inferred !== null) {
+        scope = inferred;
+        source = "commander";
+      }
+    } else {
+      const posture = snap.postures.find(
+        (entry) => entry.projectId === thread.projectId,
+      );
+      if (posture !== undefined) {
+        scope = posture.slug;
+        source = "posture";
+      }
+    }
+    return {
+      scope,
+      source,
+      commanderId,
+      canSave,
+      projects: projectSlugs(snap),
+    };
+  }
+
+  bb.rpc.register(starbaseRpcContract, {
+    async panel({ threadId, project, force }) {
+      const [snap, role] = await Promise.all([
+        currentSnapshot(force === true),
+        boardRole(threadId),
+      ]);
+      const scope = await resolveScope(role, snap);
+      const shown = project ?? scope.scope;
+      return { scope, board: shown === null ? null : boardFor(snap, shown) };
+    },
+    async saveScope({ threadId, project }) {
+      const thread = await bb.sdk.threads.get({ threadId });
+      if (!isCommander(thread, await commanderProjectIds())) {
+        return { saved: false };
+      }
+      upsertScope.run(thread.id, project, Date.now());
+      commanderProjects.delete(thread.id);
+      return { saved: true };
+    },
+    async board({ project, force }) {
+      return boardFor(await currentSnapshot(force === true), project);
+    },
+  });
+
+  settings.onChange(() => {
+    generation += 1;
+    snapshot = null;
+    inFlight = null;
+    lastError = null;
+    commanderProjects.clear();
+  });
 
   bb.cli.register({
     name: "starbase",

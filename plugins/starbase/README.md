@@ -1,4 +1,4 @@
-# Starbase — the Sentinel
+# Starbase — the Sentinel and the board
 
 Starbase is an orchestration model for bb. The Governor talks to one Commander
 thread per project. The Commander dispatches Crew threads into the target
@@ -181,11 +181,98 @@ thread: the deepest-first order and the per-call check keep it as small as the
 API allows, and the unarchive compensation undoes what it can, but neither
 closes it. Settle Crew that has stopped working.
 
+## The Mission Queue board
+
+The plugin also shows the Mission Queue as a read-only board. Open it in two
+places:
+
+- **Starbase** in the sidebar. It shows all projects. Pick one project in the
+  picker; the pick is part of the URL.
+- **Starbase board** in a thread's side panel. It shows the thread's Command
+  project:
+  - A Crew thread uses its Commander's project.
+  - A Commander uses the project you last picked on it. The plugin saves that
+    pick in its own database.
+  - A Commander with no saved pick uses the most common `project:` label among
+    the beads that name one of its Crew threads, live or archived. With no
+    Crew either, the panel asks you to pick a project.
+  - Any other thread uses the posture whose `project_id` is the thread's
+    project.
+
+  The picker is always there. A pick on a Commander is saved for it.
+
+A card is one mission: a bead labelled `project:<slug>` and `mission:build` or
+`mission:survey`. Every other bead is not shown and not counted.
+
+The board reads the newest Commander record on a mission. That is the last line
+in the notes that starts with `decision=`, or the last reconciliation line with
+`disposition=<word>`. The first rule that matches puts a card in a column:
+
+| Column | Rule |
+| --- | --- |
+| Done | The bead closed in the last 7 days. Older closed beads are not shown. |
+| Waiting on you | The Crew thread has a pending interaction; or the newest record is a `decision=` that is not `none`; or it is `disposition=governor_decision`. |
+| Blocked | The Crew thread failed; or the newest record is `disposition=external_blocker`. |
+| In progress | The Crew thread is active or starting; or the bead is `in_progress`; or the newest record is `disposition=progressing`. |
+| Commander review | The bead names a Crew thread and no rule above matched; or the newest record is a `disposition=` that starts with `complete`, or `preserve_state`. |
+| Queued | The bead is open and names no Crew thread. |
+
+A live pending interaction and a failed Crew thread beat the newest record. A
+thread that bb no longer has, could not read, or archived does not count as
+live. Its card keeps a small flag.
+
+The wide board shows the columns from Queued to Done. A narrow panel stacks
+them: Waiting on you, Blocked, In progress, Commander review, Queued, Done.
+Queued and Done start collapsed there; click the header to open them.
+
+A card shows the mission id, build or survey, the title, the project (in the
+all-projects view), the age, one status line, and the PR state when bb knows
+it. The status line is the pending decision, "Blocked on <owner>", or the
+`state=` of the newest disposition, else the latest `outcome=`. The icon on a
+card opens the Crew thread. Click a card to see the latest `outcome=`, hand
+note, and the newest Commander record.
+
+The notes are read as the Starbase scripts write them. `thread=` and `env=` are
+the latest token anywhere in the notes. `outcome=` is the latest line that
+starts with the key. The note is the latest line that is not a `key=value` line
+or a reconciliation line.
+
+The board answers from a warm snapshot, so the panel opens fast:
+
+- The first board call after the plugin loads reads the snapshot and waits for
+  it. Every later call answers at once from the snapshot.
+- When the snapshot is older than 30 seconds, or a Crew thread on the board
+  changed (active, idle, failed, archived, deleted, or a pending interaction),
+  the next call answers from the old snapshot and reads a new one behind it.
+  The board then shows "Updating…" and asks again shortly.
+- While somebody used the board in the last 10 minutes, the snapshot is read
+  again every 30 seconds. Only one read runs at a time.
+- Refresh reads a new snapshot and waits for it.
+- The thread panel gets its scope and its board in one call. A Commander's
+  inferred project is cached for 5 minutes; a pick clears it.
+
+The board only reads:
+
+- It runs `bd --readonly list --all --json --limit 0` in the Base root.
+- It reads the Dolt password from `~/.config/beads/credentials`, section
+  `[100.85.132.50:3307]`, for each `bd` run. The password goes only into the
+  `bd` process environment as `BEADS_DOLT_PASSWORD`. It is never stored,
+  logged, or sent to the panel.
+- It reads the Crew thread of each open mission through the bb SDK, 8 at a
+  time: the thread, its interactions, and its PR. It does not read the threads
+  of closed missions, so a Done card shows no PR.
+- It reads `projects/*/posture.toml` for the project list and `project_id`.
+
+It never writes a bead, never runs a `bd` write command, and never runs a
+Starbase script. Each column sends at most 150 cards and the full count.
+
 ## Settings
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `commanderProjectIds` | `proj_s9vk5k4c9u` | Projects whose threads act as Commanders. One project id per line, or separated by commas. |
+| `baseRoot` | `/Users/hmps/dev/starbase` | The Starbase checkout. The board runs `bd` here and reads `projects/*/posture.toml`. |
+| `bdPath` | `bd` | The `bd` executable. A bare name is looked up on PATH, then in the usual install locations (mise shims, `~/.local/bin`, `~/go/bin`, Homebrew). |
 
 A Commander is a root thread in one of these projects. Its Crew are its child
 threads. A Commander can therefore dispatch a Survey Mission inside its own
@@ -194,8 +281,18 @@ Base project and still get the relays.
 ## Develop
 
 ```bash
-npm install
+npm install --legacy-peer-deps
 npm run typecheck
 npm test
 npm run build
+```
+
+A plain `npm install` fails in npm 10 on vitest's optional peers, so use
+`--legacy-peer-deps`.
+
+The live smoke runs the real `bd` and reads real threads through the `bb` CLI.
+It only reads, and it prints the column counts:
+
+```bash
+STARBASE_LIVE=1 npx vitest run board.live
 ```
