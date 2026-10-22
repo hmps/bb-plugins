@@ -171,7 +171,7 @@
     {
       "id": "starbase",
       "displayName": "Starbase (Sentinel)",
-      "description": "Sentinel for the Starbase orchestration model: relays Crew failures and pending interactions to the Commander thread, and adds `bb starbase sitrep` and a guarded `bb starbase settle`.",
+      "description": "Sentinel and Mission Queue board for the Starbase orchestration model: relays Crew failures and pending interactions to the Commander thread, adds `bb starbase sitrep`, a guarded `bb starbase settle`, and `bb starbase publish`, and shows a read-only Kanban board of the newest published SITREP snapshot.",
       "icon": "Satellite",
       "tags": [
         "orchestration",
@@ -187,7 +187,7 @@
         "git": {
           "url": "https://github.com/hmps/bb-plugins.git",
           "subdir": "plugins/starbase",
-          "range": "^0.1.0",
+          "range": "^0.4.0",
           "tagPrefix": "starbase/"
         }
       }
