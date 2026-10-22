@@ -913,3 +913,86 @@ describe("redact", () => {
     expect(redact("nothing", null)).toBe("nothing");
   });
 });
+
+/** A valid published snapshot of `rows`, with any field changed. */
+function snapshot(change: Record<string, unknown> = {}) {
+  return {
+    version: 1,
+    generated_at: "2026-10-22T08:00:00Z",
+    host: "titan",
+    project: "all",
+    commander: "thr_9mhukyfy2t",
+    exit_code: 0,
+    rows,
+    ...change,
+  };
+}
+
+/** `bb starbase publish` with the document cut into parts of `size` chars. */
+function publishArgs(document: unknown, size = 64 * 1024): string[] {
+  const text = JSON.stringify(document);
+  const args = ["publish"];
+  for (let at = 0; at < text.length; at += size) {
+    args.push("--snapshot", text.slice(at, at + size));
+  }
+  return args;
+}
+
+describe("publish", () => {
+  it("stores a valid snapshot", async () => {
+    const { fake } = loadPlugin();
+    const result = await fake.harness.runCli(publishArgs(snapshot()));
+    expect(result).toMatchObject({ exitCode: 0 });
+    expect(result.stdout).toBe(
+      `Stored the snapshot for all from titan at 2026-10-22T08:00:00.000Z: ${rows.length} row(s), exit code 0.`,
+    );
+  });
+
+  it("joins every --snapshot part in order", async () => {
+    const { fake } = loadPlugin();
+    const args = publishArgs(snapshot(), 1000);
+    expect(args.length).toBeGreaterThan(10);
+    const result = await fake.harness.runCli(args);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(`${rows.length} row(s)`);
+  });
+
+  it("ignores an older snapshot, and replaces on an equal or newer one", async () => {
+    const { fake } = loadPlugin();
+    await fake.harness.runCli(publishArgs(snapshot()));
+    const older = await fake.harness.runCli(
+      publishArgs(snapshot({ generated_at: "2026-10-22T07:59:59Z" })),
+    );
+    expect(older).toMatchObject({ exitCode: 0 });
+    expect(older.stdout).toMatch(/^Ignored: the stored snapshot for all is newer/);
+    const equal = await fake.harness.runCli(publishArgs(snapshot()));
+    expect(equal.stdout).toMatch(/^Stored/);
+  });
+
+  it("refuses an invalid snapshot with one line", async () => {
+    const { fake } = loadPlugin();
+    const cases: [string[], RegExp][] = [
+      [["publish"], /no snapshot/],
+      [["publish", "--snapshot"], /needs a value/],
+      [["publish", "--snapshot", "{}", "extra"], /unknown argument/],
+      [["publish", "--snapshot", '{"version":1,'], /not valid JSON/],
+      [publishArgs(snapshot({ version: 2 })), /^publish: version: /],
+      [publishArgs(snapshot({ password: "s3cret" })), /password/],
+      [publishArgs(snapshot({ generated_at: "yesterday" })), /generated_at/],
+      [publishArgs(snapshot({ project: "../etc" })), /project/],
+      [publishArgs(snapshot({ commander: "thr_x --full" })), /commander/],
+      [publishArgs(snapshot({ exit_code: 1.5 })), /exit_code/],
+      [publishArgs(snapshot({ rows: [1] })), /rows/],
+      [
+        publishArgs(snapshot({ rows: [{ ...rows[0], contract_version: 2 }] })),
+        /unsupported contract_version/,
+      ],
+    ];
+    for (const [args, message] of cases) {
+      const result = await fake.harness.runCli(args);
+      expect(result.exitCode, args.join(" ")).toBe(1);
+      expect(result.stderr, args.join(" ")).toMatch(message);
+      expect(result.stderr).not.toContain("\n");
+    }
+  });
+});

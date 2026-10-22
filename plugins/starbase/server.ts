@@ -41,7 +41,7 @@ import {
   toCards,
   type BoardCard,
 } from "./board.js";
-import { consumeSitrep, type SitrepRead } from "./mission.js";
+import { consumeSitrep, readRows, type SitrepRead } from "./mission.js";
 
 /**
  * The SDK does not export the pending-interaction DTO by name, so the event
@@ -158,6 +158,32 @@ const projectScopeSchema = z
   .min(1)
   .max(100)
   .regex(PROJECT_SLUG_PATTERN);
+
+/**
+ * The most one published snapshot may hold, all `--snapshot` parts together.
+ * A full SITREP of a large Base is well under one MiB.
+ */
+const SNAPSHOT_MAX_CHARS = 8 * 1024 * 1024;
+
+/**
+ * One published SITREP run, as `bb starbase publish` takes it. The schema is
+ * shared with the SITREP publishers, so it is strict: a key it does not name
+ * is refused, and with it anything a publisher should not send, such as a
+ * credential.
+ */
+const snapshotSchema = z.strictObject({
+  version: z.literal(1),
+  generated_at: z
+    .string()
+    .refine((value) => !Number.isNaN(Date.parse(value)), "is not a date"),
+  host: z.string().min(1).max(200),
+  project: z.union([z.literal("all"), projectScopeSchema]),
+  commander: z.string().regex(THREAD_ID_PATTERN).nullable(),
+  exit_code: z.number().int(),
+  rows: z.array(z.record(z.string(), z.unknown())),
+});
+
+export type PublishedSnapshot = z.infer<typeof snapshotSchema>;
 
 const boardCardSchema = z
   .object({
@@ -339,6 +365,17 @@ const migrations = [
      project      TEXT NOT NULL,
      updated_at   INTEGER NOT NULL
    )`,
+  // The newest published SITREP per project slug, or "all". `rows` is the
+  // row array as JSON; the times are epoch milliseconds.
+  `CREATE TABLE IF NOT EXISTS sitrep_snapshot (
+     project      TEXT PRIMARY KEY,
+     generated_at INTEGER NOT NULL,
+     host         TEXT NOT NULL,
+     commander    TEXT,
+     exit_code    INTEGER NOT NULL,
+     rows         TEXT NOT NULL,
+     received_at  INTEGER NOT NULL
+   )`,
 ];
 
 /** A mission event as the CLI reports it. */
@@ -375,6 +412,9 @@ const USAGE = [
   "      Report every Crew thread under a Commander.",
   "  bb starbase settle <thread-id>",
   "      Archive a Crew thread once its worktree is clean and its PR is closed.",
+  "  bb starbase publish --snapshot <json> [--snapshot <json> ...]",
+  "      Store one SITREP snapshot for the board. The parts join in order.",
+  "      A snapshot of one line up to 16 KiB can come as --snapshot-stdin.",
 ].join("\n");
 
 /** Cut a free-text summary down to one readable line. */
@@ -487,6 +527,52 @@ export function formatSitrepRow(row: SitrepRow): string {
     `worktree:${row.worktree}`,
     `interactions:${row.interactions}`,
   ].join(" · ");
+}
+
+/**
+ * The snapshot in `bb starbase publish` arguments. Every `--snapshot` value is
+ * one part, and the parts join in order into one JSON document: the bb CLI
+ * forwards argv only, and one argument has a size limit. The board refuses a
+ * row array that mission.ts refuses as a whole, so publish refuses it too.
+ */
+export function parseSnapshot(
+  args: readonly string[],
+): { snapshot: PublishedSnapshot } | { error: string } {
+  const parts: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] !== "--snapshot") {
+      return { error: `publish: unknown argument "${shorten(args[index], 40)}".` };
+    }
+    const part = args[index + 1];
+    if (part === undefined) return { error: "publish: --snapshot needs a value." };
+    parts.push(part);
+    index += 1;
+  }
+  if (parts.length === 0) {
+    return { error: "publish: no snapshot. Pass --snapshot <json>." };
+  }
+  const text = parts.join("");
+  if (text.length > SNAPSHOT_MAX_CHARS) {
+    return {
+      error: `publish: the snapshot is over ${SNAPSHOT_MAX_CHARS / 1024 / 1024} MiB.`,
+    };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { error: "publish: the snapshot is not valid JSON." };
+  }
+  const result = snapshotSchema.safeParse(parsed);
+  if (!result.success) {
+    const issue = result.error.issues[0];
+    const where = issue.path.length === 0 ? "snapshot" : issue.path.join(".");
+    return { error: shorten(`publish: ${where}: ${issue.message}.`, 200) };
+  }
+  if (readRows(result.data.rows) === null) {
+    return { error: "publish: a row has an unsupported contract_version." };
+  }
+  return { snapshot: result.data };
 }
 
 /** `~/dev/x` becomes `/Users/me/dev/x`. Anything else is returned unchanged. */
@@ -1641,6 +1727,38 @@ export default function plugin(
     },
   });
 
+  // A snapshot replaces the stored one for its project unless that one is
+  // newer, in one statement: two publishes that race cannot both win.
+  const upsertSnapshot = db.prepare(
+    `INSERT INTO sitrep_snapshot
+       (project, generated_at, host, commander, exit_code, rows, received_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (project) DO UPDATE
+       SET generated_at = excluded.generated_at, host = excluded.host,
+           commander = excluded.commander, exit_code = excluded.exit_code,
+           rows = excluded.rows, received_at = excluded.received_at
+     WHERE excluded.generated_at >= sitrep_snapshot.generated_at`,
+  );
+
+  /** Store a checked snapshot, or say why it was ignored. Both exit 0. */
+  function publish(snapshot: PublishedSnapshot): string {
+    const generatedAt = Date.parse(snapshot.generated_at);
+    const stored = upsertSnapshot.run(
+      snapshot.project,
+      generatedAt,
+      snapshot.host,
+      snapshot.commander,
+      snapshot.exit_code,
+      JSON.stringify(snapshot.rows),
+      Date.now(),
+    );
+    const when = new Date(generatedAt).toISOString();
+    if (stored.changes === 0) {
+      return `Ignored: the stored snapshot for ${snapshot.project} is newer than ${when}.`;
+    }
+    return `Stored the snapshot for ${snapshot.project} from ${snapshot.host} at ${when}: ${snapshot.rows.length} row(s), exit code ${snapshot.exit_code}.`;
+  }
+
   settings.onChange(() => {
     generation += 1;
     snapshot = null;
@@ -1650,7 +1768,7 @@ export default function plugin(
 
   bb.cli.register({
     name: "starbase",
-    summary: "Report and settle the Crew threads under a Commander",
+    summary: "Report and settle Crew threads, and store SITREP snapshots",
     commands: [
       {
         name: "sitrep",
@@ -1661,6 +1779,11 @@ export default function plugin(
         name: "settle",
         summary: "Archive a Crew thread once its worktree and PR are done",
         usage: "bb starbase settle <thread-id>",
+      },
+      {
+        name: "publish",
+        summary: "Store one SITREP snapshot for the Mission Queue board",
+        usage: "bb starbase publish --snapshot <json> [--snapshot <json> ...]",
       },
     ],
     async run(argv, ctx) {
@@ -1722,6 +1845,11 @@ export default function plugin(
             };
           }
           return await settle(threadId);
+        }
+        if (sub === "publish") {
+          const parsed = parseSnapshot(rest);
+          if ("error" in parsed) return { exitCode: 1, stderr: parsed.error };
+          return { exitCode: 0, stdout: publish(parsed.snapshot) };
         }
         return { exitCode: 1, stderr: `Unknown subcommand "${sub}".\n${USAGE}` };
       } catch (error) {
