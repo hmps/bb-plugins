@@ -131,9 +131,8 @@ const SNAPSHOT_MAX_CHARS = 8 * 1024 * 1024;
  */
 const snapshotSchema = z.strictObject({
   version: z.literal(1),
-  generated_at: z
-    .string()
-    .refine((value) => !Number.isNaN(Date.parse(value)), "is not a date"),
+  /** ISO-8601 in UTC (`Z`); a date that does not exist, such as Feb 30, is refused. */
+  generated_at: z.iso.datetime(),
   host: z.string().min(1).max(200),
   project: z.union([z.literal(ALL_PROJECTS), projectScopeSchema]),
   commander: z.string().regex(THREAD_ID_PATTERN).nullable(),

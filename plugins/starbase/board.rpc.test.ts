@@ -666,6 +666,14 @@ describe("publish", () => {
       [publishArgs(snapshot({ version: 2 })), /^publish: version: /],
       [publishArgs(snapshot({ password: "s3cret" })), /password/],
       [publishArgs(snapshot({ generated_at: "yesterday" })), /generated_at/],
+      [
+        publishArgs(snapshot({ generated_at: "2026-02-30T08:00:00Z" })),
+        /generated_at/,
+      ],
+      [
+        publishArgs(snapshot({ generated_at: "2026-10-22T10:00:00+02:00" })),
+        /generated_at/,
+      ],
       [publishArgs(snapshot({ project: "../etc" })), /project/],
       [publishArgs(snapshot({ commander: "thr_x --full" })), /commander/],
       [publishArgs(snapshot({ exit_code: 1.5 })), /exit_code/],
