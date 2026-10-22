@@ -1,8 +1,8 @@
 // The Mission Queue board, as pure functions.
 //
-// The server runs the Starbase SITREP; everything between its row array and
-// the columns the panel renders lives here, so the column rules are testable
-// without the SITREP, bd, or bb.
+// The server stores the snapshots a Starbase SITREP publishes; everything
+// between a snapshot's row array and the columns the panel renders lives
+// here, so the column rules are testable without the SITREP, bd, or bb.
 //
 // A card is one SITREP row: a mission bead, or a Crew thread under the
 // Commander that no mission bead claims. The core decides which rows exist
@@ -296,26 +296,4 @@ export function inferProject(
 export function postureValue(toml: string, key: string): string | null {
   const pattern = new RegExp(`^\\s*${key}\\s*=\\s*"([^"]*)"`, "m");
   return toml.match(pattern)?.[1] ?? null;
-}
-
-/**
- * The `password=` value under one `[section]` of an ini-style credentials
- * file. Null when the section or the key is absent.
- */
-export function credentialPassword(
-  ini: string,
-  section: string,
-): string | null {
-  let inSection = false;
-  for (const line of ini.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith("[")) {
-      inSection = trimmed === `[${section}]`;
-      continue;
-    }
-    if (inSection && trimmed.startsWith("password=")) {
-      return trimmed.slice("password=".length);
-    }
-  }
-  return null;
 }

@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildBoard,
-  credentialPassword,
   inferProject,
   parsePr,
   postureValue,
@@ -241,17 +240,10 @@ describe("inferProject", () => {
   });
 });
 
-describe("file readers", () => {
+describe("postureValue", () => {
   it("reads a quoted posture value", () => {
     const toml = 'slug = "vaam-main"\nproject_id = "proj_abc"\n';
     expect(postureValue(toml, "project_id")).toBe("proj_abc");
     expect(postureValue(toml, "missing")).toBeNull();
-  });
-
-  it("reads the password from the named section only", () => {
-    const ini =
-      "[other:1]\npassword=nope\n\n[host:3307]\nuser=root\npassword=s3cret\n";
-    expect(credentialPassword(ini, "host:3307")).toBe("s3cret");
-    expect(credentialPassword(ini, "absent")).toBeNull();
   });
 });

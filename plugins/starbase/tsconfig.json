@@ -21,6 +21,7 @@
     "mission.ts",
     "app.tsx",
     "*.test.ts",
+    "*.test.tsx",
     "components",
     "lib"
   ]

@@ -5,8 +5,8 @@
 //     lives in the route's subPath, so back/forward walks the picks;
 //   - a "Starbase board" thread panel tab, scoped to the thread's Command
 //     project. A pick made on a Commander is saved for it.
-// The server builds every column from a warm snapshot of the Starbase SITREP;
-// this file only renders them. One card is one SITREP row: a mission, or a
+// The server builds every column from the newest snapshot a Starbase SITREP
+// published; this file only renders them. One card is one SITREP row: a mission, or a
 // Crew thread that no mission bead claims. The board never writes.
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MouseEvent, ReactNode } from "react";
@@ -29,8 +29,6 @@ const PANEL_PATH = "starbase";
 const ALL = "all";
 /** How often an open board asks again. The server answers from its snapshot. */
 const AUTO_REFRESH_MS = 30_000;
-/** How soon to ask again while the server reads a newer snapshot. */
-const FOLLOW_UP_MS = 2_000;
 /** How many Done cards show before "Show all". */
 const DONE_PREVIEW = 20;
 
@@ -103,12 +101,14 @@ function age(value: string | number | null, now: number): string {
   return `${Math.round(hours / 24)}d`;
 }
 
-type SourceState = "current" | "partial" | "stale" | "unavailable";
+type SourceState = "current" | "partial" | "unavailable";
 
 interface BoardData {
   project: string;
-  generatedAt: number;
-  refreshing: boolean;
+  /** When the SITREP made the snapshot; null before the first one. */
+  generatedAt: number | null;
+  /** The host that published the snapshot; null before the first one. */
+  host: string | null;
   source: SourceState;
   error: string | null;
   projects: string[];
@@ -129,26 +129,18 @@ interface PanelData {
 }
 
 /**
- * Load `key`'s data, again every AUTO_REFRESH_MS, and again shortly while the
- * server reports that it reads a newer snapshot. `refresh` forces a new read.
- * `data` is null until the current key has answered; `last` is the latest
- * answer for any key, for the parts of the view that may lag a pick.
+ * Load `key`'s data, and again every AUTO_REFRESH_MS. `refresh` reads the
+ * stored snapshot again; it never runs a SITREP. `data` is null until the
+ * current key has answered; `last` is the latest answer for any key, for the
+ * parts of the view that may lag a pick.
  */
-function useLive<T>(
-  key: string | null,
-  load: (force: boolean) => Promise<T>,
-  refreshing: (data: T) => boolean,
-) {
+function useLive<T>(key: string | null, load: () => Promise<T>) {
   const loadRef = useRef(load);
   loadRef.current = load;
-  const refreshingRef = useRef(refreshing);
-  refreshingRef.current = refreshing;
   const [answer, setAnswer] = useState<{ key: string; data: T } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [request, setRequest] = useState(0);
-  /** Set by `refresh`; the next load forces a new read, and only that one. */
-  const forceNext = useRef(false);
   const again = useCallback(() => setRequest((count) => count + 1), []);
 
   useEffect(() => {
@@ -160,19 +152,13 @@ function useLive<T>(
   useEffect(() => {
     if (key === null) return;
     let cancelled = false;
-    let followUp: ReturnType<typeof setTimeout> | undefined;
-    const force = forceNext.current;
-    forceNext.current = false;
     setLoading(true);
-    loadRef.current(force).then(
+    loadRef.current().then(
       (data) => {
         if (cancelled) return;
         setAnswer({ key, data });
         setError(null);
         setLoading(false);
-        if (refreshingRef.current(data)) {
-          followUp = setTimeout(again, FOLLOW_UP_MS);
-        }
       },
       (cause: unknown) => {
         if (cancelled) return;
@@ -182,20 +168,15 @@ function useLive<T>(
     );
     return () => {
       cancelled = true;
-      clearTimeout(followUp);
     };
-  }, [key, request, again]);
+  }, [key, request]);
 
-  const refresh = useCallback(() => {
-    forceNext.current = true;
-    again();
-  }, [again]);
   return {
     data: answer !== null && answer.key === key ? answer.data : null,
     last: answer?.data ?? null,
     error,
     loading,
-    refresh,
+    refresh: again,
   };
 }
 
@@ -229,17 +210,22 @@ function ProjectPicker(props: {
 function Freshness(props: { board: BoardData | null }) {
   const { board } = props;
   if (board === null) return null;
-  const ago = age(board.generatedAt, Date.now());
-  const when = ago === "0m" ? "just now" : `${ago} ago`;
-  // Old rows never read as a fresh update.
-  const label = board.refreshing
-    ? "Updating…"
-    : board.source === "unavailable"
-      ? `Tried ${when}`
-      : board.source === "stale"
-        ? `Last good read ${when}`
-        : `Updated ${when}`;
-  return <span className="text-xs text-muted-foreground">{label}</span>;
+  if (board.generatedAt === null) {
+    return (
+      <span className="text-xs text-muted-foreground">No snapshot yet</span>
+    );
+  }
+  // The SITREP's own time, so old rows never read as a fresh update.
+  const time = new Date(board.generatedAt).toLocaleString(undefined, {
+    dateStyle: "short",
+    timeStyle: "short",
+  });
+  const label = `As of ${time} (${age(board.generatedAt, Date.now())} ago)`;
+  return (
+    <span className="text-xs text-muted-foreground">
+      {board.host === null ? label : `${label} · ${board.host}`}
+    </span>
+  );
 }
 
 function Toolbar(props: {
@@ -270,11 +256,9 @@ function Toolbar(props: {
 
 const SOURCE_NOTES: Record<Exclude<SourceState, "current">, string> = {
   partial:
-    "A source failed during the last SITREP run. Some cards may be incomplete.",
-  stale:
-    "The last SITREP run failed. These cards are from the last good read and may be out of date.",
+    "The last SITREP could not read a source. These cards are incomplete.",
   unavailable:
-    "No SITREP run has given missions yet. The missions are unknown, not empty.",
+    "No SITREP has published a snapshot yet. Run the SITREP to publish one.",
 };
 
 /** How far to trust the board, shown in the page, never as a notification. */
@@ -601,8 +585,7 @@ function StarbasePanel({ subPath }: PluginNavPanelProps) {
   const project = subPath === "" ? ALL : subPath.split("/")[0];
   const live = useLive<BoardData>(
     project,
-    (force) => rpc.call("board", { project, force }) as Promise<BoardData>,
-    (board) => board.refreshing,
+    () => rpc.call("board", { project }) as Promise<BoardData>,
   );
   return (
     <div className="@container flex h-full min-h-0 flex-col">
@@ -641,13 +624,11 @@ function ThreadBoard({ threadId }: { threadId: string }) {
   // One round trip gives the scope and its board together.
   const live = useLive<PanelData>(
     picked ?? "",
-    (force) =>
+    () =>
       rpc.call("panel", {
         threadId,
         ...(picked === null ? {} : { project: picked }),
-        force,
       }) as Promise<PanelData>,
-    (panel) => panel.board?.refreshing === true,
   );
   const scope = live.last?.scope ?? null;
   const project = picked ?? scope?.scope ?? null;
