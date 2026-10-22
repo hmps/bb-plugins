@@ -1,13 +1,15 @@
-// A read-only smoke against a real Base: the real SITREP (through the
-// plugin's own runner, so the password and PATH handling are the production
-// ones) and the real bb threads, read with GETs on the local bb HTTP API. It
-// prints column counts, the source state, and call timings only.
+// A read-only smoke against a real Base: a real SITREP snapshot, published
+// through the plugin's own `publish` command in 64 KiB parts as a publisher
+// sends it, and the real bb threads, read with GETs on the local bb HTTP API.
+// It prints column counts, the source state, and call timings only.
 //
-//   STARBASE_LIVE=1 STARBASE_LIVE_BASE=/path/to/starbase npx vitest run board.live
+//   STARBASE_LIVE=1 STARBASE_LIVE_BASE=/path/to/starbase \
+//     STARBASE_LIVE_SNAPSHOT=/path/to/snapshot.json npx vitest run board.live
 //
-// The Base must carry the mission state v1 SITREP: an older one gives a
-// board of pre-v1 rows, and the smoke fails. Skipped otherwise, so `npm test`
-// never touches the network.
+// The snapshot must be an `all` one with mission state v1 rows: older rows
+// give a board of pre-v1 rows, and the smoke fails. Skipped otherwise, so
+// `pnpm test` never touches the network.
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
 import plugin from "./server";
@@ -15,6 +17,9 @@ import { COLUMN_IDS } from "./board";
 
 const LIVE = process.env.STARBASE_LIVE === "1";
 const BASE = process.env.STARBASE_LIVE_BASE ?? "";
+const SNAPSHOT = process.env.STARBASE_LIVE_SNAPSHOT ?? "";
+/** The part size a publisher uses: one argv string stays far below E2BIG. */
+const PART_CHARS = 64 * 1024;
 const API = `${process.env.BB_SERVER_URL ?? "http://127.0.0.1:38886"}/api/v1`;
 const VAAM_COMMANDER = "thr_9mhukyfy2t";
 const VAAM_COMMANDER_PROJECT = "proj_s9vk5k4c9u";
@@ -105,15 +110,25 @@ function say(line: string): void {
 describe.skipIf(!LIVE)("live board", () => {
   it("prints the column counts and timings for vaam-main and all", async () => {
     expect(BASE, "set STARBASE_LIVE_BASE to a v1 Base").not.toBe("");
+    expect(SNAPSHOT, "set STARBASE_LIVE_SNAPSHOT to a snapshot").not.toBe("");
     const fake = loadPlugin();
     const call = (name: string, input: unknown) =>
       fake.harness.callRpc(name, input) as Promise<unknown>;
 
-    await timed("first board call after load (all)", () =>
-      call("board", { project: "all" }),
+    const document = JSON.stringify(JSON.parse(readFileSync(SNAPSHOT, "utf8")));
+    const args = ["publish"];
+    for (let at = 0; at < document.length; at += PART_CHARS) {
+      args.push("--snapshot", document.slice(at, at + PART_CHARS));
+    }
+    const published = await timed(
+      `publish (${document.length} chars, ${(args.length - 1) / 2} parts)`,
+      () => fake.harness.runCli(args),
     );
+    say(published.stdout || published.stderr);
+    expect(published.exitCode).toBe(0);
+
     for (const project of ["vaam-main", "all"]) {
-      const board = (await timed(`warm board call (${project})`, () =>
+      const board = (await timed(`board call (${project})`, () =>
         call("board", { project }),
       )) as Board;
       say(`${project}: ${board.source} ${counts(board)}`);
@@ -131,11 +146,6 @@ describe.skipIf(!LIVE)("live board", () => {
     await timed(`panel call (${VAAM_COMMANDER}, warm)`, () =>
       call("panel", { threadId: VAAM_COMMANDER }),
     );
-    await timed("forced board call (all)", () =>
-      call("board", { project: "all", force: true }),
-    );
     await fake.harness.dispose();
-    // Two full SITREP runs (the first call and the forced one) of up to five
-    // minutes each, plus the thread reads.
-  }, 900_000);
+  }, 120_000);
 });

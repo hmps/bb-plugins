@@ -10,7 +10,8 @@ a Commander, whatever project the Crew thread itself runs in.
 
 bb already pushes a Crew thread's completion message to its parent, so a
 finished Mission needs no plugin. This plugin, the Sentinel, covers the two
-cases the push does not, and adds two commands.
+cases the push does not, adds two commands, and stores the SITREP snapshots
+that the Mission Queue board shows.
 
 ## What it does
 
@@ -87,6 +88,11 @@ thread that is not a Commander.
 
 Like `settle`, the SITREP lists hidden Crew threads and reads every page. It
 refuses rather than report a partial list.
+
+### `bb starbase publish --snapshot <json> [--snapshot <json> ...]`
+
+Store one SITREP snapshot for the Mission Queue board. A Starbase SITREP run
+calls this command; see [Publishing a snapshot](#publishing-a-snapshot).
 
 ### `bb starbase settle <thread-id>`
 
@@ -205,23 +211,82 @@ places:
 ### Where the board reads from
 
 The board is a view of the Starbase SITREP, mission state contract v1. It
-derives no mission state of its own. The server runs this command in the
-Base root:
+derives no mission state of its own, and it never runs the SITREP. Each SITREP
+run, on any machine, publishes one snapshot with `bb starbase publish`. The
+plugin stores the newest snapshot for each project, and the board shows it.
 
-```bash
-bash scripts/sitrep.sh --project all --commander <sitrepCommander> --recent-closed 50 --json
-```
-
-The SITREP prints one JSON row per mission: every open mission bead, the 50
-most recent closed ones, and each Crew thread under the Commander that no
-mission bead claims. Each row has `contract_version: 1` and a `mission_state`
-that the core projects. The board copies the next action, the owner, and the
-pending attention from that state. The contract is pinned in
+A snapshot holds one JSON row per mission: every open mission bead, the most
+recent closed ones, and each Crew thread under the Commander that no mission
+bead claims. Each row has `contract_version: 1` and a `mission_state` that the
+core projects. The board copies the next action, the owner, and the pending
+attention from that state. The contract is pinned in
 [`fixtures/mission-state-v1/`](fixtures/mission-state-v1/SOURCE.md).
 
-The Base must carry the v1 SITREP. An older SITREP prints rows with no
-`contract_version`. The board shows each such row as "Pre-v1 row" in
-Commander review.
+A row with no `contract_version` is from an older SITREP. The board shows each
+such row as "Pre-v1 row" in Commander review.
+
+### Publishing a snapshot
+
+A snapshot is one JSON document:
+
+```json
+{"version":1,"generated_at":"2026-10-22T08:00:00Z","host":"titan","project":"all","commander":"thr_9mhukyfy2t","exit_code":0,"rows":[...]}
+```
+
+| Key | Value |
+| --- | --- |
+| `version` | `1`. |
+| `generated_at` | When the SITREP ran, as an ISO-8601 UTC time. |
+| `host` | The hostname of the machine that ran the SITREP. |
+| `project` | The project slug the SITREP read, or `all`. |
+| `commander` | The Commander thread id the SITREP read (`thr_...`), or `null`. |
+| `exit_code` | The SITREP's exit code. |
+| `rows` | The SITREP's row array. |
+
+The rules:
+
+- The plugin stores the newest document for each `project`. A document with an
+  older `generated_at` is ignored: the command exits 0 and says so. A document
+  with an equal or newer `generated_at` replaces the stored one.
+- An `exit_code` other than 0 means that a source could not be read, so the
+  rows are incomplete. The board shows them as partial, never as current.
+- The schema is strict. A document with an unknown top-level key is refused,
+  so a document never carries a credential.
+- A row with a `contract_version` other than 1 refuses the whole document.
+- The command exits 0 when it stores or ignores a valid document. It exits 1
+  with a one-line message for invalid input: bad JSON, a wrong `version`, an
+  unknown key, a bad value, or more than 8 MiB.
+
+The CLI takes the document in argv, never in a file. Send ASCII JSON
+(`jq -ac`) and split it into parts of at most 64 KiB. Pass each part as one
+`--snapshot`; the plugin joins the parts in order and parses them as one
+document. Linux refuses one argv string over 128 KiB (`E2BIG`); twelve 64 KiB
+parts reach the plugin.
+
+```bash
+jq -ac --arg host "$(hostname)" '{version: 1, generated_at: (now | todate),
+  host: $host, project: "all", commander: null, exit_code: 0, rows: .}' \
+  rows.json > snapshot.json
+args=()
+while IFS= read -r part; do args+=(--snapshot "$part"); done \
+  < <(fold -b -w 65536 snapshot.json)
+bb starbase publish "${args[@]}"
+```
+
+`fold -b` cuts at bytes, and the JSON is ASCII, so no part splits a character.
+A small document of one line, at most 16 KiB, can also come on stdin:
+
+```bash
+jq -c . snapshot.json | bb starbase publish --snapshot-stdin
+```
+
+### Which snapshot a board shows
+
+- The board for a project shows the newer of that project's snapshot and the
+  `all` snapshot.
+- The "All projects" board shows only the `all` snapshot.
+- The picker offers every posture slug, every project with a stored snapshot,
+  and every project a stored mission names.
 
 ### Columns
 
@@ -271,64 +336,39 @@ Only the pending attention and the lifecycle make a card ask for the user's
 eye. Report problems show as text on the card. The board sends no
 notification.
 
-### When a source fails
+### How far to trust the board
 
-The board header says how far to trust the cards:
+The board header shows the snapshot time, its age, and the host that
+published it, for example "As of 22/10/2026, 10:00 (5m ago) · titan". Before
+the first snapshot, it shows "No snapshot yet".
 
 | Source | When | The board shows |
 | --- | --- | --- |
-| current | The SITREP exits 0 with a row array. | The cards, "Updated <time>". |
-| partial | The SITREP exits 1 with a row array: a source failed during the run. | The cards, with a notice and the SITREP's error. A card that the failure touched can carry `source-error`. |
-| stale | The run failed, but an earlier run gave rows. | The last good cards, "Last good read <time>", and the error. |
-| unavailable | No run has given rows yet. | No columns. A notice says the missions are unknown, not empty. |
+| current | The shown snapshot has `exit_code` 0. | The cards. |
+| partial | The shown snapshot has another `exit_code`. | The cards, with a warning that the last SITREP could not read a source and the cards are incomplete, and the exit code. A card that the failure touched can carry `source-error`. |
+| unavailable | No snapshot covers the board yet. | No columns. A notice says that no SITREP has published a snapshot yet. |
 
-A run fails when the SITREP exits with any other code, prints no row array,
-times out after 5 minutes, or prints a row with an unsupported
-`contract_version`. One such row fails the whole run.
-
-### Warm snapshot
-
-The board answers from a warm snapshot, so the panel opens fast:
-
-- The first board call after the plugin loads reads the snapshot and waits for
-  it. Every later call answers at once from the snapshot.
-- No automatic read starts until the last read finished 5 minutes ago, also
-  when it failed. One full SITREP can take minutes, so reads must not run
-  back to back. A thread change does not start a read; Refresh reads it.
-- When the snapshot is 5 minutes old, the next call answers from the old
-  snapshot and reads a new one behind it. The board then shows "Updating…"
-  and asks again shortly.
-- While somebody used the board in the last 10 minutes, the snapshot is read
-  again when it is 5 minutes old. Only one read runs at a time.
-- Refresh reads a new snapshot and waits for it. A Refresh while a read runs
-  waits for that read; it does not start a second one.
-- The thread panel gets its scope and its board in one call. A Commander's
-  inferred project is cached for 5 minutes; a pick clears it.
+The board reads the stored snapshots again every 30 seconds while it is open.
+Refresh reads them again at once. It never runs a SITREP. The thread panel
+gets its scope and its board in one call. A Commander's inferred project is
+cached for 5 minutes; a pick clears it.
 
 ### The board only reads
 
-- It runs the SITREP command above. The SITREP itself only reads: it runs
-  `bd` read-only, reads bb threads, and reads the forge. It needs `bash`,
-  `bd`, `bb`, `jq`, and `python3` on the plugin server's PATH. The directory
-  of `bdPath` goes first on that PATH.
-- It reads the Dolt password from `~/.config/beads/credentials`, section
-  `[100.85.132.50:3307]`, for each run. The password goes only into the
-  SITREP process environment as `BEADS_DOLT_PASSWORD`. It is never stored or
-  sent to the panel, and the board removes it from the error text.
+- It reads the snapshots stored in its own database.
 - It reads `projects/*/posture.toml` for the project list and `project_id`.
 - It reads no thread through the bb SDK for the board.
 
-It never writes a bead, never runs a `bd` write command, and has no board
-action that writes. Each column sends at most 150 cards and the full count.
+It runs no process, never writes a bead, and has no board action that writes.
+Only `bb starbase publish` writes a snapshot. Each column sends at most 150
+cards and the full count.
 
 ## Settings
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `commanderProjectIds` | `proj_s9vk5k4c9u` | Projects whose threads act as Commanders. One project id per line, or separated by commas. |
-| `baseRoot` | `/Users/hmps/dev/starbase` | The Starbase checkout. The board runs `scripts/sitrep.sh` here and reads `projects/*/posture.toml`. |
-| `sitrepCommander` | `thr_9mhukyfy2t` | The Commander thread the SITREP reads (`--commander`). Its Crew threads that no mission bead claims show as their own cards. Must be a thread id. |
-| `bdPath` | `bd` | The `bd` executable the SITREP uses. A bare name is looked up on PATH, then in the usual install locations (mise shims, `~/.local/bin`, `~/go/bin`, Homebrew). Its directory goes first on the SITREP's PATH. |
+| `baseRoot` | `/Users/hmps/dev/starbase` | The Starbase checkout. The board reads `projects/*/posture.toml` here. |
 
 A Commander is a root thread in one of these projects. Its Crew are its child
 threads. A Commander can therefore dispatch a Survey Mission inside its own
@@ -337,22 +377,26 @@ Base project and still get the relays.
 ## Develop
 
 ```bash
-npm install --legacy-peer-deps
-npm run typecheck
-npm test
-npm run build
+pnpm install --ignore-workspace
+pnpm typecheck
+pnpm test
+pnpm build
 ```
 
-A plain `npm install` fails in npm 10 on vitest's optional peers, so use
-`--legacy-peer-deps`.
+npm fails on vitest's optional peers, so use pnpm. pnpm 10 can skip the
+better-sqlite3 build script. Then run `npx prebuild-install` in
+`node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3`.
 
-The board tests run a synthetic SITREP. Its rows come from the pinned core
-full rows in `fixtures/mission-state-v1/full-rows/`.
+The board tests publish synthetic snapshots through the `publish` command.
+Their rows come from the pinned core full rows in
+`fixtures/mission-state-v1/full-rows/`. The panel tests render the app with
+the SDK app harness.
 
-The live smoke runs the real SITREP in a Base that you name, and reads real
+The live smoke publishes a real `all` snapshot that you name, and reads real
 threads through the local bb API. It only reads, and it prints the column
-counts. It fails when the Base SITREP is older than v1:
+counts. It fails when the snapshot rows are older than v1:
 
 ```bash
-STARBASE_LIVE=1 STARBASE_LIVE_BASE=/path/to/starbase npx vitest run board.live
+STARBASE_LIVE=1 STARBASE_LIVE_BASE=/path/to/starbase \
+  STARBASE_LIVE_SNAPSHOT=/path/to/snapshot.json npx vitest run board.live
 ```

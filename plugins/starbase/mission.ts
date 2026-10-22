@@ -289,19 +289,26 @@ export interface SitrepRead<Row = Json> {
   error: string | null;
 }
 
-function parseRows(stdout: string): Json[] | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(parsed) || !parsed.every(isObject)) return null;
-  const supported = parsed.every(
+/**
+ * A SITREP row array as the board reads it, or null when the board refuses it
+ * as a whole: it is no array of objects, or a row has an unsupported
+ * `contract_version`.
+ */
+export function readRows(value: unknown): Json[] | null {
+  if (!Array.isArray(value) || !value.every(isObject)) return null;
+  const supported = value.every(
     (row) =>
       !("contract_version" in row) || row.contract_version === CONTRACT_VERSION,
   );
-  return supported ? parsed : null;
+  return supported ? value : null;
+}
+
+function parseRows(stdout: string): Json[] | null {
+  try {
+    return readRows(JSON.parse(stdout));
+  } catch {
+    return null;
+  }
 }
 
 export function consumeSitrep<Row = Json>(

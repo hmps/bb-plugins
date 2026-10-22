@@ -15,17 +15,17 @@
 // carries a unique dedupe key, so a replay of the same event is ignored; a
 // failed send releases the key so the next identical event tries again.
 //
-// The plugin also serves the Mission Queue board, read-only. It keeps a warm
-// snapshot of one Starbase SITREP run in the Base: every mission row with
-// the `mission_state` the core projects (contract v1, mission.ts). The pure
-// rules in board.ts and mission.ts turn the rows into columns. The SITREP
-// only reads; the board never writes a bead, a receipt, or any state.
-import { execFile } from "node:child_process";
+// The plugin also serves the Mission Queue board, read-only. The plugin never
+// runs the SITREP: each SITREP run, on any machine, publishes one snapshot
+// with `bb starbase publish`, and the board shows the newest one stored. A
+// snapshot holds every mission row with the `mission_state` the core projects
+// (contract v1, mission.ts). The pure rules in board.ts and mission.ts turn
+// the rows into columns. The board never writes a bead, a receipt, or any
+// state.
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { delimiter, dirname, isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import {
   defineRpcContract,
   type BbPluginApi,
@@ -35,13 +35,12 @@ import { z } from "zod";
 import {
   COLUMN_IDS,
   buildBoard,
-  credentialPassword,
   inferProject,
   postureValue,
   toCards,
   type BoardCard,
 } from "./board.js";
-import { consumeSitrep, type SitrepRead } from "./mission.js";
+import { readRows } from "./mission.js";
 
 /**
  * The SDK does not export the pending-interaction DTO by name, so the event
@@ -59,16 +58,14 @@ interface Posture {
   projectId: string | null;
 }
 
-/** What the board answers from: the latest SITREP read, and the postures. */
-interface Snapshot {
-  /** When the SITREP last ran, whatever it gave. Drives the refresh. */
-  fetchedAt: number;
-  /** When the rows shown were read. Older than fetchedAt while stale. */
-  rowsAt: number | null;
-  read: SitrepRead;
-  /** The rows as cards, in SITREP order; null while the source is unavailable. */
-  cards: BoardCard[] | null;
-  postures: Posture[];
+/** One stored SITREP snapshot, its rows as cards in SITREP order. */
+interface StoredSnapshot {
+  /** A project slug, or "all". */
+  project: string;
+  generatedAt: number;
+  host: string;
+  exitCode: number;
+  cards: BoardCard[];
 }
 
 /** One row of `bb.sdk.threads.list`, which is not the same DTO as a thread. */
@@ -99,65 +96,51 @@ const LIST_MAX_PAGES = 50;
 /** The refusal when the descendant set could not be shown to be complete. */
 const ENUMERATION_FAILED = "settle: could not enumerate all descendants";
 
-/** The Base checkout: the SITREP runs here, and `projects/` holds the postures. */
+/** The Base checkout: `projects/` holds the postures. */
 export const DEFAULT_BASE_ROOT = "/Users/hmps/dev/starbase";
 
-/**
- * Where the Mission Queue's Dolt password lives. The board reads it on every
- * SITREP run and passes it in the child's environment only; it is never
- * stored, logged, or returned.
- */
-const DOLT_CREDENTIALS_FILE = "~/.config/beads/credentials";
-const DOLT_CREDENTIALS_SECTION = "100.85.132.50:3307";
-
-/** The Commander whose Crew the SITREP reads, when the setting is not changed. */
-const DEFAULT_SITREP_COMMANDER = "thr_9mhukyfy2t";
-/** A thread id as bb writes it. Nothing else reaches the SITREP arguments. */
+/** A thread id as bb writes it. A published Commander must be one. */
 const THREAD_ID_PATTERN = /^thr_[A-Za-z0-9]+$/;
-/** How many closed missions the SITREP adds after the open ones. */
-const SITREP_RECENT_CLOSED = "50";
-/** The SITREP, from the Base root. It reads only: no reconcile, no receipt. */
-function sitrepArgs(commander: string): string[] {
-  return [
-    "scripts/sitrep.sh",
-    "--project",
-    "all",
-    "--commander",
-    commander,
-    "--recent-closed",
-    SITREP_RECENT_CLOSED,
-    "--json",
-  ];
-}
-/** A full SITREP of a large Base takes minutes; a longer run fails. */
-const SITREP_TIMEOUT_MS = 5 * 60_000;
-const SITREP_MAX_BUFFER = 50 * 1024 * 1024;
-/** How much of the SITREP's stderr rides along in an error message. */
-const STDERR_LIMIT = 2 * 1024;
 
-/**
- * The board answers from a warm snapshot of the last SITREP run. No automatic
- * read starts until the last run finished this long ago, also when it failed:
- * one run can take minutes, and back-to-back runs would keep the Base busy.
- * A snapshot this old is served at once and read again behind it. Refresh
- * still reads at once.
- */
-const SNAPSHOT_MAX_AGE_MS = 5 * 60_000;
-/** How often the timer checks the snapshot's age while somebody uses the board. */
-const SNAPSHOT_REFRESH_MS = 30_000;
-/** With no board call for this long, the background reads stop. */
-const SNAPSHOT_IDLE_MS = 10 * 60_000;
 /** How long a Commander's project, inferred from its Crew, stays known. */
 const COMMANDER_PROJECT_CACHE_MS = 5 * 60_000;
 
 /** A project slug as a posture directory names it. Nothing else reaches a path. */
 const PROJECT_SLUG_PATTERN = /^[A-Za-z0-9._-]+$/;
 
+/** The snapshot and board scope that covers every project. */
+const ALL_PROJECTS = "all";
+
 const projectScopeSchema = z
   .string()
   .min(1)
   .max(100)
   .regex(PROJECT_SLUG_PATTERN);
+
+/**
+ * The most one published snapshot may hold, all `--snapshot` parts together.
+ * A full SITREP of a large Base is well under one MiB.
+ */
+const SNAPSHOT_MAX_CHARS = 8 * 1024 * 1024;
+
+/**
+ * One published SITREP run, as `bb starbase publish` takes it. The schema is
+ * shared with the SITREP publishers, so it is strict: a key it does not name
+ * is refused, and with it anything a publisher should not send, such as a
+ * credential.
+ */
+const snapshotSchema = z.strictObject({
+  version: z.literal(1),
+  /** ISO-8601 in UTC (`Z`); a date that does not exist, such as Feb 30, is refused. */
+  generated_at: z.iso.datetime(),
+  host: z.string().min(1).max(200),
+  project: z.union([z.literal(ALL_PROJECTS), projectScopeSchema]),
+  commander: z.string().regex(THREAD_ID_PATTERN).nullable(),
+  exit_code: z.number().int(),
+  rows: z.array(z.record(z.string(), z.unknown())),
+});
+
+export type PublishedSnapshot = z.infer<typeof snapshotSchema>;
 
 const boardCardSchema = z
   .object({
@@ -191,21 +174,17 @@ const boardCardSchema = z
 const boardSchema = z
   .object({
     project: z.string(),
+    /** When the SITREP run shown ran; null with no snapshot. */
+    generatedAt: z.number().nullable(),
+    /** The machine that published it; null with no snapshot. */
+    host: z.string().nullable(),
     /**
-     * When the rows on this board were read. While `source` is `stale` this
-     * is the last good read, not the failed one; with no rows, the last try.
+     * How far to trust the rows. `current`: the SITREP run exited 0.
+     * `partial`: a source could not be read, so some rows may be missing.
+     * `unavailable`: no snapshot yet; the columns are empty, not clear.
      */
-    generatedAt: z.number(),
-    /** True while a newer snapshot is being read; ask again shortly. */
-    refreshing: z.boolean(),
-    /**
-     * How far to trust the rows. `current`: the last SITREP run succeeded.
-     * `partial`: it ran, but a source failed, so some rows are incomplete.
-     * `stale`: it failed, and these are the rows of an older run.
-     * `unavailable`: no run gave rows yet; the columns are empty, not clear.
-     */
-    source: z.enum(["current", "partial", "stale", "unavailable"]),
-    /** What the last SITREP run reported on failure; null when it succeeded. */
+    source: z.enum(["current", "partial", "unavailable"]),
+    /** Why the rows are partial; null otherwise. */
     error: z.string().nullable(),
     projects: z.array(z.string()),
     columns: z.array(
@@ -244,8 +223,6 @@ export const starbaseRpcContract = defineRpcContract({
       .object({
         threadId: z.string().min(1).max(200),
         project: projectScopeSchema.optional(),
-        /** Read a new snapshot and wait for it. */
-        force: z.boolean().optional(),
       })
       .strict(),
     output: z
@@ -264,34 +241,10 @@ export const starbaseRpcContract = defineRpcContract({
   },
   /** The board for one project slug, or `"all"`. */
   board: {
-    input: z
-      .object({
-        project: projectScopeSchema,
-        /** Read a new snapshot and wait for it. */
-        force: z.boolean().optional(),
-      })
-      .strict(),
+    input: z.object({ project: projectScopeSchema }).strict(),
     output: boardSchema,
   },
 });
-
-/** One finished SITREP run. A run that could not start has no exit code. */
-export interface SitrepResult {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-/** How the plugin runs the SITREP. Injected in tests, execFile in production. */
-export type SitrepRunner = (
-  args: string[],
-  options: { cwd: string },
-) => Promise<SitrepResult>;
-
-export interface StarbasePluginOptions {
-  /** Overrides the execFile runner; tests pass a synthetic SITREP. */
-  runSitrep?: SitrepRunner;
-}
 
 /**
  * How bb reports "you asked to start a turn on a thread that is already
@@ -339,6 +292,17 @@ const migrations = [
      project      TEXT NOT NULL,
      updated_at   INTEGER NOT NULL
    )`,
+  // The newest published SITREP per project slug, or "all". `rows` is the
+  // row array as JSON; the times are epoch milliseconds.
+  `CREATE TABLE IF NOT EXISTS sitrep_snapshot (
+     project      TEXT PRIMARY KEY,
+     generated_at INTEGER NOT NULL,
+     host         TEXT NOT NULL,
+     commander    TEXT,
+     exit_code    INTEGER NOT NULL,
+     rows         TEXT NOT NULL,
+     received_at  INTEGER NOT NULL
+   )`,
 ];
 
 /** A mission event as the CLI reports it. */
@@ -375,6 +339,9 @@ const USAGE = [
   "      Report every Crew thread under a Commander.",
   "  bb starbase settle <thread-id>",
   "      Archive a Crew thread once its worktree is clean and its PR is closed.",
+  "  bb starbase publish --snapshot <json> [--snapshot <json> ...]",
+  "      Store one SITREP snapshot for the board. The parts join in order.",
+  "      A snapshot of one line up to 16 KiB can come as --snapshot-stdin.",
 ].join("\n");
 
 /** Cut a free-text summary down to one readable line. */
@@ -489,6 +456,52 @@ export function formatSitrepRow(row: SitrepRow): string {
   ].join(" · ");
 }
 
+/**
+ * The snapshot in `bb starbase publish` arguments. Every `--snapshot` value is
+ * one part, and the parts join in order into one JSON document: the bb CLI
+ * forwards argv only, and one argument has a size limit. The board refuses a
+ * row array that mission.ts refuses as a whole, so publish refuses it too.
+ */
+export function parseSnapshot(
+  args: readonly string[],
+): { snapshot: PublishedSnapshot } | { error: string } {
+  const parts: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] !== "--snapshot") {
+      return { error: `publish: unknown argument "${shorten(args[index], 40)}".` };
+    }
+    const part = args[index + 1];
+    if (part === undefined) return { error: "publish: --snapshot needs a value." };
+    parts.push(part);
+    index += 1;
+  }
+  if (parts.length === 0) {
+    return { error: "publish: no snapshot. Pass --snapshot <json>." };
+  }
+  const text = parts.join("");
+  if (text.length > SNAPSHOT_MAX_CHARS) {
+    return {
+      error: `publish: the snapshot is over ${SNAPSHOT_MAX_CHARS / 1024 / 1024} MiB.`,
+    };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { error: "publish: the snapshot is not valid JSON." };
+  }
+  const result = snapshotSchema.safeParse(parsed);
+  if (!result.success) {
+    const issue = result.error.issues[0];
+    const where = issue.path.length === 0 ? "snapshot" : issue.path.join(".");
+    return { error: shorten(`publish: ${where}: ${issue.message}.`, 200) };
+  }
+  if (readRows(result.data.rows) === null) {
+    return { error: "publish: a row has an unsupported contract_version." };
+  }
+  return { snapshot: result.data };
+}
+
 /** `~/dev/x` becomes `/Users/me/dev/x`. Anything else is returned unchanged. */
 export function expandHome(value: string, home: string = homedir()): string {
   const trimmed = value.trim();
@@ -497,121 +510,7 @@ export function expandHome(value: string, home: string = homedir()): string {
   return trimmed;
 }
 
-/**
- * Where `bd` usually lives when the bb server's PATH does not carry it. The
- * server is a launchd/daemon process, so mise shims and user bin dirs are
- * often missing from its PATH even though the shell finds them.
- */
-export function bdCandidates(home: string = homedir()): string[] {
-  return [
-    join(home, ".local/share/mise/shims/bd"),
-    join(home, ".local/bin/bd"),
-    join(home, "go/bin/bd"),
-    "/opt/homebrew/bin/bd",
-    "/usr/local/bin/bd",
-  ];
-}
-
-/**
- * The executable to run. A configured value with a slash is used as is. A bare
- * name is looked up on PATH, then in the usual install locations; when nothing
- * matches, the bare name is returned so execFile reports ENOENT with a clear
- * message.
- */
-export function resolveBdPath(
-  configured: string,
-  options: {
-    path?: string;
-    home?: string;
-    exists?: (file: string) => boolean;
-  } = {},
-): string {
-  const name = expandHome(configured, options.home) || "bd";
-  if (name.includes("/")) return name;
-  const exists = options.exists ?? existsSync;
-  const pathValue = options.path ?? process.env.PATH ?? "";
-  for (const dir of pathValue.split(delimiter)) {
-    if (dir !== "" && exists(join(dir, name))) return join(dir, name);
-  }
-  if (name === "bd") {
-    const found = bdCandidates(options.home).find((file) => exists(file));
-    if (found !== undefined) return found;
-  }
-  return name;
-}
-
-/** Replace every copy of a secret in text that may reach a log or a client. */
-export function redact(value: string, secret: string | null): string {
-  return secret === null || secret === ""
-    ? value
-    : value.split(secret).join("***");
-}
-
-/**
- * The Mission Queue's Dolt password, read fresh from the credentials file.
- * Null when the file or the entry is absent; bd then reports its own error.
- */
-async function readDoltPassword(): Promise<string | null> {
-  try {
-    const ini = await readFile(expandHome(DOLT_CREDENTIALS_FILE), "utf8");
-    return credentialPassword(ini, DOLT_CREDENTIALS_SECTION);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Run the SITREP with `bash`, never a shell string, and the Dolt password in
- * the child's environment only. The directory of the bd the settings name
- * goes first on PATH, so the SITREP's own bd calls find it. A failed run
- * resolves with its exit code and stderr: consumeSitrep decides what it
- * means. Every error text is redacted before it leaves, in case a tool echoes
- * its connection string.
- */
-function defaultRunSitrep(bdFile: string): SitrepRunner {
-  return async (args, { cwd }) => {
-    const password = await readDoltPassword();
-    const env: NodeJS.ProcessEnv = { ...process.env };
-    if (password !== null) env.BEADS_DOLT_PASSWORD = password;
-    if (isAbsolute(bdFile)) {
-      env.PATH = [dirname(bdFile), env.PATH ?? ""].join(delimiter);
-    }
-    return new Promise<SitrepResult>((resolve) => {
-      execFile(
-        "bash",
-        args,
-        { cwd, env, timeout: SITREP_TIMEOUT_MS, maxBuffer: SITREP_MAX_BUFFER },
-        (error, stdout, stderr) => {
-          const clean = (value: string) =>
-            shorten(redact(value, password), STDERR_LIMIT);
-          if (error === null) {
-            resolve({ exitCode: 0, stdout, stderr: clean(stderr) });
-            return;
-          }
-          const code = (error as NodeJS.ErrnoException).code;
-          let detail = clean(stderr);
-          if (code === "ENOENT") {
-            detail = `bash was not found, or the Base root "${cwd}" does not exist.`;
-          } else if (error.killed) {
-            detail = `The SITREP did not finish in ${SITREP_TIMEOUT_MS / 1000}s.`;
-          } else if (detail === "") {
-            detail = clean(error.message);
-          }
-          resolve({
-            exitCode: typeof code === "number" && !error.killed ? code : null,
-            stdout,
-            stderr: detail,
-          });
-        },
-      );
-    });
-  };
-}
-
-export default function plugin(
-  bb: BbPluginApi,
-  options: StarbasePluginOptions = {},
-) {
+export default function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
     [COMMANDER_PROJECTS_SETTING]: {
       type: "string",
@@ -625,22 +524,8 @@ export default function plugin(
       type: "string",
       label: "Base root",
       description:
-        "The Starbase checkout. The board runs scripts/sitrep.sh here and reads projects/*/posture.toml.",
+        "The Starbase checkout. The board reads projects/*/posture.toml here.",
       default: DEFAULT_BASE_ROOT,
-    },
-    sitrepCommander: {
-      type: "string",
-      label: "SITREP Commander thread",
-      description:
-        "The Commander thread whose Crew the board's SITREP reads (--commander). Its Crew without a mission bead show as their own cards.",
-      default: DEFAULT_SITREP_COMMANDER,
-    },
-    bdPath: {
-      type: "string",
-      label: "Beads CLI path",
-      description:
-        "The bd executable the SITREP uses. A bare name is looked up on PATH, then in the usual install locations; its directory goes first on the SITREP's PATH.",
-      default: "bd",
     },
   });
 
@@ -1345,26 +1230,6 @@ export default function plugin(
     return root;
   }
 
-  /** The Commander whose Crew the SITREP reads, checked before it is passed on. */
-  async function sitrepCommander(): Promise<string> {
-    const { sitrepCommander: value } = await settings.get();
-    const commander = value.trim();
-    if (!THREAD_ID_PATTERN.test(commander)) {
-      throw new Error(
-        `The SITREP Commander setting "${commander}" is not a thread id.`,
-      );
-    }
-    return commander;
-  }
-
-  async function runSitrep(): Promise<SitrepResult> {
-    const args = sitrepArgs(await sitrepCommander());
-    const cwd = await baseRoot();
-    if (options.runSitrep !== undefined) return options.runSitrep(args, { cwd });
-    const { bdPath } = await settings.get();
-    return defaultRunSitrep(resolveBdPath(bdPath))(args, { cwd });
-  }
-
   /** Every posture slug in the Base, with its bb project id when it names one. */
   async function loadPostures(): Promise<Posture[]> {
     const projectsDir = join(await baseRoot(), "projects");
@@ -1395,95 +1260,83 @@ export default function plugin(
     return postures.sort((a, b) => a.slug.localeCompare(b.slug));
   }
 
-  // The snapshot: the last SITREP run and the postures. A board call answers
-  // from it at once and, when it is old, runs the SITREP again behind the
-  // answer. Only one run happens at a time; every
-  // caller in the meantime shares it. Only the first call after load, and a
-  // forced one, wait for a run. A failed run never throws: its rows, or the
-  // older rows marked stale, or no rows at all, are the snapshot.
+  // The board reads the stored snapshots on every call. They change only when
+  // a SITREP publishes, and a call costs a few small reads.
 
-  let snapshot: Snapshot | null = null;
-  let inFlight: Promise<Snapshot> | null = null;
-  let lastUsedAt = 0;
-  /** Bumped when the settings change, so a read of the old Base is dropped. */
-  let generation = 0;
+  const selectSnapshots = db.prepare(
+    `SELECT project, generated_at, host, exit_code, rows FROM sitrep_snapshot`,
+  );
 
-  async function readSitrep(prior: Snapshot | null): Promise<Snapshot> {
-    const postures = loadPostures().catch(() => prior?.postures ?? []);
-    let result: SitrepResult;
-    try {
-      result = await runSitrep();
-    } catch (error) {
-      result = { exitCode: null, stdout: "", stderr: describe(error) };
-    }
-    const priorRows = prior?.read.rows ?? null;
-    const read = consumeSitrep(
-      result.exitCode ?? -1,
-      result.stdout,
-      result.stderr,
-      priorRows,
-    );
-    const now = Date.now();
-    const fresh = read.rows !== null && !read.stale;
-    const cards = fresh
-      ? toCards(read.rows ?? [])
-      : read.rows === null
-        ? null
-        : (prior?.cards ?? null);
-    if (read.error !== null) {
-      bb.log.warn(`starbase: SITREP read failed: ${read.error}`);
-    }
-    return {
-      fetchedAt: now,
-      rowsAt: fresh ? now : (prior?.rowsAt ?? null),
-      read,
-      cards,
-      postures: await postures,
-    };
-  }
-
-  function refresh(): Promise<Snapshot> {
-    if (inFlight !== null) return inFlight;
-    const started = generation;
-    const read = readSitrep(snapshot).then((next) => {
-      // Cleared before any caller sees the answer, so it is not
-      // "refreshing". A settings change already dropped this read.
-      if (started === generation) {
-        snapshot = next;
-        inFlight = null;
-      }
-      return next;
-    });
-    inFlight = read;
-    return read;
-  }
-
-  /** Whether an automatic read may start: the last run finished long enough ago. */
-  function due(): boolean {
-    return (
-      snapshot !== null &&
-      Date.now() - snapshot.fetchedAt >= SNAPSHOT_MAX_AGE_MS
+  /** Every stored snapshot, by project. */
+  function loadSnapshots(): Map<string, StoredSnapshot> {
+    const stored = selectSnapshots.all() as {
+      project: string;
+      generated_at: number;
+      host: string;
+      exit_code: number;
+      rows: string;
+    }[];
+    return new Map(
+      stored.map((row) => [
+        row.project,
+        {
+          project: row.project,
+          generatedAt: row.generated_at,
+          host: row.host,
+          exitCode: row.exit_code,
+          cards: toCards(JSON.parse(row.rows) as unknown[]),
+        },
+      ]),
     );
   }
 
-  /** The snapshot to answer from now. Waits only when there is none, or on force. */
-  async function currentSnapshot(force: boolean): Promise<Snapshot> {
-    lastUsedAt = Date.now();
-    if (force || snapshot === null) return refresh();
-    if (due()) void refresh();
-    return snapshot;
+  /** The postures, or none when the Base cannot be read. */
+  function postures(): Promise<Posture[]> {
+    return loadPostures().catch(() => []);
   }
 
-  const refreshTimer = setInterval(() => {
-    if (Date.now() - lastUsedAt < SNAPSHOT_IDLE_MS && due()) void refresh();
-  }, SNAPSHOT_REFRESH_MS);
-  refreshTimer.unref?.();
-  bb.onDispose(() => clearInterval(refreshTimer));
+  /**
+   * The snapshot a project's board shows: the newer of its own and the
+   * "all" one. The "all" board shows only the "all" snapshot.
+   */
+  function snapshotFor(
+    snapshots: ReadonlyMap<string, StoredSnapshot>,
+    project: string,
+  ): StoredSnapshot | null {
+    const all = snapshots.get(ALL_PROJECTS) ?? null;
+    const own = project === ALL_PROJECTS ? null : (snapshots.get(project) ?? null);
+    if (own === null || all === null) return own ?? all;
+    return own.generatedAt >= all.generatedAt ? own : all;
+  }
 
-  /** The picker's choices: every posture slug and every slug a mission carries. */
-  function projectSlugs(snap: Snapshot): string[] {
-    const slugs = new Set(snap.postures.map((posture) => posture.slug));
-    for (const card of snap.cards ?? []) {
+  /**
+   * Every card the snapshots know, one per id, from the newest snapshot that
+   * carries it. The project picker and a Commander's project read these.
+   */
+  function knownCards(snapshots: ReadonlyMap<string, StoredSnapshot>) {
+    const byId = new Map<string, BoardCard>();
+    const oldestFirst = [...snapshots.values()].sort(
+      (a, b) => a.generatedAt - b.generatedAt,
+    );
+    for (const snap of oldestFirst) {
+      for (const card of snap.cards) byId.set(card.id, card);
+    }
+    return [...byId.values()];
+  }
+
+  /**
+   * The picker's choices: every posture slug, every project with a stored
+   * snapshot, and every slug a mission carries.
+   */
+  function projectSlugs(
+    snapshots: ReadonlyMap<string, StoredSnapshot>,
+    known: readonly Posture[],
+  ): string[] {
+    const slugs = new Set(known.map((posture) => posture.slug));
+    for (const project of snapshots.keys()) {
+      if (project !== ALL_PROJECTS) slugs.add(project);
+    }
+    for (const card of knownCards(snapshots)) {
       if (card.bead !== null && PROJECT_SLUG_PATTERN.test(card.project)) {
         slugs.add(card.project);
       }
@@ -1491,21 +1344,36 @@ export default function plugin(
     return [...slugs].sort((a, b) => a.localeCompare(b));
   }
 
-  function sourceOf(read: SitrepRead) {
-    if (read.rows === null) return "unavailable" as const;
-    if (read.stale) return "stale" as const;
-    return read.incomplete ? ("partial" as const) : ("current" as const);
-  }
-
-  function boardFor(snap: Snapshot, project: string) {
+  function boardFor(
+    snapshots: ReadonlyMap<string, StoredSnapshot>,
+    known: readonly Posture[],
+    project: string,
+  ) {
+    const snap = snapshotFor(snapshots, project);
+    const projects = projectSlugs(snapshots, known);
+    if (snap === null) {
+      return {
+        project,
+        generatedAt: null,
+        host: null,
+        source: "unavailable" as const,
+        error: null,
+        projects,
+        columns: buildBoard([], project),
+      };
+    }
+    // A failed source leaves rows out, so these rows never read as current.
+    const partial = snap.exitCode !== 0;
     return {
       project,
-      generatedAt: snap.rowsAt ?? snap.fetchedAt,
-      refreshing: inFlight !== null,
-      source: sourceOf(snap.read),
-      error: snap.read.error,
-      projects: projectSlugs(snap),
-      columns: buildBoard(snap.cards ?? [], project),
+      generatedAt: snap.generatedAt,
+      host: snap.host,
+      source: partial ? ("partial" as const) : ("current" as const),
+      error: partial
+        ? `The SITREP on ${snap.host} exited ${snap.exitCode}: a source could not be read, so some missions may be missing.`
+        : null,
+      projects,
+      columns: buildBoard(snap.cards, project),
     };
   }
 
@@ -1583,7 +1451,8 @@ export default function plugin(
    */
   async function resolveScope(
     role: Awaited<ReturnType<typeof boardRole>>,
-    snap: Snapshot,
+    snapshots: ReadonlyMap<string, StoredSnapshot>,
+    known: readonly Posture[],
   ) {
     const { thread, commanderId, canSave } = role;
     let scope: string | null = null;
@@ -1591,7 +1460,9 @@ export default function plugin(
     if (commanderId !== null) {
       const saved = savedScope(commanderId);
       const inferred =
-        saved === null ? await commanderProject(commanderId, snap.cards ?? []) : null;
+        saved === null
+          ? await commanderProject(commanderId, knownCards(snapshots))
+          : null;
       if (saved !== null) {
         scope = saved;
         source = "saved";
@@ -1600,7 +1471,7 @@ export default function plugin(
         source = "commander";
       }
     } else {
-      const posture = snap.postures.find(
+      const posture = known.find(
         (entry) => entry.projectId === thread.projectId,
       );
       if (posture !== undefined) {
@@ -1613,19 +1484,23 @@ export default function plugin(
       source,
       commanderId,
       canSave,
-      projects: projectSlugs(snap),
+      projects: projectSlugs(snapshots, known),
     };
   }
 
   bb.rpc.register(starbaseRpcContract, {
-    async panel({ threadId, project, force }) {
-      const [snap, role] = await Promise.all([
-        currentSnapshot(force === true),
+    async panel({ threadId, project }) {
+      const [known, role] = await Promise.all([
+        postures(),
         boardRole(threadId),
       ]);
-      const scope = await resolveScope(role, snap);
+      const snapshots = loadSnapshots();
+      const scope = await resolveScope(role, snapshots, known);
       const shown = project ?? scope.scope;
-      return { scope, board: shown === null ? null : boardFor(snap, shown) };
+      return {
+        scope,
+        board: shown === null ? null : boardFor(snapshots, known, shown),
+      };
     },
     async saveScope({ threadId, project }) {
       const thread = await bb.sdk.threads.get({ threadId });
@@ -1636,21 +1511,50 @@ export default function plugin(
       commanderProjects.delete(thread.id);
       return { saved: true };
     },
-    async board({ project, force }) {
-      return boardFor(await currentSnapshot(force === true), project);
+    async board({ project }) {
+      return boardFor(loadSnapshots(), await postures(), project);
     },
   });
 
+  // A snapshot replaces the stored one for its project unless that one is
+  // newer, in one statement: two publishes that race cannot both win.
+  const upsertSnapshot = db.prepare(
+    `INSERT INTO sitrep_snapshot
+       (project, generated_at, host, commander, exit_code, rows, received_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (project) DO UPDATE
+       SET generated_at = excluded.generated_at, host = excluded.host,
+           commander = excluded.commander, exit_code = excluded.exit_code,
+           rows = excluded.rows, received_at = excluded.received_at
+     WHERE excluded.generated_at >= sitrep_snapshot.generated_at`,
+  );
+
+  /** Store a checked snapshot, or say why it was ignored. Both exit 0. */
+  function publish(snapshot: PublishedSnapshot): string {
+    const generatedAt = Date.parse(snapshot.generated_at);
+    const stored = upsertSnapshot.run(
+      snapshot.project,
+      generatedAt,
+      snapshot.host,
+      snapshot.commander,
+      snapshot.exit_code,
+      JSON.stringify(snapshot.rows),
+      Date.now(),
+    );
+    const when = new Date(generatedAt).toISOString();
+    if (stored.changes === 0) {
+      return `Ignored: the stored snapshot for ${snapshot.project} is newer than ${when}.`;
+    }
+    return `Stored the snapshot for ${snapshot.project} from ${snapshot.host} at ${when}: ${snapshot.rows.length} row(s), exit code ${snapshot.exit_code}.`;
+  }
+
   settings.onChange(() => {
-    generation += 1;
-    snapshot = null;
-    inFlight = null;
     commanderProjects.clear();
   });
 
   bb.cli.register({
     name: "starbase",
-    summary: "Report and settle the Crew threads under a Commander",
+    summary: "Report and settle Crew threads, and store SITREP snapshots",
     commands: [
       {
         name: "sitrep",
@@ -1661,6 +1565,11 @@ export default function plugin(
         name: "settle",
         summary: "Archive a Crew thread once its worktree and PR are done",
         usage: "bb starbase settle <thread-id>",
+      },
+      {
+        name: "publish",
+        summary: "Store one SITREP snapshot for the Mission Queue board",
+        usage: "bb starbase publish --snapshot <json> [--snapshot <json> ...]",
       },
     ],
     async run(argv, ctx) {
@@ -1722,6 +1631,11 @@ export default function plugin(
             };
           }
           return await settle(threadId);
+        }
+        if (sub === "publish") {
+          const parsed = parseSnapshot(rest);
+          if ("error" in parsed) return { exitCode: 1, stderr: parsed.error };
+          return { exitCode: 0, stdout: publish(parsed.snapshot) };
         }
         return { exitCode: 1, stderr: `Unknown subcommand "${sub}".\n${USAGE}` };
       } catch (error) {
