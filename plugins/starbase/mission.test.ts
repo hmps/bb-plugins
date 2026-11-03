@@ -173,6 +173,38 @@ describe("viewMission", () => {
     expect(view.nextAction).toBe("Check acceptance");
   });
 
+  it("shows a surfaced event with its receipt, and a failed receipt as pending", () => {
+    const receipt = { message_ref: "@thread:thr_root#msg=30" };
+    const surfaced = viewMission(
+      state("pending-new-blocker-after-old-report", (raw) => {
+        const events = raw.attention as Json[];
+        events[0] = { ...events[0], receipt };
+        raw.pending_attention = (raw.pending_attention as Json[]).filter(
+          (event) => event.id !== events[0].id,
+        );
+      }),
+    );
+    expect(
+      surfaced.attention.map((a) => [a.summary, a.surfaced, a.messageRef]),
+    ).toEqual([
+      ["Current Crew report is blocked", false, null],
+      ["old", true, "@thread:thr_root#msg=30"],
+    ]);
+    // A receipt the core could not verify keeps the event pending.
+    const failed = viewMission(
+      state("pending-new-blocker-after-old-report", (raw) => {
+        for (const list of [raw.attention, raw.pending_attention] as Json[][]) {
+          list[0] = { ...list[0], receipt };
+        }
+      }),
+    );
+    expect(failed.column).toBe("blocked");
+    expect(failed.attention[0]).toMatchObject({
+      surfaced: false,
+      messageRef: null,
+    });
+  });
+
   it("shows a new blocker after an old report", () => {
     const view = viewMission(state("pending-new-blocker-after-old-report"));
     // The core keeps the old report's blocker and adds the lifecycle one.

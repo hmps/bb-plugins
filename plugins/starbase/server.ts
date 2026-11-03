@@ -21,7 +21,8 @@
 // snapshot holds every mission row with the `mission_state` the core projects
 // (contract v1, mission.ts). The pure rules in board.ts and mission.ts turn
 // the rows into columns. The board never writes a bead, a receipt, or any
-// state.
+// state. Its one write path is a card action: a message to a Commander root
+// thread, sent only when the app calls the `act` rpc.
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -33,12 +34,22 @@ import {
 } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
+  ACTION_KINDS,
   COLUMN_IDS,
+  actionLine,
+  actionSlot,
+  boardMessage,
   buildBoard,
+  clip,
   inferProject,
+  inScope,
+  parseMessageRef,
   postureValue,
   toCards,
+  withSent,
+  type ActionKind,
   type BoardCard,
+  type SentAction,
 } from "./board.js";
 import { readRows } from "./mission.js";
 
@@ -108,6 +119,9 @@ const COMMANDER_PROJECT_CACHE_MS = 5 * 60_000;
 /** A project slug as a posture directory names it. Nothing else reaches a path. */
 const PROJECT_SLUG_PATTERN = /^[A-Za-z0-9._-]+$/;
 
+/** How much of a question message the open card shows. */
+const QUESTION_MAX_CHARS = 20_000;
+
 /** The snapshot and board scope that covers every project. */
 const ALL_PROJECTS = "all";
 
@@ -142,6 +156,14 @@ const snapshotSchema = z.strictObject({
 
 export type PublishedSnapshot = z.infer<typeof snapshotSchema>;
 
+/** One pending event, by its id and the revision the board showed. */
+const attentionRefSchema = z
+  .object({
+    id: z.string().min(1).max(100),
+    revision: z.number().int().positive(),
+  })
+  .strict();
+
 const boardCardSchema = z
   .object({
     id: z.string(),
@@ -159,15 +181,46 @@ const boardCardSchema = z
     nextAction: z.string().nullable(),
     owner: z.string().nullable(),
     ownerIdle: z.boolean(),
+    lifecycle: z.string().nullable(),
     attention: z.array(
       z
-        .object({ kind: z.string(), summary: z.string(), surfaced: z.boolean() })
+        .object({
+          id: z.string(),
+          revision: z.number().int(),
+          kind: z.string(),
+          summary: z.string(),
+          fingerprint: z.string(),
+          surfaced: z.boolean(),
+          messageRef: z.string().nullable(),
+        })
         .strict(),
     ),
     integrity: z.string().nullable(),
     problems: z.array(z.string()),
     outcome: z.string().nullable(),
     note: z.string().nullable(),
+    commanderRoot: z.string().nullable(),
+    actions: z.array(
+      z
+        .object({
+          kind: z.enum(ACTION_KINDS),
+          attention: attentionRefSchema.nullable(),
+          text: z.enum(["none", "optional", "required"]),
+          target: z.string(),
+        })
+        .strict(),
+    ),
+    actionNote: z.string().nullable(),
+    sent: z.array(
+      z
+        .object({
+          kind: z.enum(ACTION_KINDS),
+          attention: attentionRefSchema.nullable(),
+          line: z.string(),
+          sentAt: z.number(),
+        })
+        .strict(),
+    ),
   })
   .strict();
 
@@ -244,6 +297,49 @@ export const starbaseRpcContract = defineRpcContract({
     input: z.object({ project: projectScopeSchema }).strict(),
     output: boardSchema,
   },
+  /**
+   * Send one card action to its Commander root thread. Only a click in the
+   * app calls this. `generatedAt` is the snapshot the board showed; an older
+   * one is refused, so nobody answers a state they have not seen.
+   */
+  act: {
+    input: z
+      .object({
+        project: projectScopeSchema,
+        bead: z.string().min(1).max(200),
+        kind: z.enum(ACTION_KINDS),
+        text: z.string().max(10_000),
+        attention: attentionRefSchema.nullable(),
+        generatedAt: z.number().int(),
+      })
+      .strict(),
+    output: z
+      .object({
+        sent: z.boolean(),
+        /** The thread the message went to; null when nothing was sent. */
+        target: z.string().nullable(),
+        /** Why nothing was sent; null when it was. */
+        error: z.string().nullable(),
+      })
+      .strict(),
+  },
+  /** The text of the Commander message that surfaced one pending event. */
+  question: {
+    input: z
+      .object({
+        project: projectScopeSchema,
+        bead: z.string().min(1).max(200),
+        attention: attentionRefSchema,
+      })
+      .strict(),
+    output: z
+      .object({
+        text: z.string().nullable(),
+        threadId: z.string().nullable(),
+        error: z.string().nullable(),
+      })
+      .strict(),
+  },
 });
 
 /**
@@ -303,6 +399,22 @@ const migrations = [
      rows         TEXT NOT NULL,
      received_at  INTEGER NOT NULL
    )`,
+  // One row per card action sent. The key is one answer per question: an
+  // event revision, or a mission-level slot on one snapshot. A row is
+  // reserved before the send and deleted when the send fails.
+  `CREATE TABLE IF NOT EXISTS board_action (
+     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+     dedupe_key         TEXT NOT NULL UNIQUE,
+     bead               TEXT NOT NULL,
+     kind               TEXT NOT NULL,
+     attention_id       TEXT,
+     attention_revision INTEGER,
+     generated_at       INTEGER NOT NULL,
+     target_thread      TEXT NOT NULL,
+     line               TEXT NOT NULL,
+     sent_at            INTEGER NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS board_action_bead ON board_action (bead)`,
 ];
 
 /** A mission event as the CLI reports it. */
@@ -1344,6 +1456,64 @@ export default function plugin(bb: BbPluginApi) {
     return [...slugs].sort((a, b) => a.localeCompare(b));
   }
 
+  // Card actions. A sent action is stored before the send, under a key that
+  // allows one answer per question (see `actionSlot`), and deleted when the
+  // send fails.
+
+  const insertAction = db.prepare(
+    `INSERT OR IGNORE INTO board_action
+       (dedupe_key, bead, kind, attention_id, attention_revision,
+        generated_at, target_thread, line, sent_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const deleteAction = db.prepare(
+    `DELETE FROM board_action WHERE dedupe_key = ?`,
+  );
+  const selectActions = db.prepare(
+    `SELECT bead, kind, attention_id, attention_revision, generated_at, line,
+            sent_at
+       FROM board_action`,
+  );
+
+  /** Every stored action, by bead. */
+  function loadActions(): Map<string, (SentAction & { generatedAt: number })[]> {
+    const stored = selectActions.all() as {
+      bead: string;
+      kind: ActionKind;
+      attention_id: string | null;
+      attention_revision: number | null;
+      generated_at: number;
+      line: string;
+      sent_at: number;
+    }[];
+    const byBead = new Map<string, (SentAction & { generatedAt: number })[]>();
+    for (const row of stored) {
+      const list = byBead.get(row.bead) ?? [];
+      list.push({
+        kind: row.kind,
+        attention:
+          row.attention_id === null || row.attention_revision === null
+            ? null
+            : { id: row.attention_id, revision: row.attention_revision },
+        line: row.line,
+        sentAt: row.sent_at,
+        generatedAt: row.generated_at,
+      });
+      byBead.set(row.bead, list);
+    }
+    return byBead;
+  }
+
+  /** A snapshot's cards, each with the sent actions that still wait. */
+  function cardsWithSent(snap: StoredSnapshot): BoardCard[] {
+    const actions = loadActions();
+    return snap.cards.map((card) =>
+      card.bead === null
+        ? card
+        : withSent(card, actions.get(card.bead) ?? [], snap.generatedAt),
+    );
+  }
+
   function boardFor(
     snapshots: ReadonlyMap<string, StoredSnapshot>,
     known: readonly Posture[],
@@ -1373,8 +1543,151 @@ export default function plugin(bb: BbPluginApi) {
         ? `The SITREP on ${snap.host} exited ${snap.exitCode}: a source could not be read, so some missions may be missing.`
         : null,
       projects,
-      columns: buildBoard(snap.cards, project),
+      columns: buildBoard(cardsWithSent(snap), project),
     };
+  }
+
+  /** One card of the board for `project`, with its sent actions, or null. */
+  function boardCard(project: string, bead: string) {
+    const snap = snapshotFor(loadSnapshots(), project);
+    if (snap === null) return null;
+    const card = cardsWithSent(snap).find(
+      (item) => item.bead === bead && inScope(item, project),
+    );
+    return card === undefined ? null : { snap, card };
+  }
+
+  type ActInput = z.infer<(typeof starbaseRpcContract)["act"]["input"]>;
+
+  /**
+   * Send one card action, or say why not. The checks run against the stored
+   * snapshot, never the client's copy: the snapshot the client saw must be
+   * the stored one, the card must offer the action now, and the target must
+   * be a Commander root thread. The send is `relay`, so it never steers a
+   * live turn and retries only when bb proves nothing was delivered.
+   */
+  async function act(input: ActInput) {
+    const refuse = (error: string) => ({ sent: false, target: null, error });
+    const found = boardCard(input.project, input.bead);
+    if (found === null) return refuse("The mission is not on this board.");
+    const { snap, card } = found;
+    if (input.generatedAt !== snap.generatedAt) {
+      return refuse(
+        "The board changed since you loaded it. Refresh, then try again.",
+      );
+    }
+    const asked = input.attention;
+    const action = card.actions.find(
+      (item) =>
+        item.kind === input.kind &&
+        (item.attention === null
+          ? asked === null
+          : asked !== null &&
+            item.attention.id === asked.id &&
+            item.attention.revision === asked.revision),
+    );
+    if (action === undefined) {
+      const slot = actionSlot({ kind: input.kind, attention: asked });
+      return refuse(
+        card.sent.some((sent) => actionSlot(sent) === slot)
+          ? "Already sent. The card waits for the Commander."
+          : "The card does not offer that action now.",
+      );
+    }
+    const checked = actionLine(input.kind, input.text);
+    if ("error" in checked) return refuse(checked.error);
+    const event =
+      asked === null
+        ? null
+        : (card.attention.find(
+            (item) => item.id === asked.id && item.revision === asked.revision,
+          ) ?? null);
+    const message = boardMessage(
+      { title: card.title, bead: input.bead },
+      event,
+      checked.line,
+    );
+
+    let target: ThreadRow;
+    try {
+      target = await bb.sdk.threads.get({ threadId: action.target });
+    } catch (error) {
+      return refuse(
+        `Could not read ${action.target}: ${shorten(describe(error), 200)}`,
+      );
+    }
+    if (!isCommander(target, await commanderProjectIds())) {
+      return refuse(
+        `${action.target} is not a Commander root thread, so the board does not send to it.`,
+      );
+    }
+
+    const slot = actionSlot(action);
+    const dedupeKey = `${input.bead}#${slot}${asked === null ? `@${snap.generatedAt}` : ""}`;
+    const reserved = insertAction.run(
+      dedupeKey,
+      input.bead,
+      input.kind,
+      asked?.id ?? null,
+      asked?.revision ?? null,
+      snap.generatedAt,
+      action.target,
+      checked.line,
+      Date.now(),
+    );
+    if (reserved.changes === 0) {
+      return refuse("Already sent. The card waits for the Commander.");
+    }
+    try {
+      await relay(action.target, message);
+    } catch (error) {
+      bb.log.warn(`starbase: board action failed: ${describe(error)}`);
+      // A 4xx refusal proves bb stored nothing, so the answer can go again.
+      // Any other failure may have delivered it: the key stays, so the board
+      // never sends the same answer twice.
+      const status = httpStatus(error);
+      if (status !== null && status >= 400 && status < 500) {
+        deleteAction.run(dedupeKey);
+        return refuse(`The send failed: ${shorten(describe(error), 200)}`);
+      }
+      return refuse(
+        `The send may not have arrived: ${shorten(describe(error), 200)}. Look in the Commander thread; the board does not send this answer again.`,
+      );
+    }
+    return { sent: true, target: action.target, error: null };
+  }
+
+  /** The text of the Commander message that surfaced one pending event. */
+  async function question(input: {
+    project: string;
+    bead: string;
+    attention: { id: string; revision: number };
+  }) {
+    const none = (error: string) => ({ text: null, threadId: null, error });
+    const event = boardCard(input.project, input.bead)?.card.attention.find(
+      (item) =>
+        item.id === input.attention.id &&
+        item.revision === input.attention.revision,
+    );
+    if (event === undefined) return none("The event is not on this board.");
+    const ref = parseMessageRef(event.messageRef);
+    if (ref === null) {
+      return none("The Commander has not surfaced this event yet.");
+    }
+    try {
+      const result = await retryFetchFailed(() =>
+        bb.sdk.threads.message({ threadId: ref.threadId, seq: ref.seq }),
+      );
+      return {
+        text: clip(result.message.text, QUESTION_MAX_CHARS),
+        threadId: ref.threadId,
+        error: null,
+      };
+    } catch (error) {
+      return none(
+        `Could not read the question: ${shorten(describe(error), 200)}`,
+      );
+    }
   }
 
   const selectScope = db.prepare(
@@ -1514,6 +1827,8 @@ export default function plugin(bb: BbPluginApi) {
     async board({ project }) {
       return boardFor(loadSnapshots(), await postures(), project);
     },
+    act,
+    question,
   });
 
   // A snapshot replaces the stored one for its project unless that one is
@@ -1648,4 +1963,23 @@ export default function plugin(bb: BbPluginApi) {
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The HTTP status of a bb SDK error, or null when bb gave no answer. */
+function httpStatus(error: unknown): number | null {
+  const status = (error as { status?: unknown } | null)?.status;
+  return typeof status === "number" ? status : null;
+}
+
+/**
+ * One read, tried again once when it fails with a bare `fetch failed`: bb.sdk
+ * calls from a plugin do that now and then. Only for reads, never a send.
+ */
+async function retryFetchFailed<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (describe(error) !== "fetch failed") throw error;
+    return read();
+  }
 }
