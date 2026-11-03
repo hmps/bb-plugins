@@ -25,6 +25,8 @@ const COMMANDER = "thr_commander";
 const NEW_COMMANDER = "thr_new_commander";
 /** A Commander with no Crew, whose own thread one mission bead links. */
 const ROOT_COMMANDER = "thr_root_commander";
+/** The Commander root whose message surfaced an event. */
+const RECEIPT_ROOT = "thr_receiptroot";
 
 function baseRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "starbase-board-"));
@@ -119,7 +121,8 @@ function threadsGet({ threadId }: { threadId: string }) {
   if (
     threadId === COMMANDER ||
     threadId === NEW_COMMANDER ||
-    threadId === ROOT_COMMANDER
+    threadId === ROOT_COMMANDER ||
+    threadId === RECEIPT_ROOT
   ) {
     return makeThreadResponse({
       id: threadId,
@@ -174,16 +177,31 @@ function publishArgs(document: unknown, size = 64 * 1024): string[] {
   return args;
 }
 
+interface SdkFakes {
+  get?: (args: { threadId: string }) => unknown;
+  send?: (args: unknown) => unknown;
+  message?: (args: { threadId: string; seq: number }) => unknown;
+}
+
 /** The plugin, with `published` sent through the CLI in order. */
-async function loadPlugin(published: unknown[] = [snapshot()]) {
+async function loadPlugin(
+  published: unknown[] = [snapshot()],
+  sdk: SdkFakes = {},
+) {
   const root = baseRoot();
   const fake = createFakePluginHost({
     pluginId: "starbase",
     settings: { commanderProjectIds: COMMANDER_PROJECT, baseRoot: root },
     sdk: {
       threads: {
-        get: threadsGet,
+        get: sdk.get ?? threadsGet,
         list: threadsList,
+        send: sdk.send ?? (() => ({ ok: true, delivery: "sent" })),
+        message:
+          sdk.message ??
+          (() => {
+            throw new Error("no message");
+          }),
         interactions: { list: () => [] },
       },
     },
@@ -693,5 +711,288 @@ describe("publish", () => {
       project: "all",
     })) as Board;
     expect(board.source).toBe("unavailable");
+  });
+});
+
+// Card actions: one message to a Commander root, at most one per question.
+
+const DECISION = { id: "d5ead93f8671645367df1271", revision: 1 };
+const GENERATED_AT = Date.parse("2026-10-22T08:00:00Z");
+
+/** The survey row on a decision, with `commander_root` and any change. */
+function surveyRow(change: Row = {}): Row {
+  return fullRow("survey-decision", {
+    bead: "sb-2",
+    title: "Survey waiting on a decision",
+    thread: "thr_crew_2",
+    project: "vaam-main",
+    commander_root: COMMANDER,
+    ...change,
+  });
+}
+
+/** The survey row with its decision surfaced by a message in `root`. */
+function surfacedRow(root: string, seq: number): Row {
+  const row = surveyRow();
+  const state = structuredClone(row.mission_state) as Row & {
+    attention: Row[];
+    pending_attention: Row[];
+  };
+  state.attention[0] = {
+    ...state.attention[0],
+    receipt: { message_ref: `@thread:${root}#msg=${seq}` },
+  };
+  state.pending_attention = [];
+  return { ...row, mission_state: state };
+}
+
+function act(change: Record<string, unknown> = {}) {
+  return {
+    project: "vaam-main",
+    bead: "sb-2",
+    kind: "go",
+    text: "",
+    attention: DECISION,
+    generatedAt: GENERATED_AT,
+    ...change,
+  };
+}
+
+function sentTexts(fake: Awaited<ReturnType<typeof loadPlugin>>["fake"]) {
+  return fake.harness.sdk
+    .callsTo("threads.send")
+    .map((call) => {
+      const [args] = call as [
+        { threadId: string; mode: string; input: { text: string }[] },
+      ];
+      return [args.threadId, args.mode, args.input[0]?.text];
+    });
+}
+
+function waitingCard(board: Board) {
+  return column(board, "waiting")?.cards[0] as unknown as {
+    actions: { kind: string }[];
+    actionNote: string | null;
+    sent: { line: string }[];
+  };
+}
+
+describe("act rpc", () => {
+  it("sends the exact answer once, and the card then waits for the Commander", async () => {
+    const { fake } = await loadPlugin([snapshot({ rows: [surveyRow()] })]);
+    expect(await fake.harness.callRpc("act", act())).toEqual({
+      sent: true,
+      target: COMMANDER,
+      error: null,
+    });
+    expect(sentTexts(fake)).toEqual([
+      [
+        COMMANDER,
+        "start",
+        "Board answer · Survey waiting on a decision (sb-2)\n" +
+          "Decision: go\n" +
+          `<!-- attention:${DECISION.id}@1#d018300c4999f58ab77f7b9da237249ef49ee881e88936350ff56ce1a4bdf82c -->`,
+      ],
+    ]);
+
+    // The same question cannot be answered twice, by Go or by text.
+    for (const again of [act(), act({ kind: "decision", text: "Ship it" })]) {
+      expect(await fake.harness.callRpc("act", again)).toEqual({
+        sent: false,
+        target: null,
+        error: "Already sent. The card waits for the Commander.",
+      });
+    }
+    expect(fake.harness.sdk.callsTo("threads.send")).toHaveLength(1);
+
+    const card = waitingCard(
+      (await fake.harness.callRpc("board", { project: "vaam-main" })) as Board,
+    );
+    expect(card.sent.map((sent) => sent.line)).toEqual(["Decision: go"]);
+    expect(card.actions.map((action) => action.kind)).not.toContain("go");
+    expect(card.actions.map((action) => action.kind)).toContain("survey-act");
+  });
+
+  it("refuses an answer from a board older than the stored snapshot", async () => {
+    const { fake } = await loadPlugin([snapshot({ rows: [surveyRow()] })]);
+    expect(
+      await fake.harness.callRpc("act", act({ generatedAt: GENERATED_AT - 1 })),
+    ).toMatchObject({
+      sent: false,
+      error: "The board changed since you loaded it. Refresh, then try again.",
+    });
+    expect(fake.harness.sdk.callsTo("threads.send")).toHaveLength(0);
+  });
+
+  it("refuses an answer when a newer snapshot arrives during the target read", async () => {
+    let publishNewer: (() => Promise<unknown>) | null = null;
+    const { fake, publish } = await loadPlugin(
+      [snapshot({ rows: [surveyRow()] })],
+      {
+        get: async (args) => {
+          await publishNewer?.();
+          publishNewer = null;
+          return threadsGet(args);
+        },
+      },
+    );
+    publishNewer = () =>
+      publish(snapshot({ generated_at: "2026-10-22T09:00:00Z", rows: [] }));
+    expect(await fake.harness.callRpc("act", act())).toMatchObject({
+      sent: false,
+      error: "The board changed since you loaded it. Refresh, then try again.",
+    });
+    expect(fake.harness.sdk.callsTo("threads.send")).toHaveLength(0);
+  });
+
+  it("answers a surfaced event in its receipt thread, not commander_root", async () => {
+    const { fake } = await loadPlugin([
+      snapshot({ rows: [surfacedRow(RECEIPT_ROOT, 4)] }),
+    ]);
+    expect(
+      await fake.harness.callRpc(
+        "act",
+        act({ kind: "decision", text: "Defer it" }),
+      ),
+    ).toEqual({ sent: true, target: RECEIPT_ROOT, error: null });
+    expect(sentTexts(fake)[0]?.slice(0, 1)).toEqual([RECEIPT_ROOT]);
+  });
+
+  it("offers and sends nothing for a row with no Commander thread", async () => {
+    const { fake } = await loadPlugin([
+      snapshot({ rows: [surveyRow({ commander_root: null })] }),
+    ]);
+    const card = waitingCard(
+      (await fake.harness.callRpc("board", { project: "vaam-main" })) as Board,
+    );
+    expect(card.actions).toEqual([]);
+    expect(card.actionNote).toBe(
+      "No board actions: the snapshot names no Commander thread to answer.",
+    );
+    expect(await fake.harness.callRpc("act", act())).toMatchObject({
+      sent: false,
+      error: "The card does not offer that action now.",
+    });
+    expect(fake.harness.sdk.callsTo("threads.send")).toHaveLength(0);
+  });
+
+  it("sends nothing to a thread that is not a Commander root", async () => {
+    const { fake } = await loadPlugin([
+      snapshot({ rows: [surveyRow({ commander_root: "thr_outsider" })] }),
+    ]);
+    expect(await fake.harness.callRpc("act", act())).toMatchObject({
+      sent: false,
+      error:
+        "thr_outsider is not a Commander root thread, so the board does not send to it.",
+    });
+    expect(fake.harness.sdk.callsTo("threads.send")).toHaveLength(0);
+  });
+
+  it("refuses text that does not fit, and a required text left empty", async () => {
+    const { fake } = await loadPlugin([snapshot({ rows: [surveyRow()] })]);
+    expect(
+      await fake.harness.callRpc("act", act({ kind: "close", attention: null })),
+    ).toMatchObject({ sent: false, error: "Write a reason first." });
+    expect(fake.harness.sdk.callsTo("threads.send")).toHaveLength(0);
+  });
+
+  it("frees the question after a 4xx refusal, and holds it after an unknown outcome", async () => {
+    let failure: Error = Object.assign(new Error("HTTP 403: Forbidden"), {
+      status: 403,
+    });
+    const { fake } = await loadPlugin([snapshot({ rows: [surveyRow()] })], {
+      send: () => {
+        throw failure;
+      },
+    });
+    expect(await fake.harness.callRpc("act", act())).toMatchObject({
+      sent: false,
+      error: "The send failed: HTTP 403: Forbidden",
+    });
+    failure = new Error("fetch failed");
+    expect(await fake.harness.callRpc("act", act())).toMatchObject({
+      sent: false,
+      error: expect.stringContaining("the board does not send this answer again"),
+    });
+    expect(await fake.harness.callRpc("act", act())).toMatchObject({
+      error: "Already sent. The card waits for the Commander.",
+    });
+    expect(fake.harness.sdk.callsTo("threads.send")).toHaveLength(2);
+  });
+
+  it("allows one end of the mission per snapshot", async () => {
+    const { fake, publish } = await loadPlugin([
+      snapshot({ rows: [surveyRow()] }),
+    ]);
+    const close = act({ kind: "close", attention: null, text: "Done here" });
+    expect(await fake.harness.callRpc("act", close)).toMatchObject({ sent: true });
+    expect(
+      await fake.harness.callRpc("act", { ...close, kind: "cancel" }),
+    ).toMatchObject({ error: "Already sent. The card waits for the Commander." });
+    // A newer snapshot that still shows the mission open offers the end again.
+    await publish(
+      snapshot({ rows: [surveyRow()], generated_at: "2026-10-22T09:00:00Z" }),
+    );
+    expect(
+      await fake.harness.callRpc("act", {
+        ...close,
+        generatedAt: Date.parse("2026-10-22T09:00:00Z"),
+      }),
+    ).toMatchObject({ sent: true });
+    expect(sentTexts(fake).map((sent) => sent[2]?.split("\n")[1])).toEqual([
+      "Close this mission: Done here",
+      "Close this mission: Done here",
+    ]);
+  });
+});
+
+describe("question rpc", () => {
+  it("reads the Commander message that surfaced the event", async () => {
+    let calls = 0;
+    const { fake } = await loadPlugin(
+      [snapshot({ rows: [surfacedRow(RECEIPT_ROOT, 4)] })],
+      {
+        message: ({ threadId, seq }) => {
+          calls += 1;
+          if (calls === 1) throw new Error("fetch failed");
+          return {
+            before: [],
+            after: [],
+            message: {
+              kind: "conversation",
+              role: "assistant",
+              text: `Decide on ${threadId}#${seq}`,
+            },
+          };
+        },
+      },
+    );
+    expect(
+      await fake.harness.callRpc("question", {
+        project: "vaam-main",
+        bead: "sb-2",
+        attention: DECISION,
+      }),
+    ).toEqual({
+      text: `Decide on ${RECEIPT_ROOT}#4`,
+      threadId: RECEIPT_ROOT,
+      error: null,
+    });
+  });
+
+  it("says when the event has no verified receipt", async () => {
+    const { fake } = await loadPlugin([snapshot({ rows: [surveyRow()] })]);
+    expect(
+      await fake.harness.callRpc("question", {
+        project: "vaam-main",
+        bead: "sb-2",
+        attention: DECISION,
+      }),
+    ).toEqual({
+      text: null,
+      threadId: null,
+      error: "The Commander has not surfaced this event yet.",
+    });
+    expect(fake.harness.sdk.callsTo("threads.message")).toHaveLength(0);
   });
 });

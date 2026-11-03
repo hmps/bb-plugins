@@ -9,6 +9,10 @@
 // (every open mission and the most recent closed ones) and projects a
 // `mission_state` for each; mission.ts maps that state to a column. The board
 // derives no state of its own.
+//
+// A card can also offer actions. An action never writes state here: it is
+// one message to the Commander root thread, in the exact format below, and
+// the Commander records the answer through the Base scripts.
 
 import {
   readRowState,
@@ -60,12 +64,49 @@ const HIDDEN_FLAGS = new Set(["ok", "output-not-recorded"]);
 /** The SITREP's word for "no value" in a progress field. */
 const NO_VALUE = new Set(["", "-", "unknown"]);
 
-/** One pending event, as the card shows it. */
+/** One current event, as the card shows it. */
 export interface CardAttention {
+  id: string;
+  revision: number;
   kind: string;
   summary: string;
-  /** The Commander saw it. It is still pending until resolved. */
+  fingerprint: string;
+  /** A verified receipt shows the Commander saw it. It stays until resolved. */
   surfaced: boolean;
+  /** The verified receipt's message, `@thread:<id>#msg=<seq>`; else null. */
+  messageRef: string | null;
+}
+
+export const ACTION_KINDS = [
+  "go",
+  "decision",
+  "survey-act",
+  "survey-defer",
+  "survey-reject",
+  "close",
+  "cancel",
+  "reply",
+] as const;
+export type ActionKind = (typeof ACTION_KINDS)[number];
+
+/** One action a card offers now. */
+export interface CardAction {
+  kind: ActionKind;
+  /** The pending event it answers; null for a mission-level action. */
+  attention: { id: string; revision: number } | null;
+  /** Whether the action takes text: an answer, a reply, a note, a reason. */
+  text: "none" | "optional" | "required";
+  /** The Commander root thread the message goes to. */
+  target: string;
+}
+
+/** One sent action that the Commander has not answered yet. */
+export interface SentAction {
+  kind: ActionKind;
+  attention: { id: string; revision: number } | null;
+  /** The action line of the message, as sent. */
+  line: string;
+  sentAt: number;
 }
 
 export interface BoardCard {
@@ -84,6 +125,8 @@ export interface BoardCard {
   /** SITREP row flags, as written, except the ones in HIDDEN_FLAGS. */
   flags: string[];
   column: ColumnId;
+  /** The core's lifecycle; null when the row has no readable v1 state. */
+  lifecycle: string | null;
   stage: string;
   tone: MissionTone;
   nextAction: string | null;
@@ -95,6 +138,12 @@ export interface BoardCard {
   problems: string[];
   outcome: string | null;
   note: string | null;
+  /** The SITREP row's `commander_root`: the Commander root thread, or null. */
+  commanderRoot: string | null;
+  actions: CardAction[];
+  /** Why an action the card would offer has no thread to go to; else null. */
+  actionNote: string | null;
+  sent: SentAction[];
 }
 
 export interface BoardColumn {
@@ -138,6 +187,22 @@ export function parsePr(value: unknown): { url: string; state: string } | null {
   return /^https:\/\/\S+$/.test(url) && state !== "" ? { url, state } : null;
 }
 
+/** A thread id as bb writes it. */
+const THREAD_ID_PATTERN = /^thr_[A-Za-z0-9]+$/;
+
+/** A receipt's `message_ref`: `@thread:<id>#msg=<seq>`. */
+const MESSAGE_REF_PATTERN = /^@thread:(thr_[A-Za-z0-9]+)#msg=([1-9][0-9]*)$/;
+
+/** The thread and message sequence a receipt names, or null. */
+export function parseMessageRef(
+  ref: string | null,
+): { threadId: string; seq: number } | null {
+  const match = ref === null ? null : MESSAGE_REF_PATTERN.exec(ref);
+  return match === null
+    ? null
+    : { threadId: match[1] as string, seq: Number(match[2]) };
+}
+
 /**
  * The view of a row that has no v1 state the board can read. It goes to
  * Commander review, never to a column that reads as healthy.
@@ -145,6 +210,7 @@ export function parsePr(value: unknown): { url: string; state: string } | null {
 function untrustedView(integrity: string, problem: string): MissionView {
   return {
     column: "review",
+    lifecycle: null,
     stage: "No readable mission state",
     tone: "warn",
     nextAction: null,
@@ -196,7 +262,7 @@ export function toCard(row: unknown): BoardCard | null {
     const found = text(value).trim();
     return NO_VALUE.has(found) ? null : clip(found, DETAIL_MAX_CHARS);
   };
-  return {
+  const card: BoardCard = {
     id,
     bead,
     title: clip(text(raw.title).replace(/\s+/g, " ").trim(), TITLE_MAX_CHARS),
@@ -209,6 +275,7 @@ export function toCard(row: unknown): BoardCard | null {
       (flag) => flag !== "" && !HIDDEN_FLAGS.has(flag),
     ),
     column: view.column,
+    lifecycle: view.lifecycle,
     stage: clip(view.stage, LINE_MAX_CHARS),
     tone: view.tone,
     nextAction:
@@ -218,15 +285,215 @@ export function toCard(row: unknown): BoardCard | null {
     owner: view.owner,
     ownerIdle: view.ownerIdle,
     attention: view.attention.map((event) => ({
+      id: event.id,
+      revision: event.revision,
       kind: event.kind,
       summary: clip(event.summary, LINE_MAX_CHARS),
+      fingerprint: event.fingerprint,
       surfaced: event.surfaced,
+      messageRef: event.messageRef,
     })),
     integrity: view.integrity,
     problems: view.problems.map((problem) => clip(problem, DETAIL_MAX_CHARS)),
     outcome: detail(progress.outcome),
     note: detail(progress.note),
+    commanderRoot: THREAD_ID_PATTERN.test(text(raw.commander_root))
+      ? text(raw.commander_root)
+      : null,
+    actions: [],
+    actionNote: null,
+    sent: [],
   };
+  return { ...card, ...cardActions(card) };
+}
+
+// ------------------------------------------------------------------
+// Card actions. Each one is one message to a Commander root thread.
+// ------------------------------------------------------------------
+
+/** The longest answer, reply, note, or reason one action carries. */
+export const ACTION_TEXT_MAX_CHARS = 2000;
+
+/** Lifecycles that end a mission: Close and Cancel do not apply. */
+const ENDED = new Set(["complete", "cancelled"]);
+
+const NO_TARGET_NOTE =
+  "No board actions: the snapshot names no Commander thread to answer.";
+
+/**
+ * The actions a card offers, from its checked state alone. An answer to a
+ * surfaced event goes to the root thread whose message surfaced it; anything
+ * else goes to the row's `commander_root`. An action with neither is left
+ * out, and the note says why.
+ */
+export function cardActions(card: BoardCard): {
+  actions: CardAction[];
+  actionNote: string | null;
+} {
+  // A stray thread has no mission to answer; a row with no readable state
+  // has nothing the board can check an answer against.
+  if (card.bead === null || card.lifecycle === null) {
+    return { actions: [], actionNote: null };
+  }
+  const wanted: Omit<CardAction, "target">[] = [];
+  const targets: (string | null)[] = [];
+  const add = (
+    action: Omit<CardAction, "target">,
+    target: string | null,
+  ) => {
+    wanted.push(action);
+    targets.push(target);
+  };
+  for (const event of card.attention) {
+    const target =
+      parseMessageRef(event.messageRef)?.threadId ?? card.commanderRoot;
+    const ref = { id: event.id, revision: event.revision };
+    if (event.kind === "decision") {
+      add({ kind: "go", attention: ref, text: "none" }, target);
+      add({ kind: "decision", attention: ref, text: "required" }, target);
+    } else {
+      add({ kind: "reply", attention: ref, text: "required" }, target);
+    }
+  }
+  if (card.mission === "survey" && card.lifecycle === "awaiting-decision") {
+    for (const kind of ["survey-act", "survey-defer", "survey-reject"] as const) {
+      add({ kind, attention: null, text: "optional" }, card.commanderRoot);
+    }
+  }
+  if (!ENDED.has(card.lifecycle)) {
+    add({ kind: "close", attention: null, text: "required" }, card.commanderRoot);
+    add({ kind: "cancel", attention: null, text: "required" }, card.commanderRoot);
+  }
+  const actions: CardAction[] = [];
+  wanted.forEach((action, index) => {
+    const target = targets[index];
+    if (target !== null && target !== undefined) actions.push({ ...action, target });
+  });
+  return {
+    actions,
+    actionNote: actions.length < wanted.length ? NO_TARGET_NOTE : null,
+  };
+}
+
+/**
+ * The one question an action answers. One answer per slot is sent: an event
+ * revision, the survey disposition, or the end of the mission (Close or
+ * Cancel).
+ */
+export function actionSlot(action: {
+  kind: ActionKind;
+  attention: { id: string; revision: number } | null;
+}): string {
+  if (action.attention !== null) {
+    return `attention:${action.attention.id}@${action.attention.revision}`;
+  }
+  if (action.kind.startsWith("survey-")) return "survey";
+  return "end";
+}
+
+/**
+ * Whether a sent action still waits for the Commander on this snapshot. An
+ * answer to an event waits while the snapshot still holds that event
+ * revision. A mission-level action waits until a newer snapshot.
+ */
+export function stillWaiting(
+  card: BoardCard,
+  sent: { attention: { id: string; revision: number } | null; generatedAt: number },
+  generatedAt: number,
+): boolean {
+  if (sent.attention === null) return sent.generatedAt >= generatedAt;
+  const { id, revision } = sent.attention;
+  return card.attention.some(
+    (event) => event.id === id && event.revision === revision,
+  );
+}
+
+/**
+ * The card with its sent actions: each one that still waits is listed, and
+ * no action for its slot is offered again.
+ */
+export function withSent(
+  card: BoardCard,
+  sent: readonly (SentAction & { generatedAt: number })[],
+  generatedAt: number,
+): BoardCard {
+  const waiting = sent.filter((action) =>
+    stillWaiting(card, action, generatedAt),
+  );
+  if (waiting.length === 0) return card;
+  const taken = new Set(waiting.map(actionSlot));
+  return {
+    ...card,
+    actions: card.actions.filter((action) => !taken.has(actionSlot(action))),
+    sent: waiting.map(({ kind, attention, line, sentAt }) => ({
+      kind,
+      attention,
+      line,
+      sentAt,
+    })),
+  };
+}
+
+/** Free text as one line: every run of whitespace becomes one space. */
+export function oneLine(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+/** The action line, or an error when the text does not fit the action. */
+export function actionLine(
+  kind: ActionKind,
+  text: string,
+): { line: string } | { error: string } {
+  const answer = oneLine(text);
+  if (answer.length > ACTION_TEXT_MAX_CHARS) {
+    return { error: `The text is longer than ${ACTION_TEXT_MAX_CHARS} characters.` };
+  }
+  const needs = (what: string, line: string) =>
+    answer === "" ? { error: `Write ${what} first.` } : { line };
+  switch (kind) {
+    case "go":
+      return answer === ""
+        ? { line: "Decision: go" }
+        : { error: "Go takes no text. Use an answer instead." };
+    case "decision":
+      return needs("an answer", `Decision: ${answer}`);
+    case "survey-act":
+    case "survey-defer":
+    case "survey-reject": {
+      const line = `Survey disposition: ${kind.slice("survey-".length)}`;
+      return { line: answer === "" ? line : `${line} — ${answer}` };
+    }
+    case "close":
+      return needs("a reason", `Close this mission: ${answer}`);
+    case "cancel":
+      return needs("a reason", `Cancel this mission: ${answer}`);
+    case "reply":
+      return needs("a reply", `Reply: ${answer}`);
+  }
+}
+
+/**
+ * The message an action sends. The Base documents the same format for the
+ * Commander, so keep it exact:
+ *
+ *   Board answer · <title> (<bead id>)
+ *   <one action line>
+ *   <!-- attention:<id>@<revision>#<fingerprint> -->
+ *
+ * The comment line is there only for an answer to an event.
+ */
+export function boardMessage(
+  card: { title: string; bead: string },
+  event: CardAttention | null,
+  line: string,
+): string {
+  const lines = [`Board answer · ${card.title} (${card.bead})`, line];
+  if (event !== null) {
+    lines.push(
+      `<!-- attention:${event.id}@${event.revision}#${event.fingerprint} -->`,
+    );
+  }
+  return lines.join("\n");
 }
 
 /** Every row of one SITREP run as a card, in the SITREP's order. */

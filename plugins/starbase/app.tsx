@@ -1,13 +1,14 @@
 // bb-plugin-starbase — the frontend bundle.
 //
-// The Mission Queue as a read-only board, in two places:
+// The Mission Queue as a board, in two places:
 //   - a "Starbase" nav panel, "All projects" by default; the picked project
 //     lives in the route's subPath, so back/forward walks the picks;
 //   - a "Starbase board" thread panel tab, scoped to the thread's Command
 //     project. A pick made on a Commander is saved for it.
 // The server builds every column from the newest snapshot a Starbase SITREP
 // published; this file only renders them. One card is one SITREP row: a mission, or a
-// Crew thread that no mission bead claims. The board never writes.
+// Crew thread that no mission bead claims. A card action, after its confirm
+// step, sends one message to a Commander root; the board writes nothing else.
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MouseEvent, ReactNode } from "react";
 import {
@@ -17,7 +18,16 @@ import {
   type PluginNavPanelProps,
   type PluginThreadPanelProps,
 } from "@get-bb/plugin-sdk/app";
-import type { BoardCard, BoardColumn, ColumnId } from "./board.js";
+import {
+  actionLine,
+  boardMessage,
+  type ActionKind,
+  type BoardCard,
+  type BoardColumn,
+  type CardAction,
+  type CardAttention,
+  type ColumnId,
+} from "./board.js";
 import type { MissionTone } from "./mission.js";
 import type { starbaseRpcContract } from "./server.js";
 import { Badge } from "./components/ui/badge";
@@ -49,6 +59,29 @@ const ATTENTION_LABELS: Record<string, string> = {
   decision: "Decision",
   blocker: "Blocker",
   "verification-failed": "Verification failed",
+};
+
+const ACTION_LABELS: Record<ActionKind, string> = {
+  go: "Go",
+  decision: "Answer",
+  "survey-act": "Act",
+  "survey-defer": "Defer",
+  "survey-reject": "Reject",
+  close: "Close",
+  cancel: "Cancel",
+  reply: "Reply",
+};
+
+/** What the text field asks for. Go takes no text. */
+const TEXT_PROMPTS: Record<ActionKind, string> = {
+  go: "",
+  decision: "Your answer",
+  "survey-act": "Note (optional)",
+  "survey-defer": "Note (optional)",
+  "survey-reject": "Note (optional)",
+  close: "Why close it?",
+  cancel: "Why cancel it?",
+  reply: "Your reply",
 };
 
 /** The dot before a card's stage. Only `alert` is a strong color. */
@@ -316,10 +349,248 @@ function OpenIcon() {
   );
 }
 
-function CardView(props: { card: BoardCard; showProject: boolean }) {
-  const { card } = props;
+/** The board a card is on, which an action names, and its reload. */
+interface ActionContext {
+  project: string;
+  generatedAt: number;
+  onSent: () => void;
+}
+
+function sameAction(a: CardAction, b: CardAction): boolean {
+  return (
+    a.kind === b.kind &&
+    a.attention?.id === b.attention?.id &&
+    a.attention?.revision === b.attention?.revision
+  );
+}
+
+function ActionButtons(props: {
+  actions: readonly CardAction[];
+  disabled: boolean;
+  onPick: (action: CardAction) => void;
+}) {
+  if (props.actions.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {props.actions.map((action) => (
+        <Button
+          key={`${action.kind}:${action.attention?.id ?? ""}`}
+          variant="outline"
+          size="sm"
+          className="h-7 px-2.5"
+          disabled={props.disabled}
+          onClick={() => props.onPick(action)}
+        >
+          {ACTION_LABELS[action.kind]}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The confirm step: the exact message and its thread, then Send. Only this
+ * button sends; the server checks the action again before it does.
+ */
+function ConfirmAction(props: {
+  card: BoardCard;
+  action: CardAction;
+  context: ActionContext;
+  onClose: () => void;
+}) {
+  const { card, action, context } = props;
+  const rpc = useRpc<typeof starbaseRpcContract>();
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const event =
+    action.attention === null
+      ? null
+      : (card.attention.find(
+          (item) =>
+            item.id === action.attention?.id &&
+            item.revision === action.attention?.revision,
+        ) ?? null);
+  const checked = actionLine(action.kind, text);
+  const message =
+    "line" in checked
+      ? boardMessage(
+          { title: card.title, bead: card.bead ?? card.id },
+          event,
+          checked.line,
+        )
+      : null;
+
+  const send = () => {
+    setSending(true);
+    setError(null);
+    rpc
+      .call("act", {
+        project: context.project,
+        bead: card.bead ?? card.id,
+        kind: action.kind,
+        text,
+        attention: action.attention,
+        generatedAt: context.generatedAt,
+      })
+      .then(
+        (result) => {
+          setSending(false);
+          if (result.sent) {
+            props.onClose();
+            context.onSent();
+          } else {
+            setError(result.error ?? "Not sent.");
+          }
+        },
+        (cause: unknown) => {
+          setSending(false);
+          setError(errorText(cause));
+        },
+      );
+  };
+
+  return (
+    <div
+      role="group"
+      aria-label={`Confirm ${ACTION_LABELS[action.kind]}`}
+      className="flex flex-col gap-1.5 rounded-md border border-border bg-muted/40 p-2"
+    >
+      <div className="text-foreground">
+        <span className="font-medium">{ACTION_LABELS[action.kind]}</span>
+        <span className="text-muted-foreground">
+          {" "}
+          · sends to {action.target}
+        </span>
+      </div>
+      {action.text === "none" ? null : (
+        <textarea
+          aria-label={TEXT_PROMPTS[action.kind]}
+          placeholder={TEXT_PROMPTS[action.kind]}
+          className="min-h-16 w-full rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          value={text}
+          disabled={sending}
+          onChange={(change) => setText(change.target.value)}
+        />
+      )}
+      {message === null ? (
+        "error" in checked && text.trim() !== "" ? (
+          <div className="text-muted-foreground">{checked.error}</div>
+        ) : null
+      ) : (
+        <pre
+          aria-label="Message preview"
+          className="whitespace-pre-wrap break-all rounded bg-background px-2 py-1 font-mono text-[11px] text-muted-foreground"
+        >
+          {message}
+        </pre>
+      )}
+      {error === null ? null : (
+        <div role="alert" className="break-words text-destructive">
+          {error}
+        </div>
+      )}
+      <div className="flex gap-1.5">
+        <Button
+          size="sm"
+          className="h-7 px-2.5"
+          variant={action.kind === "cancel" ? "destructive" : "default"}
+          disabled={sending || message === null}
+          onClick={send}
+        >
+          {sending ? "Sending…" : "Send"}
+        </Button>
+        <Button
+          size="sm"
+          className="h-7 px-2.5"
+          variant="ghost"
+          disabled={sending}
+          onClick={props.onClose}
+        >
+          Back
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** The Commander message that surfaced an event, read when the card opens. */
+function QuestionText(props: {
+  card: BoardCard;
+  event: CardAttention;
+  project: string;
+}) {
+  const { card, event, project } = props;
+  const rpc = useRpc<typeof starbaseRpcContract>();
+  const [answer, setAnswer] = useState<{
+    text: string | null;
+    error: string | null;
+  } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    rpc
+      .call("question", {
+        project,
+        bead: card.bead ?? card.id,
+        attention: { id: event.id, revision: event.revision },
+      })
+      .then(
+        (result) => {
+          if (!cancelled) setAnswer(result);
+        },
+        (cause: unknown) => {
+          if (!cancelled) setAnswer({ text: null, error: errorText(cause) });
+        },
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, [project, card.bead, card.id, event.id, event.revision]);
+  return (
+    <div>
+      <span className="text-muted-foreground">
+        {ATTENTION_LABELS[event.kind] ?? event.kind}, as the Commander asked:{" "}
+      </span>
+      {answer === null ? (
+        <span className="text-muted-foreground">Loading…</span>
+      ) : answer.text === null ? (
+        <span className="text-muted-foreground">{answer.error}</span>
+      ) : (
+        <div className="mt-0.5 max-h-60 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/40 px-2 py-1 text-foreground">
+          {answer.text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CardView(props: {
+  card: BoardCard;
+  showProject: boolean;
+  context: ActionContext | null;
+}) {
+  const { card, context } = props;
   const navigate = useBbNavigate();
   const [open, setOpen] = useState(false);
+  const [picked, setPicked] = useState<CardAction | null>(null);
+  // A refresh that no longer offers the picked action closes its form.
+  const pending =
+    context === null || picked === null
+      ? null
+      : (card.actions.find((action) => sameAction(action, picked)) ?? null);
+  const pick = (action: CardAction) => setPicked(action);
+  const eventActions = (event: CardAttention) =>
+    card.actions.filter(
+      (action) =>
+        action.attention?.id === event.id &&
+        action.attention.revision === event.revision,
+    );
+  const surveyActions = card.actions.filter((action) =>
+    action.kind.startsWith("survey-"),
+  );
+  const endActions = card.actions.filter(
+    (action) => action.kind === "close" || action.kind === "cancel",
+  );
   const openPr = (event: MouseEvent<HTMLAnchorElement>) => {
     if (card.pr !== null && navigate.openUrl(card.pr.url))
       event.preventDefault();
@@ -386,9 +657,57 @@ function CardView(props: { card: BoardCard; showProject: boolean }) {
               ) : null}
               <span className="text-muted-foreground">: </span>
               {event.summary}
+              {context === null ? null : (
+                <div className="mt-1">
+                  <ActionButtons
+                    actions={eventActions(event)}
+                    disabled={pending !== null}
+                    onPick={pick}
+                  />
+                </div>
+              )}
             </li>
           ))}
         </ul>
+      )}
+      {context === null ||
+      (surveyActions.length === 0 &&
+        card.sent.length === 0 &&
+        card.actionNote === null &&
+        pending === null) ? null : (
+        <div className="flex flex-col gap-1.5 px-2.5 pb-1.5 text-xs">
+          {surveyActions.length === 0 ? null : (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-muted-foreground">Survey:</span>
+              <ActionButtons
+                actions={surveyActions}
+                disabled={pending !== null}
+                onPick={pick}
+              />
+            </div>
+          )}
+          {card.sent.map((sent) => (
+            <div
+              key={`${sent.kind}:${sent.sentAt}`}
+              className="break-words text-muted-foreground"
+            >
+              Sent, waiting for the Commander: {sent.line}
+            </div>
+          ))}
+          {card.actionNote === null ? null : (
+            <div className="break-words text-muted-foreground">
+              {card.actionNote}
+            </div>
+          )}
+          {pending === null ? null : (
+            <ConfirmAction
+              card={card}
+              action={pending}
+              context={context}
+              onClose={() => setPicked(null)}
+            />
+          )}
+        </div>
       )}
       {(card.pr !== null ||
         card.integrity !== null ||
@@ -460,13 +779,39 @@ function CardView(props: { card: BoardCard; showProject: boolean }) {
               </span>
             </div>
           ))}
+          {context === null
+            ? null
+            : card.attention
+                .filter((event) => event.messageRef !== null)
+                .map((event) => (
+                  <QuestionText
+                    key={`${event.id}@${event.revision}`}
+                    card={card}
+                    event={event}
+                    project={context.project}
+                  />
+                ))}
+          {context === null || endActions.length === 0 ? null : (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-muted-foreground">End the mission:</span>
+              <ActionButtons
+                actions={endActions}
+                disabled={pending !== null}
+                onPick={pick}
+              />
+            </div>
+          )}
         </div>
       ) : null}
     </div>
   );
 }
 
-function ColumnView(props: { column: BoardColumn; showProject: boolean }) {
+function ColumnView(props: {
+  column: BoardColumn;
+  showProject: boolean;
+  context: ActionContext | null;
+}) {
   const { column } = props;
   const collapsible = COLLAPSED_WHEN_NARROW.has(column.id);
   const [collapsed, setCollapsed] = useState(collapsible);
@@ -525,6 +870,7 @@ function ColumnView(props: { column: BoardColumn; showProject: boolean }) {
               key={card.id}
               card={card}
               showProject={props.showProject}
+              context={props.context}
             />
           ))
         )}
@@ -543,7 +889,11 @@ function ColumnView(props: { column: BoardColumn; showProject: boolean }) {
   );
 }
 
-function BoardView(props: { board: BoardData | null; error: string | null }) {
+function BoardView(props: {
+  board: BoardData | null;
+  error: string | null;
+  onRefresh: () => void;
+}) {
   const { board } = props;
   if (board === null) {
     if (props.error !== null) {
@@ -557,6 +907,14 @@ function BoardView(props: { board: BoardData | null; error: string | null }) {
       </div>
     );
   }
+  const context: ActionContext | null =
+    board.generatedAt === null
+      ? null
+      : {
+          project: board.project,
+          generatedAt: board.generatedAt,
+          onSent: props.onRefresh,
+        };
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto">
       {props.error === null ? null : (
@@ -571,6 +929,7 @@ function BoardView(props: { board: BoardData | null; error: string | null }) {
               key={column.id}
               column={column}
               showProject={board.project === ALL}
+              context={context}
             />
           ))}
         </div>
@@ -605,7 +964,11 @@ function StarbasePanel({ subPath }: PluginNavPanelProps) {
           }
         />
       </Toolbar>
-      <BoardView board={live.data} error={live.error} />
+      <BoardView
+        board={live.data}
+        error={live.error}
+        onRefresh={live.refresh}
+      />
     </div>
   );
 }
@@ -663,7 +1026,11 @@ function ThreadBoard({ threadId }: { threadId: string }) {
       {live.data !== null && project === null ? (
         <Message>Pick a project to show its missions.</Message>
       ) : (
-        <BoardView board={board} error={live.error} />
+        <BoardView
+          board={board}
+          error={live.error}
+          onRefresh={live.refresh}
+        />
       )}
     </div>
   );

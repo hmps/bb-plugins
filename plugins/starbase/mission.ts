@@ -52,8 +52,18 @@ export interface MissionAttention {
   revision: number;
   kind: AttentionKind;
   summary: string;
-  /** Set when the event was surfaced to the Commander. It never resolves it. */
+  /** The event's SHA-256, which a board answer names. */
+  fingerprint: string;
+  /**
+   * Set when a verified receipt shows the event was surfaced to the
+   * Commander. It never resolves the event.
+   */
   surfaced: boolean;
+  /**
+   * The verified receipt's `message_ref`, `@thread:<id>#msg=<seq>`: the
+   * Commander message that surfaced the event. Null with no verified receipt.
+   */
+  messageRef: string | null;
 }
 
 export interface MissionDisposition {
@@ -75,6 +85,9 @@ export interface MissionState {
   nextAction: string | null;
   targets: MissionTarget[];
   disposition: MissionDisposition | null;
+  /** Every current event, surfaced or not. */
+  attention: MissionAttention[];
+  /** The events without a currently verified receipt. */
   pendingAttention: MissionAttention[];
   /** `report.verdict`, or null with no report. A Crew verdict proves nothing. */
   reportVerdict: string | null;
@@ -151,12 +164,21 @@ function boolean(value: unknown, what: string): boolean {
 
 function attention(value: unknown, what: string): MissionAttention {
   const item = object(value, what);
+  const receipt =
+    item.receipt === null || item.receipt === undefined
+      ? null
+      : object(item.receipt, `${what}.receipt`);
   return {
     id: nonEmpty(item.id, `${what}.id`),
     revision: positiveInt(item.revision, `${what}.revision`),
     kind: oneOf(item.kind, ATTENTION_KINDS, `${what}.kind`),
     summary: nonEmpty(item.summary, `${what}.summary`),
-    surfaced: item.receipt !== null && item.receipt !== undefined,
+    fingerprint: nonEmpty(item.fingerprint, `${what}.fingerprint`),
+    surfaced: receipt !== null,
+    messageRef:
+      receipt === null
+        ? null
+        : nonEmpty(receipt.message_ref, `${what}.receipt.message_ref`),
   };
 }
 
@@ -202,9 +224,6 @@ function toState(value: unknown): MissionState {
         })();
   const report = raw.report === null ? null : object(raw.report, "report");
   array(raw.evidence, "evidence");
-  array(raw.attention, "attention").forEach((item, i) =>
-    attention(item, `attention[${i}]`),
-  );
 
   return {
     integrity: oneOf(raw.integrity, INTEGRITIES, "integrity"),
@@ -230,6 +249,9 @@ function toState(value: unknown): MissionState {
       };
     }),
     disposition,
+    attention: array(raw.attention, "attention").map((item, i) =>
+      attention(item, `attention[${i}]`),
+    ),
     pendingAttention: array(raw.pending_attention, "pending_attention").map(
       (item, i) => attention(item, `pending_attention[${i}]`),
     ),
@@ -342,6 +364,8 @@ export type MissionTone = "alert" | "warn" | "working" | "waiting" | "quiet";
 
 export interface MissionView {
   column: ColumnId;
+  /** The core's lifecycle; null when the row has no readable v1 state. */
+  lifecycle: Lifecycle | null;
   /** The lifecycle in words, with the target count where it matters. */
   stage: string;
   tone: MissionTone;
@@ -351,7 +375,10 @@ export interface MissionView {
   ownerThread: string | null;
   /** True when an owner is named but bb does not show it active right now. */
   ownerIdle: boolean;
-  /** Pending events, decisions first. Surfaced ones stay until resolved. */
+  /**
+   * Every current event, decisions first. A pending event sets the column;
+   * a surfaced one stays on the card until the core resolves it.
+   */
   attention: MissionAttention[];
   /** A short label for non-valid integrity; null when the state is valid. */
   integrity: string | null;
@@ -405,13 +432,23 @@ const ATTENTION_ORDER: Record<AttentionKind, number> = {
  * never reads as done.
  */
 export function viewMission(state: MissionState): MissionView {
-  const attention = [...state.pendingAttention].sort(
-    (a, b) => ATTENTION_ORDER[a.kind] - ATTENTION_ORDER[b.kind],
-  );
+  // The core moves an event with a verified receipt out of
+  // pending_attention, so a receipt on a pending event is one that failed.
+  const key = (a: MissionAttention) => `${a.id}@${a.revision}`;
+  const pending = new Set(state.pendingAttention.map(key));
+  const attention = [
+    ...state.pendingAttention.map((a) => ({
+      ...a,
+      surfaced: false,
+      messageRef: null,
+    })),
+    ...state.attention.filter((a) => !pending.has(key(a))),
+  ].sort((a, b) => ATTENTION_ORDER[a.kind] - ATTENTION_ORDER[b.kind]);
   let column = LIFECYCLE_COLUMNS[state.lifecycle];
   if (state.integrity !== "valid") column = "review";
-  else if (attention.some((a) => a.kind === "decision")) column = "waiting";
-  else if (attention.length > 0) column = "blocked";
+  else if (state.pendingAttention.some((a) => a.kind === "decision")) {
+    column = "waiting";
+  } else if (state.pendingAttention.length > 0) column = "blocked";
 
   const verified = state.targets.filter((t) => t.status === "verified").length;
   const total = state.targets.length;
@@ -435,6 +472,7 @@ export function viewMission(state: MissionState): MissionView {
 
   return {
     column,
+    lifecycle: state.lifecycle,
     stage,
     tone,
     nextAction: state.nextAction,
