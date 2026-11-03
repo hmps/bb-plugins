@@ -11,7 +11,8 @@ a Commander, whatever project the Crew thread itself runs in.
 bb already pushes a Crew thread's completion message to its parent, so a
 finished Mission needs no plugin. This plugin, the Sentinel, covers the two
 cases the push does not, adds two commands, and stores the SITREP snapshots
-that the Mission Queue board shows.
+that the Mission Queue board shows. From the board, you can answer a mission
+in its Commander thread.
 
 ## What it does
 
@@ -189,8 +190,9 @@ closes it. Settle Crew that has stopped working.
 
 ## The Mission Queue board
 
-The plugin also shows the Mission Queue as a read-only board. Open it in two
-places:
+The plugin also shows the Mission Queue as a board. The columns come from the
+SITREP; you cannot drag a card. A card can send your answer to its Commander
+thread. Open the board in two places:
 
 - **Starbase** in the sidebar. It shows all projects. Pick one project in the
   picker; the pick is part of the URL.
@@ -325,15 +327,17 @@ A card shows:
 - "Next:" and the next action, in two lines; an open card shows all of it;
 - "Owner:" and the owner role and thread, with "idle" when the owner thread
   is idle;
-- each pending attention event, with "seen" when the Commander surfaced it;
+- each current attention event. "seen" marks an event that the Commander
+  surfaced; its receipt passed the check, so it no longer sets the column;
+- the card actions, or the reason why the card has none;
 - an integrity badge when the board cannot trust the record, the PR state,
   and the SITREP flags.
 
 The "Open thread" button opens the thread. Click a card to see the problems,
 the latest outcome and note, and the bb thread status.
 
-Only the pending attention and the lifecycle make a card ask for the user's
-eye. Report problems show as text on the card. The board sends no
+Only the pending attention and the lifecycle set the column and make a card
+ask for the user's eye. Report problems show as text on the card. The board sends no
 notification.
 
 ### How far to trust the board
@@ -353,15 +357,93 @@ Refresh reads them again at once. It never runs a SITREP. The thread panel
 gets its scope and its board in one call. A Commander's inferred project is
 cached for 5 minutes; a pick clears it.
 
-### The board only reads
+### Card actions
+
+A card shows buttons for the actions that fit its state. Each action sends one
+message to a Commander root thread. The plugin never writes a bead, a mission
+state, or a file. Only a click on Send in the app sends; no other path sends.
+
+| Card state | Actions | Text |
+| --- | --- | --- |
+| A `decision` event | Go, or Answer | Go takes no text. Answer needs it. |
+| A `blocker` or `verification-failed` event | Reply | Required. |
+| A survey with the lifecycle `awaiting-decision` | Act, Defer, or Reject | An optional note. |
+| An open mission (not `complete` or `cancelled`) | Close or Cancel, on the open card | A required reason. |
+
+A row with no bead or no readable v1 state has no actions. A click opens a
+confirm step. It shows the target thread and the exact message. Send sends
+it; Back closes the step.
+
+The target thread:
+
+1. For an event with a verified receipt: the thread of `receipt.message_ref`.
+2. Else: the row's `commander_root`, when it is a thread id.
+3. Else: no action. The card says that the snapshot names no Commander thread.
+
+Before each send, the plugin reads the target and refuses a thread that is not
+a Commander root. The snapshot's `commander` key is not a target: a SITREP for
+all projects can name a Commander of another project.
+
+The message has this form. The comment line is there only for an event:
+
+```text
+Board answer · <title> (<bead id>)
+<one action line>
+<!-- attention:<id>@<revision>#<fingerprint> -->
+```
+
+| Action | The action line |
+| --- | --- |
+| Go | `Decision: go` |
+| Answer | `Decision: <text>` |
+| Act, Defer, Reject | `Survey disposition: act`, `defer`, or `reject`, plus ` — <note>` with a note |
+| Close | `Close this mission: <reason>` |
+| Cancel | `Cancel this mission: <reason>` |
+| Reply | `Reply: <text>` |
+
+The text becomes one line of at most 2000 characters. The send works as the
+relay: `start` on an idle Commander, else `queue-if-active`, so it never steers
+a live turn.
+
+For an event with a verified receipt, the open card reads that Commander
+message through the bb SDK and shows its text.
+
+### One answer per question
+
+The plugin stores each sent action in its own database, in `board_action`.
+The key is the question that the action answers:
+
+- an event: one answer for each event id and revision;
+- a survey: one disposition for each snapshot;
+- the end of the mission: one Close or Cancel for each snapshot.
+
+A second send for the same key is refused. The card shows "Sent, waiting for
+the Commander" and the line it sent. An event answer waits while the snapshot
+holds that event revision. A survey or end action waits until a newer snapshot
+arrives.
+
+The plugin checks every send against the stored snapshot, never the copy in
+the app:
+
+- When a newer snapshot is stored, the send is refused. Refresh, then try
+  again.
+- When the card no longer offers the action, the send is refused.
+
+The plugin reserves the key before the send. When bb refuses the send with a
+4xx status, nothing arrived, so the plugin releases the key and you can send
+again. Any other failure can have delivered the message. The key stays, and
+the card says to look in the Commander thread. That question then takes no
+other answer from the board until its event revision or the snapshot changes.
+
+### What the board reads and writes
 
 - It reads the snapshots stored in its own database.
 - It reads `projects/*/posture.toml` for the project list and `project_id`.
-- It reads no thread through the bb SDK for the board.
+- For an open card, it reads the Commander message of each surfaced event.
+- A card action reads its target thread and sends one message to it.
 
-It runs no process, never writes a bead, and has no board action that writes.
-Only `bb starbase publish` writes a snapshot. Each column sends at most 150
-cards and the full count.
+It runs no process and never writes a bead. Only `bb starbase publish` writes a
+snapshot. Each column sends at most 150 cards and the full count.
 
 ## Settings
 
@@ -393,10 +475,21 @@ Their rows come from the pinned core full rows in
 the SDK app harness.
 
 The live smoke publishes a real `all` snapshot that you name, and reads real
-threads through the local bb API. It only reads, and it prints the column
-counts. It fails when the snapshot rows are older than v1:
+threads through the local bb API. It prints the column counts. It fails when
+the snapshot rows are older than v1:
 
 ```bash
 STARBASE_LIVE=1 STARBASE_LIVE_BASE=/path/to/starbase \
   STARBASE_LIVE_SNAPSHOT=/path/to/snapshot.json npx vitest run board.live
+```
+
+The card action smoke sends one real message, so it needs a scratch thread
+that you make for it: an idle root thread. The smoke makes that thread's
+project the only Commander project and publishes a synthetic snapshot. Its
+one card has a decision that the scratch thread's first message surfaced. The
+smoke reads that message with `question`, sends Go with `act`, and checks that
+a second Go is refused. Archive the scratch thread after:
+
+```bash
+STARBASE_LIVE=1 STARBASE_LIVE_SCRATCH=thr_... npx vitest run board.live
 ```

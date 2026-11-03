@@ -9,7 +9,17 @@
 // The snapshot must be an `all` one with mission state v1 rows: older rows
 // give a board of pre-v1 rows, and the smoke fails. Skipped otherwise, so
 // `pnpm test` never touches the network.
-import { readFileSync } from "node:fs";
+//
+// The card action smoke sends one real message, so it runs only against a
+// scratch thread that you made for it: a root thread, idle, whose first
+// message is a user prompt. It publishes a synthetic snapshot whose one card
+// has a decision surfaced by that first message, reads the message back with
+// `question`, and answers Go with `act`. Archive the scratch thread after.
+//
+//   STARBASE_LIVE=1 STARBASE_LIVE_SCRATCH=thr_... npx vitest run board.live
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
 import plugin from "./server";
@@ -18,6 +28,7 @@ import { COLUMN_IDS } from "./board";
 const LIVE = process.env.STARBASE_LIVE === "1";
 const BASE = process.env.STARBASE_LIVE_BASE ?? "";
 const SNAPSHOT = process.env.STARBASE_LIVE_SNAPSHOT ?? "";
+const SCRATCH = process.env.STARBASE_LIVE_SCRATCH ?? "";
 /** The part size a publisher uses: one argv string stays far below E2BIG. */
 const PART_CHARS = 64 * 1024;
 const API = `${process.env.BB_SERVER_URL ?? "http://127.0.0.1:38886"}/api/v1`;
@@ -36,14 +47,40 @@ async function get(path: string): Promise<unknown> {
   return response.json();
 }
 
-function loadPlugin() {
+/** One POST; a refusal throws with the status and code, as the SDK does. */
+async function post(path: string, body: unknown): Promise<unknown> {
+  const response = await fetch(`${API}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = (await response.json().catch(() => null)) as {
+    code?: string;
+    message?: string;
+  } | null;
+  if (!response.ok) {
+    throw Object.assign(
+      new Error(`HTTP ${response.status}: ${payload?.message ?? path}`),
+      { status: response.status, code: payload?.code, body: payload },
+    );
+  }
+  return payload;
+}
+
+function loadPlugin(
+  settings = { commanderProjectIds: VAAM_COMMANDER_PROJECT, baseRoot: BASE },
+) {
   const fake = createFakePluginHost({
     pluginId: "starbase",
-    settings: { commanderProjectIds: VAAM_COMMANDER_PROJECT, baseRoot: BASE },
+    settings,
     sdk: {
       threads: {
         get: ({ threadId }: { threadId: string }) =>
           get(`/threads/${threadId}`),
+        message: ({ threadId, seq }: { threadId: string; seq: number }) =>
+          get(`/threads/${threadId}/messages/${seq}`),
+        send: ({ threadId, ...body }: { threadId: string }) =>
+          post(`/threads/${threadId}/send`, body),
         list: (args?: {
           parentThreadId?: string;
           archived?: boolean;
@@ -146,6 +183,121 @@ describe.skipIf(!LIVE)("live board", () => {
     await timed(`panel call (${VAAM_COMMANDER}, warm)`, () =>
       call("panel", { threadId: VAAM_COMMANDER }),
     );
+    await fake.harness.dispose();
+  }, 120_000);
+});
+
+describe.skipIf(!LIVE || SCRATCH === "")("live card actions", () => {
+  it("reads the surfaced message and sends one answer to the scratch thread", async () => {
+    const scratch = (await get(`/threads/${SCRATCH}`)) as {
+      projectId: string;
+      parentThreadId: string | null;
+      status: string;
+    };
+    expect(scratch.parentThreadId, "the scratch must be a root thread").toBeNull();
+    expect(scratch.status, "the scratch must be idle").toBe("idle");
+    const first = (await get(`/threads/${SCRATCH}/messages/1`)) as {
+      message: { text: string };
+    };
+
+    // The scratch thread's project is the only Commander project, and the
+    // Base has no postures, so nothing else is a target.
+    const fake = loadPlugin({
+      commanderProjectIds: scratch.projectId,
+      baseRoot: mkdtempSync(join(tmpdir(), "starbase-live-")),
+    });
+    const call = (name: string, input: unknown) =>
+      fake.harness.callRpc(name, input) as Promise<unknown>;
+
+    const fixture = JSON.parse(
+      readFileSync(
+        join(
+          import.meta.dirname,
+          "fixtures/mission-state-v1/full-rows/survey-decision.json",
+        ),
+        "utf8",
+      ),
+    ).stdout[0];
+    const state = structuredClone(fixture.mission_state);
+    state.attention[0] = {
+      ...state.attention[0],
+      receipt: { message_ref: `@thread:${SCRATCH}#msg=1` },
+    };
+    state.pending_attention = [];
+    const generatedAt = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+    const published = await fake.harness.runCli([
+      "publish",
+      "--snapshot",
+      JSON.stringify({
+        version: 1,
+        generated_at: generatedAt,
+        host: "live-smoke",
+        project: "all",
+        commander: null,
+        exit_code: 0,
+        rows: [
+          {
+            ...fixture,
+            bead: "smoke-1",
+            title: "Board action live smoke",
+            thread: SCRATCH,
+            project: "smoke",
+            mission_state: state,
+          },
+        ],
+      }),
+    ]);
+    expect(published.exitCode).toBe(0);
+
+    const board = (await call("board", { project: "all" })) as {
+      generatedAt: number;
+      columns: {
+        cards: {
+          bead: string | null;
+          attention: { id: string; revision: number; messageRef: string | null }[];
+          actions: { kind: string; target: string }[];
+        }[];
+      }[];
+    };
+    const card = board.columns
+      .flatMap((column) => column.cards)
+      .find((item) => item.bead === "smoke-1");
+    const event = card?.attention.find((item) => item.messageRef !== null);
+    expect(event, "the smoke card has a surfaced event").toBeDefined();
+    if (card === undefined || event === undefined) return;
+    expect(card.actions.find((action) => action.kind === "go")?.target).toBe(
+      SCRATCH,
+    );
+    const attention = { id: event.id, revision: event.revision };
+
+    const asked = (await call("question", {
+      project: "all",
+      bead: "smoke-1",
+      attention,
+    })) as { text: string | null; threadId: string | null; error: string | null };
+    say(`question: ${asked.error ?? `${asked.text?.length} chars from ${asked.threadId}`}`);
+    expect(asked).toEqual({
+      text: first.message.text,
+      threadId: SCRATCH,
+      error: null,
+    });
+
+    const input = {
+      project: "all",
+      bead: "smoke-1",
+      kind: "go",
+      text: "",
+      attention,
+      generatedAt: board.generatedAt,
+    };
+    const sent = await timed("act (go)", () => call("act", input));
+    say(`act: ${JSON.stringify(sent)}`);
+    expect(sent).toEqual({ sent: true, target: SCRATCH, error: null });
+    expect(await call("act", input)).toEqual({
+      sent: false,
+      target: null,
+      error: "Already sent. The card waits for the Commander.",
+    });
     await fake.harness.dispose();
   }, 120_000);
 });

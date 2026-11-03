@@ -401,7 +401,7 @@ const migrations = [
    )`,
   // One row per card action sent. The key is one answer per question: an
   // event revision, or a mission-level slot on one snapshot. A row is
-  // reserved before the send and deleted when the send fails.
+  // reserved before the send and deleted only when bb refuses the send.
   `CREATE TABLE IF NOT EXISTS board_action (
      id                 INTEGER PRIMARY KEY AUTOINCREMENT,
      dedupe_key         TEXT NOT NULL UNIQUE,
