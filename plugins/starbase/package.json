@@ -1,7 +1,7 @@
 {
   "name": "bb-plugin-starbase",
-  "version": "0.4.0",
-  "description": "The Starbase Sentinel and Mission Queue board: relays Crew failures and pending interactions to the Commander, reports a SITREP, settles finished Crew, stores published SITREP snapshots, and shows the newest one as a read-only Mission Queue Kanban board.",
+  "version": "0.5.0",
+  "description": "The Starbase Sentinel and Mission Queue board: relays Crew failures and pending interactions to the Commander, reports a SITREP, settles finished Crew, stores published SITREP snapshots, and shows the newest one as a Mission Queue Kanban board whose cards send answers to the Commander.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -10,7 +10,7 @@
   },
   "bb": {
     "name": "Starbase",
-    "description": "Sentinel and Mission Queue board for the Starbase orchestration model. Relays Crew failures and pending interactions to the Commander, adds `bb starbase sitrep`, `bb starbase settle`, and `bb starbase publish`, and shows a read-only Kanban board of the newest published Mission Queue snapshot.",
+    "description": "Sentinel and Mission Queue board for the Starbase orchestration model. Relays Crew failures and pending interactions to the Commander, adds `bb starbase sitrep`, `bb starbase settle`, and `bb starbase publish`, and shows a Kanban board of the newest published Mission Queue snapshot, with card actions that answer the Commander.",
     "branding": {
       "icon": "Satellite"
     },
