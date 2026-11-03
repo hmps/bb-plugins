@@ -7,8 +7,8 @@
 //     STARBASE_LIVE_SNAPSHOT=/path/to/snapshot.json npx vitest run board.live
 //
 // The snapshot must be an `all` one with mission state v1 rows: older rows
-// give a board of pre-v1 rows, and the smoke fails. Skipped otherwise, so
-// `pnpm test` never touches the network.
+// give a board of pre-v1 rows, and the smoke fails. Skipped with no
+// snapshot, so `pnpm test` never touches the network.
 //
 // The card action smoke sends one real message, so it runs only against a
 // scratch thread that you made for it: a root thread, idle, whose first
@@ -144,10 +144,9 @@ function say(line: string): void {
   process.stdout.write(`${line}\n`);
 }
 
-describe.skipIf(!LIVE)("live board", () => {
+describe.skipIf(!LIVE || SNAPSHOT === "")("live board", () => {
   it("prints the column counts and timings for vaam-main and all", async () => {
     expect(BASE, "set STARBASE_LIVE_BASE to a v1 Base").not.toBe("");
-    expect(SNAPSHOT, "set STARBASE_LIVE_SNAPSHOT to a snapshot").not.toBe("");
     const fake = loadPlugin();
     const call = (name: string, input: unknown) =>
       fake.harness.callRpc(name, input) as Promise<unknown>;
