@@ -64,16 +64,16 @@ const HIDDEN_FLAGS = new Set(["ok", "output-not-recorded"]);
 /** The SITREP's word for "no value" in a progress field. */
 const NO_VALUE = new Set(["", "-", "unknown"]);
 
-/** One pending event, as the card shows it. */
+/** One current event, as the card shows it. */
 export interface CardAttention {
   id: string;
   revision: number;
   kind: string;
   summary: string;
   fingerprint: string;
-  /** The Commander saw it. It is still pending until resolved. */
+  /** A verified receipt shows the Commander saw it. It stays until resolved. */
   surfaced: boolean;
-  /** The receipt's message, `@thread:<id>#msg=<seq>`; null with no receipt. */
+  /** The verified receipt's message, `@thread:<id>#msg=<seq>`; else null. */
   messageRef: string | null;
 }
 
