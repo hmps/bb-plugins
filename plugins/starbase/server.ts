@@ -1621,6 +1621,13 @@ export default function plugin(bb: BbPluginApi) {
         `${action.target} is not a Commander root thread, so the board does not send to it.`,
       );
     }
+    // The reads above yield, so a newer snapshot can arrive meanwhile. Check
+    // again: nothing yields between this check and the reserve below.
+    if (boardCard(input.project, input.bead)?.snap.generatedAt !== snap.generatedAt) {
+      return refuse(
+        "The board changed since you loaded it. Refresh, then try again.",
+      );
+    }
 
     const slot = actionSlot(action);
     const dedupeKey = `${input.bead}#${slot}${asked === null ? `@${snap.generatedAt}` : ""}`;

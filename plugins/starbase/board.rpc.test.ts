@@ -178,6 +178,7 @@ function publishArgs(document: unknown, size = 64 * 1024): string[] {
 }
 
 interface SdkFakes {
+  get?: (args: { threadId: string }) => unknown;
   send?: (args: unknown) => unknown;
   message?: (args: { threadId: string; seq: number }) => unknown;
 }
@@ -193,7 +194,7 @@ async function loadPlugin(
     settings: { commanderProjectIds: COMMANDER_PROJECT, baseRoot: root },
     sdk: {
       threads: {
-        get: threadsGet,
+        get: sdk.get ?? threadsGet,
         list: threadsList,
         send: sdk.send ?? (() => ({ ok: true, delivery: "sent" })),
         message:
@@ -817,6 +818,27 @@ describe("act rpc", () => {
     expect(
       await fake.harness.callRpc("act", act({ generatedAt: GENERATED_AT - 1 })),
     ).toMatchObject({
+      sent: false,
+      error: "The board changed since you loaded it. Refresh, then try again.",
+    });
+    expect(fake.harness.sdk.callsTo("threads.send")).toHaveLength(0);
+  });
+
+  it("refuses an answer when a newer snapshot arrives during the target read", async () => {
+    let publishNewer: (() => Promise<unknown>) | null = null;
+    const { fake, publish } = await loadPlugin(
+      [snapshot({ rows: [surveyRow()] })],
+      {
+        get: async (args) => {
+          await publishNewer?.();
+          publishNewer = null;
+          return threadsGet(args);
+        },
+      },
+    );
+    publishNewer = () =>
+      publish(snapshot({ generated_at: "2026-10-22T09:00:00Z", rows: [] }));
+    expect(await fake.harness.callRpc("act", act())).toMatchObject({
       sent: false,
       error: "The board changed since you loaded it. Refresh, then try again.",
     });
