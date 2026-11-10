@@ -94,7 +94,8 @@ form[data-promptbox] {
  * (dark: fill #18181a between page and composer, no edge, inset 22px so it
  * sits inside the composer's 22px corners, square top, rounded bottom). New thread page: the div after the form. Threads: the
  * follow-up footer; bb hides it by height and opacity, so only the
- * expanded state (max-h-6) grows.
+ * expanded state (max-h-6) grows. Phones with touch keep bb's own 44px
+ * footer, and bb's compact container rule still hides the footer.
  */
 [data-promptbox-shell] > form[data-promptbox] + div,
 [data-follow-up-composer-footer] {
@@ -107,19 +108,10 @@ form[data-promptbox] {
 [data-promptbox-shell] > form[data-promptbox] + div {
   padding-block: 4px;
 }
-[data-follow-up-composer-footer].max-h-6 {
-  min-height: 36px;
-  max-height: 36px;
-}
-/*
- * Phones: bb hides the footer with a container style query while the
- * composer container is compact. The 36px rule above wins over it and
- * leaves 36px of empty space under the composer, so repeat bb's rule.
- */
-@container follow-up-composer style(--follow-up-composer-container-compact: true) {
-  [data-follow-up-composer] [data-follow-up-composer-footer] {
-    min-height: 0;
-    max-height: 0;
+@media (width >= 48rem), not all and (pointer: coarse) {
+  [data-follow-up-composer-footer].max-h-6 {
+    min-height: 36px;
+    max-height: 36px;
   }
 }
 
@@ -139,26 +131,26 @@ form[data-promptbox] {
   border-top-right-radius: 18px;
   box-shadow: none;
 }
-/* The changes bar ("Committed · 3 files") above it: the same inset. */
-[data-promptbox-shell] section.rounded-lg.border.bg-surface-raised-solid {
+/*
+ * The other stack cards above it (context, todo, workflow, machine and
+ * more): the same inset. bb renders them as a section or a div with the
+ * same classes. The peek layers behind a collapsed stack match too, so
+ * they keep bb's inset relative to the front card.
+ */
+[data-promptbox-shell] .rounded-lg.border.bg-surface-raised-solid {
   margin-inline: 22px;
 }
 
 /*
  * Light mode only: a white composer with a faint edge, not a grey fill.
  * No shadow (the rule above removes it). The drawer keeps its grey
- * (#f3f3f3). bb marks dark mode with html.dark.
+ * (#f3f3f3). bb marks dark mode with html.dark. The submit controls keep
+ * bb's shapes and colors: Send is a split control with a menu, and Stop
+ * and voice input have their own state colors.
  */
 :root:not(.dark) form[data-promptbox] {
   background-color: var(--canvas);
   border-color: color-mix(in oklch, var(--ink) 12%, var(--canvas));
-}
-/* Send: a black circle with a white icon. */
-:root:not(.dark) [data-promptbox-submit-action] {
-  border-color: transparent;
-  border-radius: 9999px;
-  background-color: oklch(0% 0 0);
-  color: oklch(100% 0 0);
 }
 :root:not(.dark) [data-promptbox-shell] > form[data-promptbox] + div,
 :root:not(.dark) [data-follow-up-composer-footer] {
