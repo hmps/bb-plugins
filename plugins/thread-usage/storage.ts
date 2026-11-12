@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import { fields, type Totals, type ThreadUsage, type DailyUsage } from "./contract";
+import { fields, type Totals, type ThreadUsage, type DailyUsage, type ThreadsUsage } from "./contract";
 
 export const HOUR = 3_600_000;
 export const DAY = 24 * HOUR;
@@ -162,7 +162,7 @@ export class UsageStore {
     }
     return { days, rows: [...grouped.values()].sort((a, b) => a.day.localeCompare(b.day) || a.projectId.localeCompare(b.projectId) || a.model.localeCompare(b.model)) };
   }
-  getThreads(since: number, retentionDays: number, project?: string, limit = 20) {
+  getThreads(since: number, retentionDays: number, project?: string, limit = 20): ThreadsUsage {
     const retentionStart = hourStart(this.now() - retentionDays * DAY);
     const rows = this.db.prepare(`SELECT h.thread_id, h.project_id, h.model, t.title,
       ${fields.map((f) => `SUM(h.${f}) AS ${f}`).join(", ")}
@@ -171,7 +171,7 @@ export class UsageStore {
       GROUP BY h.thread_id, h.project_id, h.model ORDER BY totalTokens DESC, h.thread_id, h.model LIMIT ?`)
       .all(...[Math.max(hourStart(since), retentionStart), ...(project ? [project] : []), limit]) as Row[];
     return { since, retentionStart, truncated: since < retentionStart,
-      rows: rows.map((r) => ({ threadId: String(r.thread_id), projectId: String(r.project_id), model: String(r.model), title: r.title, totals: totals(r) })) };
+      rows: rows.map((r) => ({ threadId: String(r.thread_id), projectId: String(r.project_id), model: String(r.model), title: r.title === null ? null : String(r.title), totals: totals(r) })) };
   }
   getHours(since: number, retentionDays: number) {
     const retentionStart = hourStart(this.now() - retentionDays * DAY);

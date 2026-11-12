@@ -2,7 +2,7 @@ import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { afterEach, expect, it, vi } from "vitest";
 import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
 import plugin from "./server";
-import { dailyUsageSchema, threadUsageSchema } from "./contract";
+import { dailyUsageSchema, threadUsageSchema, threadsUsageSchema } from "./contract";
 import { UsageStore, DAY } from "./storage";
 import { event, turn, thread, NOW } from "./test-fixtures";
 
@@ -90,6 +90,27 @@ it("serves stable RPC results and validates settings and RPC input", async () =>
   expect(dailyUsageSchema.parse(days)).toEqual(store.getDailyUsage(7));
   await expect(harness.behavior.callRpc("getDailyUsage", { days: -1 })).rejects.toThrow();
   await expect(harness.behavior.setSettings({ retentionDays: 0 })).rejects.toThrow();
+});
+
+it("serves getThreads with the CLI threads JSON shape and defaults", async () => {
+  const { harness } = fixture();
+  await harness.behavior.emitThreadEvent("experimental_thread.events", { thread, sequence: 1 });
+  const rpc = threadsUsageSchema.parse(await harness.behavior.callRpc("getThreads", {}));
+  const cli = await harness.behavior.runCli(["threads", "--json"]);
+  expect(rpc).toEqual(JSON.parse(String(cli.stdout)));
+  expect(rpc.rows[0]).toMatchObject({ threadId: thread.id, title: "Usage test" });
+  const since = NOW - DAY;
+  expect(await harness.behavior.callRpc("getThreads", { since, limit: 1 })).toMatchObject({ since, rows: [{ threadId: thread.id }] });
+  await expect(harness.behavior.callRpc("getThreads", { limit: 0 })).rejects.toThrow();
+});
+
+it("invalidates thread and totals reads only when usage changes", async () => {
+  const { harness, events } = fixture();
+  await harness.behavior.emitThreadEvent("experimental_thread.events", { thread, sequence: 1 });
+  expect(harness.inspection.experimental_rpcInvalidations).toEqual([[`thread:${thread.id}`, "totals"]]);
+  events.mockResolvedValueOnce([]);
+  await harness.behavior.emitThreadEvent("experimental_thread.events", { thread, sequence: 1 });
+  expect(harness.inspection.experimental_rpcInvalidations).toHaveLength(1);
 });
 
 it.each(["thread", "threads", "days"])("CLI %s returns plain and stable JSON output", async (command) => {

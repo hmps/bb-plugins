@@ -1,7 +1,8 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { runCli } from "./cli";
-import { usageRpcContract } from "./contract";
+import { TOTALS_TAG, threadTag, usageRpcContract } from "./contract";
+import { DAY, hourStart } from "./storage";
 import { migrations, UsageStore, type ThreadInfo } from "./storage";
 
 /** All event reads and lifecycle changes for one thread share one queue. */
@@ -33,15 +34,18 @@ export default function plugin(bb: BbPluginApi) {
   const deleted = new Set<string>();
   const controller = new AbortController();
   let stopped = false;
+  const changed = (id: string) => bb.rpc.experimental_invalidate([threadTag(id), TOTALS_TAG]);
   const scan = (thread: ThreadInfo) => queue.enqueue(thread.id, async () => {
     if (stopped || deleted.has(thread.id)) return;
     let after = store.cursor(thread.id);
+    let seen = 0;
     while (!stopped) {
       const events = await bb.sdk.threads.events.list({
         threadId: thread.id, afterSeq: String(after), types: ["client/turn/requested", "thread/tokenUsage/updated"],
         order: "asc", limit: "100", signal: controller.signal,
       });
       let last = after;
+      seen += events.length;
       for (const event of events) {
         if (event.type === "client/turn/requested") store.applyTurn(thread, event);
         if (event.type === "thread/tokenUsage/updated") store.apply(thread, event);
@@ -52,6 +56,7 @@ export default function plugin(bb: BbPluginApi) {
       after = last;
     }
     if (!stopped) store.archive(thread.id, thread.archivedAt);
+    if (seen > 0) changed(thread.id);
   });
   bb.events.on("experimental_thread.events", async ({ thread }) => {
     if (thread.deletedAt !== null) return;
@@ -60,11 +65,15 @@ export default function plugin(bb: BbPluginApi) {
   for (const name of ["thread.archived", "thread.unarchived"] as const) {
     bb.events.on(name, ({ thread }) => queue.enqueue(thread.id, () => {
       store.archive(thread.id, name === "thread.archived" ? thread.archivedAt ?? Date.now() : null);
+      changed(thread.id);
     }));
   }
   bb.events.on("thread.deleted", ({ thread }) => {
     deleted.add(thread.id);
-    return queue.enqueue(thread.id, () => store.deleteThread(thread.id));
+    return queue.enqueue(thread.id, () => {
+      store.deleteThread(thread.id);
+      changed(thread.id);
+    });
   });
   bb.background.service("catch-up", {
     async start(signal) {
@@ -92,10 +101,16 @@ export default function plugin(bb: BbPluginApi) {
   });
   bb.background.schedule("rollup", "15 3 * * *", async () => {
     store.rollup((await settings.get()).retentionDays);
+    bb.rpc.experimental_invalidate([TOTALS_TAG]);
   });
   bb.rpc.register(usageRpcContract, {
     getThreadUsage: ({ threadId }) => store.getThreadUsage(threadId),
     getDailyUsage: ({ days }) => store.getDailyUsage(days),
+    // Same defaults and shape as `bb thread-usage threads --json`.
+    getThreads: async ({ since, project, limit }) => {
+      const { retentionDays } = await settings.get();
+      return store.getThreads(since ?? hourStart(store.now() - retentionDays * DAY), retentionDays, project, limit);
+    },
   });
   bb.cli.register({
     name: "thread-usage", summary: "Token totals per thread, hour, and day",

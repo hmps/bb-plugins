@@ -4,7 +4,7 @@ Thread Usage counts tokens from bb's own `thread/tokenUsage/updated` events.
 It reads model changes from `client/turn/requested` events.
 It stores totals per thread, UTC hour, server-local day, project, and model.
 The plugin uses no tokens. It makes no model calls and adds no agent context.
-Version 0.1.0 contains the server and CLI. It has no UI.
+Version 0.2.0 adds a Tokens row to each thread's Info tab and a Thread usage page.
 
 ## What it counts
 
@@ -84,15 +84,33 @@ Each usage row contains a `totals` object with all seven fields.
 `days` returns `{ days, rows }`, with each row shaped as `{ day, projectId, model, totals }`.
 `thread` returns `{ threadId, projectId, providerId, model, title, firstSeenAt, updatedAt, archivedAt, baseline, totals }`.
 
-## UI contract for node n2
+## UI
 
-The shared contract is in `contract.ts`. Import its runtime contract from that file.
-RPC methods return the same JSON shapes as the CLI:
+The **Tokens** row in each thread's Info tab shows the compact thread total and the latest model.
+A second line shows "Since <time>", or "Tracking started <time>" for a baseline thread.
+Select the row to show exact input, cache read, cache write, output, and total counts.
+A thread with no tracked tokens shows "No usage tracked yet".
 
-- `getThreadUsage({ threadId: string })` returns a thread usage object or `null`.
-- `getDailyUsage({ days: number })` returns `{ days, rows }`. Omitted `days` defaults to 7.
+The **Thread usage** page is in the sidebar navigation.
+It shows the last 14 days as one bar per day, split by model.
+The three largest models keep their names. Other models combine into "Other".
+It also lists the top 10 threads of the last 24 hours. Select a thread to open it.
+Hold Cmd or Ctrl to open the thread in a split.
+Compact counts use `k`, `M`, and `B`. Hover a count to see the exact value.
 
-The RPC validates inputs. Both methods read only the plugin database.
+Both views only read data. The server invalidates their reads when stored usage changes.
+Open views then refresh without polling.
+
+## RPC
+
+The shared contract is in `contract.ts`. RPC methods return the same JSON shapes as the CLI:
+
+- `getThreadUsage({ threadId })` returns the `thread` object or `null`. Tag: `thread:<threadId>`.
+- `getDailyUsage({ days })` returns the `days` object. Omitted `days` defaults to 7. Tag: `totals`.
+- `getThreads({ since?, project?, limit? })` returns the `threads` object. Tag: `totals`.
+  It uses the same defaults as `bb thread-usage threads`.
+
+The RPC validates inputs. All methods read only the plugin database.
 
 ## Development
 

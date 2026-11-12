@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0
+
+- Add a Tokens row to the thread Info tab with an exact breakdown on select.
+- Add a Thread usage page with 14 days by model and the top threads of the last 24 hours.
+- Add the read-only `getThreads` RPC with the CLI `threads` JSON shape.
+- Invalidate thread and totals reads when stored usage changes.
+
 ## 0.1.0
 
 - Count token usage from bb events without model calls or added agent context.

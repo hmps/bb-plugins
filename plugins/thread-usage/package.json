@@ -1,7 +1,7 @@
 {
   "name": "bb-plugin-thread-usage",
-  "version": "0.1.0",
-  "description": "Token totals per thread and day from bb events.",
+  "version": "0.2.0",
+  "description": "Token totals per thread and day from bb events, with a thread Info row and a usage page.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -10,11 +10,12 @@
   },
   "bb": {
     "name": "Thread Usage",
-    "description": "Track token totals per thread and day without model calls.",
+    "description": "Track token totals per thread and day without model calls. Shows tokens in each thread's Info tab and a 14-day usage page.",
     "branding": {
       "icon": "ChartNoAxesColumn"
     },
-    "server": "./server.ts"
+    "server": "./server.ts",
+    "app": "./app.tsx"
   },
   "keywords": [
     "bb-plugin"

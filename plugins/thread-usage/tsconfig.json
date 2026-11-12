@@ -12,9 +12,12 @@
       "node"
     ],
     "noEmit": true,
-    "skipLibCheck": false
+    "skipLibCheck": false,
+    "jsx": "react-jsx"
   },
   "include": [
-    "*.ts"
+    "*.ts",
+    "*.tsx",
+    "lib"
   ]
 }
