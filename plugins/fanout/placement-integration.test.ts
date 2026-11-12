@@ -38,7 +38,9 @@ afterEach(async () => { for (const dispose of cleanups.splice(0)) await dispose(
 describe("E01 offload_legacy_policy_and_exclusions", () => {
   it.each(["absent", "malformed"])("preserves the overload gate for %s policy", async kind => {
     const h = await setup(kind === "absent" ? undefined : "bogus", kind === "absent");
-    expect(String(await h.tool())).toContain("No machine: origin below offload threshold");
+    const offloadAdvice = String(await h.tool());
+    expect(offloadAdvice).toContain("Recommended: stay on the current machine (origin below offload threshold)");
+    expect(offloadAdvice).not.toContain("No machine:");
     expect((await h.instructions()).instructions).toBeNull();
     h.harness.inspection.sdk.stub("threads.list", async () => [...threads,
       ...Array.from({ length: 8 }, (_, i) => ({ ...threads[0], id: `busy${i}`, status: "active" })),

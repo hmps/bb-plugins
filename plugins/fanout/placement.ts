@@ -440,7 +440,7 @@ export function renderSelection(result: PlacementResult): string {
 export const PLACEMENT_GUIDANCE = [
   "Call pick_machine before you spawn each child.",
   "Spawn on the machine it names with --machine.",
-  "If it names no machine, wait a short time and call again.",
+  "If it says No machine, wait a short time and call again.",
   "Never spawn on Silicon Knight unless the user asks for it.",
   "Give each child its own new environment.",
 ].join("\n");
@@ -450,7 +450,10 @@ export function renderPlacementAdvice(result: PlacementResult): string {
   const name = result.winner?.name;
   const machine = name && /\s/.test(name) ? JSON.stringify(name) : name;
   return [
-    result.winner ? `Recommended: --machine ${machine}` : `No machine: ${result.reason}`,
+    result.winner ? `Recommended: --machine ${machine}`
+      : result.policy === "offload" && result.kind === "suppressed advice"
+        ? `Recommended: stay on the current machine (${result.reason})`
+        : `No machine: ${result.reason}`,
     PLACEMENT_GUIDANCE,
   ].join("\n");
 }

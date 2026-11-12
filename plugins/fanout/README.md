@@ -18,11 +18,12 @@ Agents receive these instructions:
 
 > Call pick_machine before you spawn each child.
 > Spawn on the machine it names with --machine.
-> If it names no machine, wait a short time and call again.
+> If it says No machine, wait a short time and call again.
 > Never spawn on Silicon Knight unless the user asks for it.
 > Give each child its own new environment.
 
 Priority advice expires after 30 seconds. Configuration changes, failed refreshes, missing context, or stale samples prevent a target recommendation.
+In offload mode, an origin below its threshold gets `Recommended: stay on the current machine`.
 Side chats receive no injected advice. Offload keeps its cached observations if a refresh fails.
 Use `bb fanout status` for sample details, load counts, selection order, and exclusion reasons.
 Configured order uses priority and host ID. Eligible priority order also uses load share.
