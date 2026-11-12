@@ -2,7 +2,7 @@ import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { runCli } from "./cli";
 import { TOTALS_TAG, threadTag, usageRpcContract } from "./contract";
-import { DAY, hourStart } from "./storage";
+import { DAY, HOUR, hourStart } from "./storage";
 import { migrations, UsageStore, type ThreadInfo } from "./storage";
 
 /** All event reads and lifecycle changes for one thread share one queue. */
@@ -35,14 +35,17 @@ export default function plugin(bb: BbPluginApi) {
   const controller = new AbortController();
   let stopped = false;
   const changed = (id: string) => bb.rpc.experimental_invalidate([threadTag(id), TOTALS_TAG]);
-  const scan = (thread: ThreadInfo) => queue.enqueue(thread.id, async () => {
-    if (stopped || deleted.has(thread.id)) return;
+  const scanEvents = async (thread: ThreadInfo, final = false) => {
     let after = store.cursor(thread.id);
     let seen = 0;
     while (!stopped) {
       const events = await bb.sdk.threads.events.list({
         threadId: thread.id, afterSeq: String(after), types: ["client/turn/requested", "thread/tokenUsage/updated"],
         order: "asc", limit: "100", signal: controller.signal,
+      }).catch((error: unknown) => {
+        if (!final) throw error;
+        bb.log.warn(`Final usage events are unavailable for deleted thread ${thread.id}; keeping observed totals.`);
+        return [];
       });
       let last = after;
       seen += events.length;
@@ -56,7 +59,11 @@ export default function plugin(bb: BbPluginApi) {
       after = last;
     }
     if (!stopped) store.archive(thread.id, thread.archivedAt);
-    if (seen > 0) changed(thread.id);
+    if (seen > 0 && !final) changed(thread.id);
+  };
+  const scan = (thread: ThreadInfo) => queue.enqueue(thread.id, async () => {
+    if (stopped || deleted.has(thread.id)) return;
+    await scanEvents(thread);
   });
   bb.events.on("experimental_thread.events", async ({ thread }) => {
     if (thread.deletedAt !== null) return;
@@ -69,8 +76,10 @@ export default function plugin(bb: BbPluginApi) {
     }));
   }
   bb.events.on("thread.deleted", ({ thread }) => {
+    if (deleted.has(thread.id)) return;
     deleted.add(thread.id);
-    return queue.enqueue(thread.id, () => {
+    return queue.enqueue(thread.id, async () => {
+      await scanEvents(thread, true);
       store.deleteThread(thread.id);
       changed(thread.id);
     });
@@ -107,9 +116,12 @@ export default function plugin(bb: BbPluginApi) {
     getThreadUsage: ({ threadId }) => store.getThreadUsage(threadId),
     getDailyUsage: ({ days }) => store.getDailyUsage(days),
     // Same defaults and shape as `bb thread-usage threads --json`.
-    getThreads: async ({ since, project, limit }) => {
+    getThreads: async ({ since, hours, project, limit }) => {
       const { retentionDays } = await settings.get();
-      return store.getThreads(since ?? hourStart(store.now() - retentionDays * DAY), retentionDays, project, limit);
+      const start = hours === undefined
+        ? since ?? hourStart(store.now() - retentionDays * DAY)
+        : hourStart(store.now()) - hours * HOUR;
+      return store.getThreads(start, retentionDays, project, limit);
     },
   });
   bb.cli.register({

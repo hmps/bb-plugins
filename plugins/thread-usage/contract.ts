@@ -48,9 +48,12 @@ export const usageRpcContract = defineRpcContract({
   getThreads: {
     input: z.object({
       since: z.number().int().nonnegative().optional(),
+      hours: z.number().int().min(1).max(24 * 3660).optional(),
       project: z.string().min(1).optional(),
       limit: z.number().int().min(1).max(1000).default(20),
-    }).strict(),
+    }).strict().refine((input) => input.since === undefined || input.hours === undefined, {
+      message: "Use either since or hours.",
+    }),
     output: threadsUsageSchema,
     tags: () => [TOTALS_TAG],
   },

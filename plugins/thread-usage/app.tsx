@@ -28,7 +28,6 @@ const DAYS = 14;
 const TOP_THREADS = 10;
 /** The RPC ranks thread/model pairs; ask for enough to merge 10 threads. */
 const THREAD_ROWS = 100;
-const HOUR = 3_600_000;
 /** Series fills by legend position. Opacity steps of one host token keep custom palettes intact. */
 const SERIES_FILLS = ["bg-foreground/80", "bg-foreground/55", "bg-foreground/35", "bg-foreground/20"];
 
@@ -105,11 +104,9 @@ function ThreadUsageRow({ threadId }: ExperimentalThreadInfoProps) {
 }
 
 function UsagePage() {
-  // Fixed per mount so the read key stays stable; whole hours match the server's buckets.
-  const [since] = useState(() => Math.floor((Date.now() - 24 * HOUR) / HOUR) * HOUR);
   const daily = useRpcQuery({ contract: usageRpcContract, method: "getDailyUsage", input: { days: DAYS } });
   const threads = useRpcQuery({
-    contract: usageRpcContract, method: "getThreads", input: { since, limit: THREAD_ROWS },
+    contract: usageRpcContract, method: "getThreads", input: { hours: 24, limit: THREAD_ROWS },
   });
   const today = dayKey(Date.now());
   return (

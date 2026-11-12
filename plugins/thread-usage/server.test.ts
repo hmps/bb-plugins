@@ -178,3 +178,37 @@ it("advances the cursor across full pages containing only turn events", async ()
   expect(store.cursor(thread.id)).toBe(100);
   expect(store.getThreadUsage(thread.id)?.model).toBe("model-a");
 });
+
+it("scans pending token usage before deleting a thread", async () => {
+  const { harness, events, store } = fixture();
+  await harness.behavior.emitThreadEvent("experimental_thread.events", { thread, sequence: 1 });
+  events.mockResolvedValueOnce([event(2, 25)]);
+  await harness.behavior.emitThreadEvent("thread.deleted", { thread: { ...thread, deletedAt: NOW } });
+  expect(store.getThreadUsage(thread.id)).toBeNull();
+  expect(store.getDailyUsage(1).rows[0].totals.totalTokens).toBe(25);
+  expect(events.mock.calls[1][0]).toMatchObject({ threadId: thread.id, afterSeq: "1" });
+  await harness.behavior.emitThreadEvent("thread.deleted", { thread: { ...thread, deletedAt: NOW } });
+  expect(events).toHaveBeenCalledTimes(2);
+  expect(store.getDailyUsage(1).rows[0].totals.totalTokens).toBe(25);
+});
+
+it("deletes and preserves counted totals when final event reads return 404", async () => {
+  const { harness, events, store } = fixture();
+  await harness.behavior.emitThreadEvent("experimental_thread.events", { thread, sequence: 1 });
+  events.mockRejectedValueOnce(Object.assign(new Error("Thread not found"), { status: 404 }));
+  await harness.behavior.emitThreadEvent("thread.deleted", { thread: { ...thread, deletedAt: NOW } });
+  expect(events).toHaveBeenCalledTimes(2);
+  expect(store.getThreadUsage(thread.id)).toBeNull();
+  expect(store.getDailyUsage(1).rows[0].totals.totalTokens).toBe(10);
+});
+
+it("computes relative thread hours on every server read with the CLI JSON shape", async () => {
+  const { harness } = fixture();
+  const first = threadsUsageSchema.parse(await harness.behavior.callRpc("getThreads", { hours: 24 }));
+  expect(first.since).toBe(NOW - DAY);
+  vi.setSystemTime(NOW + 2 * 3_600_000 + 15 * 60_000);
+  const next = threadsUsageSchema.parse(await harness.behavior.callRpc("getThreads", { hours: 24 }));
+  expect(next.since).toBe(NOW + 2 * 3_600_000 - DAY);
+  const cli = await harness.behavior.runCli(["threads", "--since", new Date(next.since).toISOString(), "--json"]);
+  expect(next).toEqual(JSON.parse(String(cli.stdout)));
+});

@@ -3,7 +3,11 @@ import { fields, type Totals, type ThreadUsage, type DailyUsage, type ThreadsUsa
 
 export const HOUR = 3_600_000;
 export const DAY = 24 * HOUR;
-export const hourStart = (time: number) => Math.floor(time / HOUR) * HOUR;
+export function hourStart(time: number): number {
+  const offset = new Date(time).getTimezoneOffset() * 60_000;
+  // Use the event's offset so a repeated DST hour keeps its own UTC timestamp.
+  return Math.floor((time - offset) / HOUR) * HOUR + offset;
+}
 export function localDay(time: number): string {
   const d = new Date(time);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;

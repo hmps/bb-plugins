@@ -275,7 +275,7 @@
         "git": {
           "url": "https://github.com/hmps/bb-plugins.git",
           "subdir": "plugins/thread-usage",
-          "range": "^0.1.0",
+          "range": "^0.2.0",
           "tagPrefix": "thread-usage/"
         }
       }

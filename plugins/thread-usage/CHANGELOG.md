@@ -2,6 +2,11 @@
 
 ## 0.2.0
 
+- Attempt a final event scan before folding a deleted thread into daily totals.
+- Calculate the usage page's 24-hour window on each server read.
+- Keep hour buckets inside server-local days, including time zones with half-hour offsets.
+- Match the marketplace range to version 0.2.0.
+
 - Add a Tokens row to the thread Info tab with an exact breakdown on select.
 - Add a Thread usage page with 14 days by model and the top threads of the last 24 hours.
 - Add the read-only `getThreads` RPC with the CLI `threads` JSON shape.

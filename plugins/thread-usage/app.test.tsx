@@ -77,6 +77,17 @@ describe("Thread usage page", () => {
     expect(view.inspection.rpcCalls.map((c) => c.method).sort()).toEqual(["getDailyUsage", "getThreads"]);
   });
 
+  it("requests a server-relative 24-hour window after invalidation", async () => {
+    const view = renderSlot(app.navPanels[0]!, { subPath: "" }, { rpc: { getDailyUsage: () => daily, getThreads: () => threads } });
+    await screen.findByText("Build the UI");
+    expect(view.inspection.rpcCalls.find((call) => call.method === "getThreads")?.input)
+      .toEqual({ hours: 24, limit: 100 });
+    await view.behavior.experimental_invalidateRpc(["totals"]);
+    const calls = view.inspection.rpcCalls.filter((call) => call.method === "getThreads");
+    expect(calls).toHaveLength(2);
+    expect(calls[1].input).toEqual({ hours: 24, limit: 100 });
+  });
+
   it("shows empty states", async () => {
     renderSlot(app.navPanels[0]!, { subPath: "" }, {
       rpc: { getDailyUsage: () => ({ days: 14, rows: [] }), getThreads: () => ({ ...threads, rows: [] }) },

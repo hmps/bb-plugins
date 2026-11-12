@@ -2,7 +2,7 @@
 
 Thread Usage counts tokens from bb's own `thread/tokenUsage/updated` events.
 It reads model changes from `client/turn/requested` events.
-It stores totals per thread, UTC hour, server-local day, project, and model.
+It stores totals per thread, server-local hour, server-local day, project, and model.
 The plugin uses no tokens. It makes no model calls and adds no agent context.
 Version 0.2.0 adds a Tokens row to each thread's Info tab and a Thread usage page.
 
@@ -36,7 +36,11 @@ Set it with `bb plugin config thread-usage set retentionDays 14`.
 At 03:15 server-local time, the plugin folds older hours into daily totals.
 It deletes those hourly rows and runs incremental vacuum.
 Daily totals remain stored. Archiving keeps thread totals.
-Deleting a thread folds its hours into daily totals, then removes its thread totals and hours.
+Deleting a thread first attempts a final event scan inside its serial queue.
+It then folds its hours into daily totals and removes its thread totals and hours.
+bb 0.49.0 marks threads deleted before it emits the deletion notification.
+Its events API then returns 404, so that final scan cannot recover unobserved usage.
+The plugin keeps already observed totals and logs when the final event read fails.
 
 On startup, catch-up reads thread lists in pages of 200, including hidden and archived threads.
 It checks `updatedAt` against the previous successful startup checkpoint.
@@ -49,7 +53,7 @@ bb periodically prunes older token events and keeps the latest per thread.
 Several older events can remain until pruning runs.
 Cumulative totals recover missed updates within one provider session.
 A session replaced while the plugin is offline can lose that earlier session's unseen usage.
-The plugin assigns a recovered difference to the latest event's UTC hour.
+The plugin assigns a recovered difference to the latest event's server-local hour.
 It cannot reconstruct the actual times of missed updates.
 Daily dates use the server time zone at query or rollup time.
 Keep that time zone fixed for consistent day boundaries.
@@ -72,7 +76,7 @@ An unknown thread returns `null` in JSON.
 Its default limit is 20. The maximum limit is 1,000.
 `days` combines stored daily totals with retained hours, split by project and model.
 It defaults to 7 days and accepts up to 3,660 days.
-`hours` groups retained UTC hours by model.
+`hours` groups retained server-local hours by model. Hour-start timestamps remain UTC epoch milliseconds.
 Thread and hour periods include whole event hours.
 Date-only `--since` values use server-local midnight. ISO timestamps can include a time zone.
 Periods that exceed retention return `truncated: true` and show a warning in plain output.
@@ -107,8 +111,11 @@ The shared contract is in `contract.ts`. RPC methods return the same JSON shapes
 
 - `getThreadUsage({ threadId })` returns the `thread` object or `null`. Tag: `thread:<threadId>`.
 - `getDailyUsage({ days })` returns the `days` object. Omitted `days` defaults to 7. Tag: `totals`.
-- `getThreads({ since?, project?, limit? })` returns the `threads` object. Tag: `totals`.
-  It uses the same defaults as `bb thread-usage threads`.
+- `getThreads({ since?, hours?, project?, limit? })` returns the `threads` object. Tag: `totals`.
+  Without a period input, it uses the same defaults as `bb thread-usage threads`.
+  Use either `since` or `hours`. `hours` accepts whole numbers from 1 to 87,840.
+  With `hours`, each read calculates `since` from the current server-local hour minus that many elapsed hours.
+  The UI passes `hours: 24`, so invalidated reads use the current window.
 
 The RPC validates inputs. All methods read only the plugin database.
 
