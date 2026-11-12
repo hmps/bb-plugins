@@ -10,7 +10,9 @@ Version 0.1.0 contains the server and CLI. It has no UI.
 
 Totals show usage **since tracking began**. The plugin cannot recover past data.
 On first load, it records an installation time in its own SQLite database.
+Every usage event before installation updates the cursor and counts nothing.
 For an older thread, the first observed total becomes a baseline and counts nothing.
+This baseline rule also applies when its first retained event is after installation.
 For a thread created after installation, the first total counts in full.
 Later events add the difference from the previous cumulative total.
 A changed provider session ID or a decrease in any counter starts a new session.
@@ -43,7 +45,8 @@ If it reaches that bound, it logs a warning and leaves the checkpoint unchanged.
 Catch-up and event reads run serially per thread. Each event page contains at most 100 rows.
 A failed event read retries on the next trigger or startup.
 
-bb keeps only the latest token event per thread.
+bb periodically prunes older token events and keeps the latest per thread.
+Several older events can remain until pruning runs.
 Cumulative totals recover missed updates within one provider session.
 A session replaced while the plugin is offline can lose that earlier session's unseen usage.
 The plugin assigns a recovered difference to the latest event's UTC hour.

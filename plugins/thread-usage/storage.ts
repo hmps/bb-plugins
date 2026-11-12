@@ -87,10 +87,11 @@ export class UsageStore {
       const old = this.db.prepare("SELECT * FROM thread_usage WHERE thread_id = ?").get(thread.id) as Row | undefined;
       if (old && event.seq <= Number(old.last_seq)) return;
       const total = Object.fromEntries(fields.map((f) => [f, event.data.tokenUsage.total[f] ?? 0])) as Totals;
-      const baseline = (!old || !old.has_usage) && thread.createdAt < this.installedAt;
+      const beforeInstall = event.createdAt < this.installedAt;
+      const baseline = (!old || !old.has_usage) && (beforeInstall || thread.createdAt < this.installedAt);
       const previous = old ? totals(old, "cursor_") : zero();
       const sameSession = old?.provider_thread_id === event.data.providerThreadId && fields.every((f) => total[f] >= previous[f]);
-      const delta = Object.fromEntries(fields.map((f) => [f, baseline ? 0 : total[f] - (sameSession ? previous[f] : 0)])) as Totals;
+      const delta = Object.fromEntries(fields.map((f) => [f, baseline || beforeInstall ? 0 : total[f] - (sameSession ? previous[f] : 0)])) as Totals;
       const counted = old ? totals(old, "counted_") : zero();
       add(counted, delta);
       const model = String(old?.model ?? "unknown");
@@ -99,7 +100,7 @@ export class UsageStore {
         "baseline", "first_seen_at", "updated_at", "archived_at", "has_usage"];
       const args = [thread.id, thread.projectId, thread.providerId, model, thread.title,
         event.data.providerThreadId, event.seq, ...values(total), ...values(counted),
-        old?.baseline ?? Number(baseline), old?.first_seen_at ?? this.now(), this.now(), thread.archivedAt, 1];
+        Number(Boolean(old?.baseline) || baseline), old?.first_seen_at ?? this.now(), this.now(), thread.archivedAt, 1];
       this.db.prepare(`INSERT INTO thread_usage (${names.join(", ")}) VALUES (${names.map(() => "?").join(", ")})
         ON CONFLICT(thread_id) DO UPDATE SET ${names.slice(1).map((n) => `${n} = excluded.${n}`).join(", ")}`).run(...args);
       if (fields.some((f) => delta[f] !== 0)) {

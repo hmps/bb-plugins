@@ -12,15 +12,16 @@ afterEach(async () => {
   for (const h of hosts.splice(0)) await h.harness.lifecycle.dispose();
   vi.useRealTimers();
 });
-function fixture() {
+function fixture(installedAt = NOW) {
   vi.useFakeTimers();
-  vi.setSystemTime(NOW);
+  vi.setSystemTime(installedAt);
   const events = vi.fn<BbPluginApi["sdk"]["threads"]["events"]["list"]>(async () => [event(1, 10)]);
   const host = createFakePluginHost({ pluginId: "thread-usage", sdk: {
     threads: { events: { list: events }, list: async () => [] },
   } });
   hosts.push(host);
   plugin(host.bb);
+  vi.setSystemTime(NOW);
   return { ...host, events, store: new UsageStore(host.bb.storage.database()) };
 }
 
@@ -123,8 +124,8 @@ it("CLI hours, help, filters, retention warning, and errors", async () => {
 });
 
 it("runs scheduled rollup without changing thread totals", async () => {
-  const { harness, store } = fixture();
-  store.apply(thread, { ...event(1, 10), createdAt: NOW - 8 * DAY });
+  const { harness, store } = fixture(NOW - 10 * DAY);
+  store.apply({ ...thread, createdAt: NOW - 10 * DAY + 1 }, { ...event(1, 10), createdAt: NOW - 8 * DAY });
   await harness.behavior.runSchedule("rollup");
   expect(store.db.prepare("SELECT COUNT(*) AS n FROM hourly_usage").get()).toEqual({ n: 0 });
   expect(store.getDailyUsage(9).rows[0].totals.totalTokens).toBe(10);

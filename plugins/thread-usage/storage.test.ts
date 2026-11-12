@@ -5,12 +5,15 @@ import { DAY, HOUR, localDay, migrations, UsageStore } from "./storage";
 import { event, turn, thread, NOW } from "./test-fixtures";
 
 const databases: Database.Database[] = [];
-function fixture() {
+function fixture(installedAt = NOW) {
   const db = new Database(":memory:");
   databases.push(db);
   db.pragma("auto_vacuum = INCREMENTAL");
   for (const sql of migrations) db.exec(sql);
-  return new UsageStore(db, () => NOW);
+  let clock = installedAt;
+  const store = new UsageStore(db, () => clock);
+  clock = NOW;
+  return store;
 }
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
 
@@ -57,9 +60,10 @@ describe("token accounting on real SQLite", () => {
     expect(store.getThreadUsage(thread.id)?.totals).toMatchObject({ cacheReadInputTokens: 0, cacheWriteInputTokens: 0 });
   });
   it("folds and deletes expired hourly rows exactly once", () => {
-    const store = fixture();
-    store.apply(thread, { ...event(1, 10), createdAt: NOW - 9 * DAY });
-    store.apply(thread, { ...event(2, 16), createdAt: NOW - HOUR });
+    const store = fixture(NOW - 10 * DAY);
+    const older = { ...thread, createdAt: NOW - 10 * DAY + 1 };
+    store.apply(older, { ...event(1, 10), createdAt: NOW - 9 * DAY });
+    store.apply(older, { ...event(2, 16), createdAt: NOW - HOUR });
     store.rollup(7);
     store.rollup(7);
     expect(store.db.prepare("SELECT COUNT(*) AS n FROM hourly_usage").get()).toEqual({ n: 1 });
@@ -105,4 +109,33 @@ it("baselines first usage after earlier turn events for a pre-install thread", (
   expect(store.getThreadUsage(thread.id)).toMatchObject({ baseline: true, model: "model-b", totals: { totalTokens: 0 } });
   store.apply(old, event(4, 115));
   expect(store.getThreadUsage(thread.id)?.totals.totalTokens).toBe(15);
+});
+
+it("excludes all pre-install snapshots and counts only post-install deltas", () => {
+  const store = fixture();
+  const old = { ...thread, createdAt: NOW - DAY };
+  for (const [seq, count, age] of [[1, 100, 3000], [2, 140, 2000], [3, 180, 1000]]) {
+    store.apply(old, { ...event(seq, count), createdAt: NOW - age });
+  }
+  expect(store.cursor(thread.id)).toBe(3);
+  expect(store.getThreadUsage(thread.id)).toMatchObject({ baseline: true });
+  for (const f of fields) expect(store.getThreadUsage(thread.id)?.totals[f]).toBe(0);
+  expect(store.db.prepare("SELECT COUNT(*) AS n FROM hourly_usage").get()).toEqual({ n: 0 });
+  store.apply(old, { ...event(4, 195), createdAt: NOW + 1000 });
+  store.apply(old, { ...event(5, 210), createdAt: NOW + 2000 });
+  for (const f of fields) expect(store.getThreadUsage(thread.id)?.totals[f]).toBe(30);
+  expect(store.getDailyUsage(1).rows[0].totals.totalTokens).toBe(30);
+});
+
+it("baselines an older thread when its only retained event is after installation", () => {
+  const store = fixture();
+  store.apply({ ...thread, createdAt: NOW - DAY }, { ...event(1, 100), createdAt: NOW + 1000 });
+  expect(store.getThreadUsage(thread.id)).toMatchObject({ baseline: true, totals: { totalTokens: 0 } });
+  expect(store.cursor(thread.id)).toBe(1);
+});
+
+it("counts the first event in full for a thread created after installation", () => {
+  const store = fixture();
+  store.apply(thread, { ...event(1, 100), createdAt: NOW + 1000 });
+  expect(store.getThreadUsage(thread.id)).toMatchObject({ baseline: false, totals: { totalTokens: 100 } });
 });
