@@ -10,6 +10,7 @@ bb plugin install ios-composer-touch@hmps
 bb plugin install hide-sidebar-footer-actions@hmps
 bb plugin install t3sidebar@hmps
 bb plugin install usage-tracker@hmps
+bb plugin install thread-usage@hmps
 bb plugin install ios-status-bar@hmps
 bb plugin install mobile-fixes@hmps
 bb plugin install github-plus@hmps
@@ -26,6 +27,7 @@ that `marketplace.json` lists.
 | [ios-composer-touch](plugins/ios-composer-touch) | First-tap send on iOS and larger composer hit areas. |
 | [hide-sidebar-footer-actions](plugins/hide-sidebar-footer-actions) | Hides the Remote access and Report a bug buttons in the sidebar footer. |
 | [t3sidebar](plugins/t3sidebar) | Fork of bb's t3sidebar example with touch support for Snooze and Settle. |
+| [thread-usage](plugins/thread-usage) | Token totals per thread, hour, and day from bb events, with no model calls. |
 | [usage-tracker](plugins/usage-tracker) | Codex and Claude usage pace, Codex reset credits, and model-scoped quota rows such as Fable. |
 | [ios-status-bar](plugins/ios-status-bar) | Paints the iOS Safari status bar area with the app background instead of black. |
 | [mobile-fixes](plugins/mobile-fixes) | Phone fixes for the thread composer: a Codex-style editor, hideable status bars, and first-tap voice input. |
