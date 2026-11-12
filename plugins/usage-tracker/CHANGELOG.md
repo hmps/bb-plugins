@@ -7,6 +7,10 @@ All notable changes to Usage Tracker are documented here.
 ### Added
 
 - The expanded Codex card shows the number of available full usage resets.
+- Optional CLIProxyAPI support. Set the URL and management key in the plugin
+  settings to add a CLIProxyAPI tab with each credential's status and recent
+  requests. Set **Usage source** to CLIProxyAPI to read Claude and Codex
+  quotas from the proxy instead of from BB.
 
 ### Changed
 

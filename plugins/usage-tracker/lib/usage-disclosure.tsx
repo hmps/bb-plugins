@@ -36,7 +36,29 @@ interface RpcEnvelope<T> {
 
 interface PreferencesResult {
   enabledProviderIds: SidebarProviderId[];
+  cliproxyConfigured: boolean;
 }
+
+interface CliproxyCredentialView {
+  provider: string;
+  account: string;
+  status: string;
+  statusMessage: string;
+  disabled: boolean;
+  planLabel: string | null;
+  success: number | null;
+  failed: number | null;
+  cooldowns: number;
+  recent: { time: string; success: number; failed: number }[];
+}
+
+interface CliproxyOverview {
+  message: string | null;
+  credentials: CliproxyCredentialView[];
+}
+
+const CLIPROXY_TAB = "cliproxy";
+type TabId = SidebarProviderId | typeof CLIPROXY_TAB;
 
 function readCachedSnapshot(): UsageSnapshot | null {
   try {
@@ -126,6 +148,107 @@ function CollapseGlyph() {
   );
 }
 
+function CliproxyGlyph() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none">
+      <path d="M4 7h16M4 17h16M8 7v10M16 7v10" />
+    </svg>
+  );
+}
+
+const PROVIDER_NAMES: Record<string, string> = {
+  claude: "Claude",
+  codex: "Codex",
+};
+
+function ActivityBars({
+  recent,
+}: {
+  recent: CliproxyCredentialView["recent"];
+}) {
+  const peak = Math.max(1, ...recent.map((b) => b.success + b.failed));
+  return (
+    <div
+      className="usage-disclosure__activity"
+      role="img"
+      aria-label="Requests in the last intervals"
+    >
+      {recent.map((bucket) => (
+        <span
+          key={bucket.time}
+          title={`${bucket.time}: ${bucket.success} ok, ${bucket.failed} failed`}
+          data-failed={bucket.failed > 0 ? "true" : undefined}
+          style={{
+            height: `${Math.max(6, ((bucket.success + bucket.failed) / peak) * 100)}%`,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function CliproxyDetails({ overview }: { overview: CliproxyOverview | null }) {
+  const number = new Intl.NumberFormat();
+  return (
+    <>
+      <div className="usage-disclosure__identity">
+        <div>
+          <h2>CLIProxyAPI</h2>
+          <p>Credentials and recent requests</p>
+        </div>
+      </div>
+      {overview === null ? (
+        <p className="usage-disclosure__empty">Loading credentials…</p>
+      ) : overview.message !== null ? (
+        <p className="usage-disclosure__message" role="status">
+          {overview.message}
+        </p>
+      ) : overview.credentials.length === 0 ? (
+        <p className="usage-disclosure__empty">No credentials reported.</p>
+      ) : (
+        <div className="usage-disclosure__windows">
+          {overview.credentials.map((credential) => (
+            <div
+              key={`${credential.provider}:${credential.account}`}
+              className="usage-disclosure__credential"
+              data-inactive={
+                credential.disabled || credential.status !== "active"
+                  ? "true"
+                  : undefined
+              }
+            >
+              <div className="usage-disclosure__window-heading">
+                <span title={credential.account}>
+                  {PROVIDER_NAMES[credential.provider] ?? credential.provider}
+                  {credential.planLabel === null ? "" : ` ${credential.planLabel}`}
+                </span>
+                <span>
+                  {credential.disabled ? "disabled" : credential.status || "unknown"}
+                </span>
+              </div>
+              <ActivityBars recent={credential.recent} />
+              <p>
+                {credential.success === null
+                  ? "No request totals"
+                  : `${number.format(credential.success)} ok`}
+                {credential.failed === null || credential.failed === 0
+                  ? ""
+                  : ` · ${number.format(credential.failed)} failed`}
+                {credential.cooldowns > 0
+                  ? ` · ${credential.cooldowns} cooling down`
+                  : ""}
+              </p>
+              {credential.statusMessage === "" ? null : (
+                <p>{credential.statusMessage}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
 function tone(status: PaceStatus): string | undefined {
   return status === "watch" || status === "at_risk" ? status : undefined;
 }
@@ -211,8 +334,11 @@ export function UsageDisclosure({
   const [enabledProviderIds, setEnabledProviderIds] = useState<
     SidebarProviderId[]
   >([...SIDEBAR_PROVIDER_IDS]);
-  const [selectedProviderId, setSelectedProviderId] =
-    useState<SidebarProviderId>(SIDEBAR_PROVIDER_IDS[0]);
+  const [cliproxyConfigured, setCliproxyConfigured] = useState(false);
+  const [overview, setOverview] = useState<CliproxyOverview | null>(null);
+  const [selectedTab, setSelectedTab] = useState<TabId>(
+    SIDEBAR_PROVIDER_IDS[0],
+  );
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -231,6 +357,12 @@ export function UsageDisclosure({
           return merged;
         });
         setEnabledProviderIds(preferences.enabledProviderIds);
+        setCliproxyConfigured(preferences.cliproxyConfigured);
+        if (preferences.cliproxyConfigured) {
+          setOverview(await postRpc<CliproxyOverview>("getCliproxy", null, signal));
+        } else {
+          setOverview(null);
+        }
       } catch (loadError) {
         if (signal?.aborted !== true) {
           setError(
@@ -257,10 +389,14 @@ export function UsageDisclosure({
   }, [load]);
 
   useEffect(() => {
-    if (!enabledProviderIds.includes(selectedProviderId)) {
-      setSelectedProviderId(enabledProviderIds[0] ?? SIDEBAR_PROVIDER_IDS[0]);
+    const valid =
+      selectedTab === CLIPROXY_TAB
+        ? cliproxyConfigured
+        : enabledProviderIds.includes(selectedTab);
+    if (!valid) {
+      setSelectedTab(enabledProviderIds[0] ?? SIDEBAR_PROVIDER_IDS[0]);
     }
-  }, [enabledProviderIds, selectedProviderId]);
+  }, [enabledProviderIds, selectedTab, cliproxyConfigured]);
 
   const providers = useMemo(
     () =>
@@ -271,8 +407,13 @@ export function UsageDisclosure({
         .filter((provider): provider is ProviderUsage => provider !== undefined),
     [enabledProviderIds, snapshot],
   );
+  const tabIds: TabId[] = [
+    ...providers.map((provider) => provider.id as SidebarProviderId),
+    ...(cliproxyConfigured ? [CLIPROXY_TAB as TabId] : []),
+  ];
+  const showingCliproxy = selectedTab === CLIPROXY_TAB && cliproxyConfigured;
   const selectedProvider =
-    providers.find((provider) => provider.id === selectedProviderId) ??
+    providers.find((provider) => provider.id === selectedTab) ??
     providers[0] ??
     null;
 
@@ -281,17 +422,17 @@ export function UsageDisclosure({
     index: number,
   ): void => {
     let nextIndex: number;
-    if (event.key === "ArrowRight") nextIndex = (index + 1) % providers.length;
+    if (event.key === "ArrowRight") nextIndex = (index + 1) % tabIds.length;
     else if (event.key === "ArrowLeft") {
-      nextIndex = (index - 1 + providers.length) % providers.length;
+      nextIndex = (index - 1 + tabIds.length) % tabIds.length;
     } else if (event.key === "Home") nextIndex = 0;
-    else if (event.key === "End") nextIndex = providers.length - 1;
+    else if (event.key === "End") nextIndex = tabIds.length - 1;
     else return;
 
-    const nextProvider = providers[nextIndex];
-    if (nextProvider === undefined) return;
+    const nextTab = tabIds[nextIndex];
+    if (nextTab === undefined) return;
     event.preventDefault();
-    setSelectedProviderId(nextProvider.id as SidebarProviderId);
+    setSelectedTab(nextTab);
     event.currentTarget.parentElement
       ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
       .item(nextIndex)
@@ -308,7 +449,8 @@ export function UsageDisclosure({
         >
           {providers.map((provider, index) => {
             const providerId = provider.id as SidebarProviderId;
-            const selected = provider.id === selectedProvider?.id;
+            const selected =
+              !showingCliproxy && provider.id === selectedProvider?.id;
             return (
               <button
                 key={provider.id}
@@ -318,13 +460,29 @@ export function UsageDisclosure({
                 aria-selected={selected}
                 tabIndex={selected ? 0 : -1}
                 data-provider={provider.id}
-                onClick={() => setSelectedProviderId(providerId)}
+                onClick={() => setSelectedTab(providerId)}
                 onKeyDown={(event) => selectProviderWithKeyboard(event, index)}
               >
                 <ProviderGlyph providerId={providerId} />
               </button>
             );
           })}
+          {cliproxyConfigured ? (
+            <button
+              type="button"
+              role="tab"
+              aria-label="CLIProxyAPI"
+              aria-selected={showingCliproxy}
+              tabIndex={showingCliproxy ? 0 : -1}
+              data-provider={CLIPROXY_TAB}
+              onClick={() => setSelectedTab(CLIPROXY_TAB)}
+              onKeyDown={(event) =>
+                selectProviderWithKeyboard(event, tabIds.length - 1)
+              }
+            >
+              <CliproxyGlyph />
+            </button>
+          ) : null}
         </div>
         {snapshot?.host.name === null || snapshot?.host.name === undefined ? null : (
           <span className="usage-disclosure__host" title={snapshot.host.name}>
@@ -351,7 +509,9 @@ export function UsageDisclosure({
       </div>
 
       <div className="usage-disclosure__content" role="tabpanel">
-        {selectedProvider === null ? (
+        {showingCliproxy ? (
+          <CliproxyDetails overview={overview} />
+        ) : selectedProvider === null ? (
           <p className="usage-disclosure__empty">
             {isRefreshing ? "Loading provider usage…" : "No providers are enabled."}
           </p>

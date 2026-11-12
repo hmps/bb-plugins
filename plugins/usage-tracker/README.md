@@ -58,6 +58,12 @@ claude
 If a CLI is missing, signed out, or expired, open that provider in the card
 to see the recovery instruction reported by BB.
 
+To read usage through [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI),
+set **CLIProxyAPI URL** and **CLIProxyAPI management key** in the plugin
+settings. A CLIProxyAPI tab then shows each credential and its recent requests.
+Set **Usage source** to CLIProxyAPI to take the Claude and Codex quotas from
+the proxy.
+
 ## Use
 
 The sidebar stays compact until you need the details:

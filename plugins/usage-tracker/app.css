@@ -290,3 +290,48 @@
     animation: none;
   }
 }
+
+.usage-disclosure__tabs svg[fill="none"] {
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+
+
+.usage-disclosure__credential {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.usage-disclosure__credential p {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  line-height: 1rem;
+}
+
+.usage-disclosure__credential[data-inactive="true"] {
+  opacity: 0.6;
+}
+
+.usage-disclosure__activity {
+  display: flex;
+  height: 1.5rem;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.usage-disclosure__activity span {
+  flex: 1;
+  min-width: 2px;
+  border-radius: 1px;
+  background: var(--muted-foreground);
+  opacity: 0.55;
+}
+
+.usage-disclosure__activity span[data-failed="true"] {
+  background: #d97757;
+  opacity: 1;
+}
