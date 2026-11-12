@@ -1,4 +1,4 @@
-import { defineRpcContract } from "@get-bb/plugin-sdk";
+import type { defineRpcContract as sdkDefineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 
 export const fields = [
@@ -32,6 +32,8 @@ export type ThreadsUsage = z.infer<typeof threadsUsageSchema>;
 /** Read tags. The server invalidates `thread:<id>` and `totals` when stored usage changes. */
 export const threadTag = (threadId: string) => `thread:${threadId}`;
 export const TOTALS_TAG = "totals";
+const defineRpcContract: typeof sdkDefineRpcContract = (contract) => contract as never;
+
 export const usageRpcContract = defineRpcContract({
   getThreadUsage: {
     input: z.object({ threadId: z.string().min(1) }).strict(),
