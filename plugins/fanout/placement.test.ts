@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildSnapshot, enabledCapacities, mergeMachineConfig, parsePlacementConfig,
-  renderPriorityAdvice, renderStatus, selectPlacement, type HostRow, type PlacementConfig,
+  renderPlacementAdvice, renderStatus, selectPlacement, type HostRow, type PlacementConfig,
 } from "./placement";
 import { PlacementState } from "./placement-state";
 
@@ -21,10 +21,10 @@ function deferred<T>() {
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-function fixture(initial = config, persist = vi.fn(async (_: PlacementConfig) => {})) {
+function fixture(initial = config, persist = vi.fn(async (_: PlacementConfig) => {}), machineHosts = hosts) {
   let now = 1000;
   const state = new PlacementState(initial, 80, persist, { wall: () => now + 10_000, mono: () => now });
-  const collect = async (settings: PlacementConfig, counts: Record<string, number> = {}, sourceHosts = hosts) => ({
+  const collect = async (settings: PlacementConfig, counts: Record<string, number> = {}, sourceHosts = machineHosts) => ({
     hosts: sourceHosts,
     snapshot: buildSnapshot({ hosts: sourceHosts, capacity: enabledCapacities(mergeMachineConfig(settings.machines, sourceHosts)),
       projectHosts: new Map([["project", new Set(sourceHosts.map(h => h.id))]]), now: now + 10_000,
@@ -61,14 +61,69 @@ describe("E02 priority_local_remote_and_fallback", () => {
   });
 });
 
+describe("priority load sharing", () => {
+  const balancedHosts: HostRow[] = [...hosts, { id: "phoenix", name: "Iron Phoenix", status: "connected" }];
+  const balancedConfig: PlacementConfig = { placementPolicy: "priority", machines: {
+    ...config.machines,
+    phoenix: { name: "Iron Phoenix", capacity: 16, enabled: true, priority: 1 },
+    msi: { ...config.machines.msi, capacity: 12 },
+    titan: { ...config.machines.titan, capacity: 8, priority: 50 },
+  } };
+  const balancedFixture = () => fixture(balancedConfig, undefined, balancedHosts);
+
+  it.each([
+    { phoenix: 4, msi: 4, winner: "phoenix" },
+    { phoenix: 8, msi: 4, winner: "msi" },
+    { phoenix: 4, msi: 3, winner: "msi" },
+  ])("uses load share, then host ID for $phoenix/16 and $msi/12", async ({ phoenix, msi, winner }) => {
+    const f = balancedFixture(); await f.state.refresh(c => f.collect(c, { phoenix, msi }));
+    expect(f.select().winner?.hostId).toBe(winner);
+    expect(f.select().eligibleOrder).toEqual([winner, winner === "msi" ? "phoenix" : "msi", "titan"]);
+    expect(f.select().configuredOrder).toEqual(["msi", "phoenix", "titan", "laptop"]);
+  });
+
+  it("keeps lower priority numbers ahead of a less loaded backup", async () => {
+    const f = balancedFixture(); await f.state.refresh(c => f.collect(c, { phoenix: 12, msi: 9 }));
+    expect(f.select()).toMatchObject({ winner: { hostId: "msi" }, eligibleOrder: ["msi", "phoenix", "titan"] });
+  });
+
+  it.each(["threshold", "source"])("uses Titan when both preferred machines lack eligible %s", async reason => {
+    const f = balancedFixture();
+    await f.state.refresh(async c => {
+      const data = await f.collect(c, reason === "threshold" ? { phoenix: 13, msi: 10 } : {});
+      if (reason === "source") data.snapshot.projectHosts.set("project", new Set(["titan", "laptop"]));
+      return data;
+    });
+    expect(f.select()).toMatchObject({ winner: { hostId: "titan" }, eligibleOrder: ["titan"] });
+  });
+
+  it.each(["priority", "offload"] as const)("advises a disabled origin under %s without targeting disabled machines", async placementPolicy => {
+    const f = fixture({ ...balancedConfig, placementPolicy }, undefined, balancedHosts);
+    await f.state.refresh(c => f.collect(c, { phoenix: 4, msi: 4 }));
+    expect(f.select("laptop")).toMatchObject({ kind: "remote", winner: { hostId: placementPolicy === "priority" ? "phoenix" : "titan" },
+      exclusions: { laptop: "disabled" } });
+    await f.state.refresh(c => f.collect(c, { phoenix: 16, msi: 12, titan: 8 }));
+    expect(f.select("laptop")).toMatchObject({ kind: "no eligible capacity", winner: null, eligibleOrder: [] });
+  });
+
+  it("applies disabled state to cached offload data before a replacement sample", async () => {
+    const f = fixture({ ...config, placementPolicy: "offload" });
+    await f.state.refresh(c => f.collect(c));
+    expect(f.select().winner).toBeNull();
+    await f.state.save(c => ({ ...c, machines: { ...c.machines, titan: { ...c.machines.titan, enabled: false } } }));
+    expect(f.select()).toMatchObject({ winner: { hostId: "msi" }, kind: "remote" });
+    expect(f.select("msi")).toMatchObject({ winner: null, exclusions: { titan: "disabled" } });
+  });
+});
+
 describe("E03 priority_context_and_empty_capacity", () => {
-  it("distinguishes unknown context, disabled origin, and no capacity", async () => {
+  it("distinguishes unknown context and no capacity, including a disabled origin", async () => {
     const f = fixture(); await f.state.refresh(c => f.collect(c, { msi: 8, titan: 10 }));
     expect(f.select()).toMatchObject({ kind: "no eligible capacity", winner: null, eligibleOrder: [] });
     for (const [origin, project] of [[null, "project"], ["missing", "project"], ["titan", null], ["titan", "missing"]]) {
       expect(f.select(origin, project)).toMatchObject({ kind: "unavailable data", winner: null });
     }
-    expect(f.select("laptop")).toMatchObject({ kind: "suppressed advice", winner: null });
+    expect(f.select("laptop")).toMatchObject({ kind: "no eligible capacity", winner: null });
   });
 });
 
@@ -168,7 +223,6 @@ describe("E05 snapshot_atomic_save_sample_ordering", () => {
     f.advance(999); expect(await f.state.thresholdChanged(80)).toBe(false);
     expect(f.state.snapshot).toBe(fresh); expect(f.select().sampleAgeMs).toBe(999);
     expect(f.select().snapshotVersion).toBe(fresh.snapshotVersion);
-    expect(renderPriorityAdvice(f.select())).toContain(fresh.snapshotVersion);
   });
   it("retains legacy offload cached observations through threshold changes and failure", async () => {
     const f = fixture({ ...config, placementPolicy: "offload" });
@@ -267,11 +321,15 @@ describe("E07 priority_advice_expiry_and_single_child", () => {
     wall -= 90_000; mono += 1_500;
     expect(renderStatus(state.snapshot, "project", state.now())).toContain("sampled 2s ago");
   });
-  it("requires refresh for one child and explains advisory capacity risk", async () => {
+  it("gives short spawn guidance and no expired target", async () => {
     const f = fixture(); await f.state.refresh(c => f.collect(c));
-    const text = renderPriorityAdvice(f.select());
-    for (const phrase of ["including a single child", "one spawn only", "configuration change", "Check expiry", "contention, delay, or start failure", "does not reserve capacity", "accepted advisory exposure", "Check each spawn result and child progress"]) expect(text).toContain(phrase);
-    f.advance(30_000); const expired = renderPriorityAdvice(f.select());
-    expect(expired).not.toContain("Recommended:"); expect(expired).toContain("Defer the spawn");
+    const text = renderPlacementAdvice(f.select());
+    expect(text.split("\n")).toHaveLength(6);
+    expect(text).toContain("Recommended: --machine MSI");
+    for (const phrase of ["before you spawn each child", "with --machine", "wait a short time and call again",
+      "Never spawn on Silicon Knight unless the user asks", "each child its own new environment"])
+      expect(text).toContain(phrase);
+    f.advance(30_000); const expired = renderPlacementAdvice(f.select());
+    expect(expired).not.toContain("Recommended:"); expect(expired).toContain("No machine: observations expired");
   });
 });

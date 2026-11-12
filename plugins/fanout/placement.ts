@@ -69,14 +69,7 @@ export type MachineConfig = {
   name: string;
   /** Maximum concurrently running threads before the machine is "full". */
   capacity: number;
-  /**
-   * Whether this machine takes part in fan-out at all.
-   *
-   * A disabled machine is invisible to the advice logic in both directions: it
-   * is never offered as a target, and threads running on it are never told to
-   * move. That is how a laptop stays out of the scheme while still appearing
-   * in the settings list.
-   */
+  /** Whether this machine can be a target. Disabled origins still get advice. */
   enabled: boolean;
   /** Optional on legacy callers; normalized to 100 in committed state. */
   priority?: number;
@@ -261,21 +254,7 @@ function formatMachine(machine: MachineStat): string {
   return `${machine.name} (${machine.running}/${machine.capacity} running, ${percent}%)`;
 }
 
-/** The instruction block injected into an overloaded machine's threads. */
-export function renderAdvice(advice: Advice): string {
-  return [
-    `Machine load: ${formatMachine(advice.current)} is at or over its offload threshold.`,
-    `${formatMachine(advice.target)} has room and can run this project.`,
-    "",
-    `Spawn child threads on ${advice.target.name} instead of this machine:`,
-    `  bb thread spawn --machine ${advice.target.name} --parent-self --permission-mode full --prompt "..."`,
-    "",
-    "The child stays linked to this thread, so bb thread wait, tell, and output all still work.",
-    "This is advice, not a rule. Keep work here when it needs this machine's local state.",
-  ].join("\n");
-}
-
-/** Shared rendering for `pick_machine` and `bb fanout status`. */
+/** Detailed machine status for people. */
 export function renderStatus(
   snapshot: Snapshot | SelectionSnapshot,
   projectId: string | null,
@@ -406,9 +385,6 @@ export function selectPlacement(snapshot: SelectionSnapshot, context: PlacementC
   const current = snapshot.machines.find(m => m.hostId === context.currentHostId);
   const sources = context.projectId ? snapshot.projectHosts.get(context.projectId) : undefined;
   if (!current) return result;
-  if (snapshot.config[current.hostId]?.enabled !== true) {
-    return { ...result, kind: "suppressed advice", reason: "origin disabled" };
-  }
   if (snapshot.placementPolicy === "priority") {
     const reason = snapshot.pending ? "configuration refresh pending"
       : snapshot.failure ?? (snapshot.sampleConfigRevision !== snapshot.configRevision ? "matching sample required"
@@ -420,30 +396,36 @@ export function selectPlacement(snapshot: SelectionSnapshot, context: PlacementC
   const candidates = (snapshot.placementPolicy === "priority" ? ordered : [...snapshot.machines])
     .filter(m => {
       const reason = !m.connected ? "disconnected"
-        : m.saturation === null ? "disabled"
+        : snapshot.config[m.hostId]?.enabled !== true || m.saturation === null ? "disabled"
         : !sources.has(m.hostId) ? "no source for this project"
         : m.saturation >= threshold ? "at or above threshold"
         : snapshot.placementPolicy === "offload" && m.hostId === current.hostId ? "origin" : null;
       if (reason) result.exclusions[m.hostId] = reason;
       return !reason;
     });
-  if (snapshot.placementPolicy === "offload") {
+  if (snapshot.placementPolicy === "priority") {
+    candidates.sort((a, b) =>
+      parsePriority(snapshot.config[a.hostId]?.priority) - parsePriority(snapshot.config[b.hostId]?.priority)
+      || a.saturation! - b.saturation!
+      || (a.hostId < b.hostId ? -1 : a.hostId > b.hostId ? 1 : 0));
+  } else {
     candidates.sort((a, b) => a.saturation! - b.saturation!);
-    if (current.saturation === null || current.saturation < threshold) {
+    const originLoad = snapshot.config[current.hostId]?.enabled ? current.saturation : null;
+    if (originLoad !== null && originLoad < threshold) {
       return { ...result, kind: "suppressed advice", reason: "origin below offload threshold" };
     }
-    if (candidates[0] && candidates[0].saturation! > current.saturation - MIN_IMPROVEMENT) {
+    if (originLoad !== null && candidates[0] && candidates[0].saturation! > originLoad - MIN_IMPROVEMENT) {
       return { ...result, kind: "suppressed advice", reason: "insufficient improvement" };
     }
   }
   result.eligibleOrder = candidates.map(m => m.hostId);
   const winner = candidates[0] ?? null;
   return { ...result, winner, kind: winner ? winner.hostId === current.hostId ? "local" : "remote" : "no eligible capacity",
-    reason: winner ? snapshot.placementPolicy === "priority" ? "first eligible priority" : "least saturated eligible remote"
+    reason: winner ? snapshot.placementPolicy === "priority" ? "lowest priority number, then lowest load share" : "least saturated eligible remote"
       : "no eligible machine has room and a project source" };
 }
 
-/** The same selection summary is used by RPC, UI, CLI, tools, and instructions. */
+/** Detailed selection status for RPC, UI, and CLI. */
 export function renderSelection(result: PlacementResult): string {
   return [
     `Placement policy: ${result.policy}; threshold: ${result.thresholdPercent}%; snapshot: ${result.snapshotVersion}.`,
@@ -455,25 +437,23 @@ export function renderSelection(result: PlacementResult): string {
   ].join("\n");
 }
 
-export const REMOTE_WRITE_HANDOFF = [
-  "Placement advice does not authorize remote writes. Read-only work needs no write handoff.",
-  "Before remote writes, the parent supplies repository identity, expected full base commit, target host ID, exact checkout/worktree path, intended branch or detached-HEAD state, bounded file scope, and one named write owner.",
-  "Use the task's accepted base commit, not a branch name or an assumed remote default.",
-  "Before the first write, the named worker checks repository identity, target host, exact path, HEAD against the expected base, branch state, and tracked plus untracked local changes.",
-  "Report these observations to the parent. The parent must confirm that no other writer owns the checkout.",
-  "Only a verified handoff permits writes. Stop before writing on a wrong base, unexpected local changes, shared write ownership, or any unverified state.",
-  "Report the mismatch and request a corrected handoff. Do not reset, clean, stash, checkout, merge, or otherwise repair Git state automatically.",
-  "The parent resolves the mismatch or supplies a verified separate worktree and a new handoff. Repeat all checks after any handoff change.",
+export const PLACEMENT_GUIDANCE = [
+  "Call pick_machine before you spawn each child.",
+  "Spawn on the machine it names with --machine.",
+  "If it says No machine, wait a short time and call again.",
+  "Never spawn on Silicon Knight unless the user asks for it.",
+  "Give each child its own new environment.",
 ].join("\n");
 
-export function renderPriorityAdvice(result: PlacementResult): string {
+/** Short advice shared by the tool and injected instructions. */
+export function renderPlacementAdvice(result: PlacementResult): string {
+  const name = result.winner?.name;
+  const machine = name && /\s/.test(name) ? JSON.stringify(name) : name;
   return [
-    renderSelection(result),
-    "Call pick_machine immediately before each child spawn, including a single child. Use each answer for one spawn only.",
-    "Check expiry before spawning. Refresh after expiry or any intervening configuration change.",
-    "Capacity can change before expiry and cause contention, delay, or start failure. Advice does not reserve capacity.",
-    "Thirty seconds bounds observation age; it is an accepted advisory exposure, not a capacity guarantee or measured safety limit.",
-    "Check each spawn result and child progress. On capacity-related failure or contention, defer further placement and request fresh advice.",
-    REMOTE_WRITE_HANDOFF,
+    result.winner ? `Recommended: --machine ${machine}`
+      : result.policy === "offload" && result.kind === "suppressed advice"
+        ? `Recommended: stay on the current machine (${result.reason})`
+        : `No machine: ${result.reason}`,
+    PLACEMENT_GUIDANCE,
   ].join("\n");
 }

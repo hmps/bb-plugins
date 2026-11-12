@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { createFakePluginHost, makePluginAgentConfigurationContext } from "@get-bb/plugin-sdk/testing";
+import plugin from "./server";
+import { PLACEMENT_KEY } from "./placement-state";
 
 import {
   buildSnapshot,
@@ -11,7 +14,6 @@ import {
   parseThresholdPercent,
   renderMachines,
   pickTarget,
-  renderAdvice,
   renderStatus,
   type HostRow,
   type Snapshot,
@@ -21,6 +23,7 @@ import {
 const TITAN = "host_titan";
 const MSI = "host_msi";
 const LAPTOP = "host_laptop";
+const PHOENIX = "host_phoenix";
 const PROJECT = "proj_vaam";
 
 function thread(over: Partial<ThreadRow> & { id: string }): ThreadRow {
@@ -256,14 +259,14 @@ describe("pickTarget", () => {
     expect(advice).toBeNull();
   });
 
-  it("stays quiet for a thread running on a disabled machine", () => {
+  it("advises a target for a thread running on a disabled machine", () => {
     expect(
       pickTarget({
         ...base,
         snapshot: snapshotOf(busyTitan()),
         currentHostId: LAPTOP,
-      }),
-    ).toBeNull();
+      })?.target.hostId,
+    ).toBe(MSI);
   });
 
   it("never advises a disconnected machine", () => {
@@ -323,21 +326,6 @@ describe("pickTarget", () => {
   });
 });
 
-describe("renderAdvice", () => {
-  it("names the target and gives a runnable command", () => {
-    const advice = pickTarget({
-      snapshot: snapshotOf(busyTitan()),
-      currentHostId: TITAN,
-      projectId: PROJECT,
-      thresholdPercent: 80,
-    });
-    const text = renderAdvice(advice!);
-    expect(text).toContain("Ethereal-Titan (7/8 running, 88%)");
-    expect(text).toContain("MSI (0/12 running, 0%)");
-    expect(text).toContain("bb thread spawn --machine MSI --parent-self");
-  });
-});
-
 describe("renderStatus", () => {
   it("flags why a machine is not a candidate", () => {
     const snapshot = buildSnapshot({
@@ -362,5 +350,45 @@ describe("renderStatus", () => {
     expect(renderStatus({ ...snapshotOf([]), machines: [] }, null)).toBe(
       "No machines sampled yet.",
     );
+  });
+});
+
+describe("registered placement advice", () => {
+  it.each([
+    { phoenix: 4, msi: 4, winner: PHOENIX, name: '"Iron Phoenix"' },
+    { phoenix: 8, msi: 4, winner: MSI, name: "MSI" },
+    { phoenix: 12, msi: 9, winner: MSI, name: "MSI" },
+    { phoenix: 13, msi: 10, winner: TITAN, name: "Ethereal-Titan" },
+  ])("advises disabled Knight with Phoenix at $phoenix/16 and MSI at $msi/12", async ({ phoenix, msi, winner, name }) => {
+    const host = createFakePluginHost({ pluginId: "fanout", sdk: {
+      hosts: { list: async () => [...HOSTS, { id: PHOENIX, name: "Iron Phoenix", status: "connected" }] },
+      threads: { list: async () => [thread({ id: "caller", environmentHostId: LAPTOP }),
+        ...Array.from({ length: phoenix }, (_, i) => thread({ id: `p${i}`, status: "active", environmentHostId: PHOENIX })),
+        ...Array.from({ length: msi }, (_, i) => thread({ id: `m${i}`, status: "active", environmentHostId: MSI })),
+      ] },
+      projects: { get: async () => ({ sources: [TITAN, MSI, PHOENIX, LAPTOP].map(hostId => ({ hostId })) }) },
+    } });
+    try {
+      await host.bb.storage.kv.set(PLACEMENT_KEY, { placementPolicy: "priority", machines: {
+        [PHOENIX]: { name: "Iron Phoenix", capacity: 16, priority: 1, enabled: true },
+        [MSI]: { name: "MSI", capacity: 12, priority: 1, enabled: true },
+        [TITAN]: { name: "Ethereal-Titan", capacity: 8, priority: 50, enabled: true },
+        [LAPTOP]: { name: "Silicon Knight", capacity: 16, priority: 1, enabled: false },
+      } });
+      await plugin(host.bb);
+      const text = String(await host.harness.behavior.callAgentTool("pick_machine", {}, { threadId: "caller", projectId: PROJECT }));
+      expect(text).toContain(`Recommended: --machine ${name}`);
+      const instructions = await host.harness.behavior.resolveAgentConfiguration(makePluginAgentConfigurationContext({
+        host: { id: LAPTOP }, project: { id: PROJECT },
+      }));
+      expect(instructions.instructions).toBe(text);
+      const status = await host.harness.behavior.callRpc("listMachines", { originHostId: LAPTOP, projectId: PROJECT }) as {
+        selection: { winner: { hostId: string }; exclusions: Record<string, string> };
+      };
+      expect(status.selection.winner.hostId).toBe(winner);
+      expect(status.selection.exclusions[LAPTOP]).toBe("disabled");
+    } finally {
+      await host.harness.lifecycle.dispose();
+    }
   });
 });

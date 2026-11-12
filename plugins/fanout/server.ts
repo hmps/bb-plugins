@@ -18,8 +18,8 @@ export * from "./placement";
 import {
   DEFAULT_CAPACITY, DEFAULT_THRESHOLD_PERCENT, parseThresholdPercent,
   mergeMachineConfig, countRunningByHost, buildSnapshot,
-  enabledCapacities, renderAdvice, renderStatus, selectPlacement,
-  renderPriorityAdvice, renderSelection, REMOTE_WRITE_HANDOFF, parsePlacementConfig, parsePriority,
+  enabledCapacities, renderStatus, selectPlacement,
+  renderPlacementAdvice, renderSelection, PLACEMENT_GUIDANCE, parsePlacementConfig, parsePriority,
   type PlacementConfig, type PlacementPolicy, type HostRow, type ThreadRow, type MachineConfigMap,
 } from "./placement";
 import { PLACEMENT_KEY, PlacementState } from "./placement-state";
@@ -246,10 +246,8 @@ export default async function plugin(bb: BbPluginApi) {
     const result = selectPlacement(snapshot, {
       currentHostId: context.host.id, projectId: context.project.id, now: state.now(),
     });
-    if (result.policy === "priority") return { ...selection, instructions: renderPriorityAdvice(result) };
-    const current = snapshot.machines.find(m => m.hostId === context.host.id);
-    return current && result.winner
-      ? { ...selection, instructions: [renderSelection(result), renderAdvice({ current, target: result.winner }), REMOTE_WRITE_HANDOFF].join("\n\n") } : selection;
+    return result.policy === "priority" || result.winner
+      ? { ...selection, instructions: renderPlacementAdvice(result) } : selection;
   });
 
   /**
@@ -332,9 +330,8 @@ export default async function plugin(bb: BbPluginApi) {
   bb.agents.registerTool({
     name: "pick_machine",
     description:
-      "Report how loaded each BB machine is and which one has room to run a child thread for a project. Advisory only: it does not spawn anything.",
-    instructions:
-      "In priority mode, call pick_machine immediately before each child spawn, including a single child. Use each answer once. Defer when no winner is available. In offload mode, call before spawning several children. " + REMOTE_WRITE_HANDOFF,
+      "Name a machine with room for a child thread in this project. This tool does not spawn threads.",
+    instructions: PLACEMENT_GUIDANCE,
     presentation: {
       label: {
         pending: "Checking machine load",
@@ -364,10 +361,7 @@ export default async function plugin(bb: BbPluginApi) {
         projectId: targetProject, now: state.now(),
       });
       if (failure) result = { ...result, winner: null, eligibleOrder: [], kind: "unavailable data", reason: failure };
-      if (result.policy === "priority") return renderPriorityAdvice(result);
-      const legacyStay = result.kind === "suppressed advice" ? "Recommended: stay on the current machine." : "";
-      return [renderSelection(result), renderStatus(fresh, targetProject, state.now()), legacyStay,
-        "Placement is advisory — you still write the spawn command.", REMOTE_WRITE_HANDOFF].filter(Boolean).join("\n\n");
+      return renderPlacementAdvice(result);
     },
   });
 
