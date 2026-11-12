@@ -22,7 +22,7 @@ import {
   dayKey, exactTitle, formatDay, formatExact, formatMoment, formatTimestamp, formatTokens,
 } from "./lib/format";
 
-const ICON = "ChartNoAxesColumn";
+const ICON = "ChartColumn";
 const PANEL_PATH = "usage";
 const DAYS = 14;
 const TOP_THREADS = 10;

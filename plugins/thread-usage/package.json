@@ -12,7 +12,7 @@
     "name": "Thread Usage",
     "description": "Track token totals per thread and day without model calls. Shows tokens in each thread's Info tab and a 14-day usage page.",
     "branding": {
-      "icon": "ChartNoAxesColumn"
+      "icon": "ChartColumn"
     },
     "server": "./server.ts",
     "app": "./app.tsx"
