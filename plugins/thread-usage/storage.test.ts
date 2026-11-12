@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { fields } from "./test-fixtures";
 import { DAY, HOUR, localDay, migrations, UsageStore } from "./storage";
-import { event, thread, NOW } from "./test-fixtures";
+import { event, turn, thread, NOW } from "./test-fixtures";
 
 const databases: Database.Database[] = [];
 function fixture() {
@@ -82,4 +82,27 @@ describe("token accounting on real SQLite", () => {
     expect(store.getThreads(NOW - DAY, 7, "other").rows).toEqual([]);
     expect(store.getThreads(NOW - 30 * DAY, 7)).toMatchObject({ truncated: true, rows: [{ threadId: thread.id }] });
   });
+});
+
+it("keeps an existing model when turn metadata has no string model", () => {
+  const store = fixture();
+  store.applyTurn(thread, { seq: 1, data: {} });
+  expect(store.getThreadUsage(thread.id)?.model).toBe("unknown");
+  store.applyTurn(thread, turn(2, "model-a"));
+  store.applyTurn(thread, { seq: 3, data: { execution: { model: null } } });
+  store.applyTurn(thread, { seq: 4, data: {} });
+  store.apply(thread, event(5, 10));
+  expect(store.getThreadUsage(thread.id)).toMatchObject({ model: "model-a", totals: { totalTokens: 10 } });
+  expect(store.cursor(thread.id)).toBe(5);
+});
+
+it("baselines first usage after earlier turn events for a pre-install thread", () => {
+  const store = fixture();
+  const old = { ...thread, createdAt: NOW - DAY };
+  store.applyTurn(old, turn(1, "model-a"));
+  store.applyTurn(old, turn(2, "model-b"));
+  store.apply(old, event(3, 100));
+  expect(store.getThreadUsage(thread.id)).toMatchObject({ baseline: true, model: "model-b", totals: { totalTokens: 0 } });
+  store.apply(old, event(4, 115));
+  expect(store.getThreadUsage(thread.id)?.totals.totalTokens).toBe(15);
 });

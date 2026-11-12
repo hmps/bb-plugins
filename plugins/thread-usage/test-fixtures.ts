@@ -13,3 +13,15 @@ export function event(seq: number, count: number, session = "session-a"): Extrac
   return { id: `event-${seq}`, threadId: thread.id, scope: { kind: "thread" }, seq, createdAt: NOW,
     type: "thread/tokenUsage/updated", data: { providerThreadId: session, tokenUsage: { total, last: total, modelContextWindow: null } } };
 }
+export function turn(seq: number, model = "model-a"): Extract<Event, { type: "client/turn/requested" }> {
+  return {
+    id: `turn-${seq}`, threadId: thread.id, scope: { kind: "thread" }, seq, createdAt: NOW,
+    type: "client/turn/requested",
+    data: {
+      direction: "outbound", initiator: "user", input: [], requestId: `request-${seq}`,
+      source: "tell", senderThreadId: null, request: { method: "turn/start", params: {} },
+      execution: { model, permissionMode: "full", reasoningLevel: "medium", serviceTier: "default", source: "client/turn/requested" },
+      target: { kind: "new-turn" },
+    },
+  };
+}

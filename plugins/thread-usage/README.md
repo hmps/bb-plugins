@@ -1,6 +1,7 @@
 # Thread Usage
 
 Thread Usage counts tokens from bb's own `thread/tokenUsage/updated` events.
+It reads model changes from `client/turn/requested` events.
 It stores totals per thread, UTC hour, server-local day, project, and model.
 The plugin uses no tokens. It makes no model calls and adds no agent context.
 Version 0.1.0 contains the server and CLI. It has no UI.
@@ -22,8 +23,8 @@ These fields follow the provider's report. Cache and reasoning fields can overla
 Do not add all seven fields to calculate a total.
 Tokens are not quota. Provider quota can use other measures and time windows.
 
-The bb 0.49.0 thread DTO has `projectId` and `providerId`, but no model field.
-This version stores model as `unknown`. The output still groups by model for future support.
+The plugin reads the model from `client/turn/requested` events at `data.execution.model`.
+A missing model keeps the previous value. The first default is `unknown`.
 Thread totals contain the latest model label. Hourly and daily totals retain their stored labels.
 
 ## Retention and recovery

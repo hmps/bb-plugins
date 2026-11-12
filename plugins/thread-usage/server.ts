@@ -38,11 +38,12 @@ export default function plugin(bb: BbPluginApi) {
     let after = store.cursor(thread.id);
     while (!stopped) {
       const events = await bb.sdk.threads.events.list({
-        threadId: thread.id, afterSeq: String(after), types: ["thread/tokenUsage/updated"],
+        threadId: thread.id, afterSeq: String(after), types: ["client/turn/requested", "thread/tokenUsage/updated"],
         order: "asc", limit: "100", signal: controller.signal,
       });
       let last = after;
       for (const event of events) {
+        if (event.type === "client/turn/requested") store.applyTurn(thread, event);
         if (event.type === "thread/tokenUsage/updated") store.apply(thread, event);
         last = Math.max(last, event.seq);
       }

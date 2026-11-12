@@ -3,6 +3,7 @@
 ## 0.1.0
 
 - Count token usage from bb events without model calls or added agent context.
+- Read model changes from turn requests and split hourly usage by model.
 - Store thread totals and retained hourly totals in SQLite.
 - Keep daily totals after rollup and thread deletion.
 - Add startup catch-up, lifecycle handling, and retention settings.

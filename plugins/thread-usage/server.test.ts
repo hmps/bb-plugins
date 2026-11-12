@@ -4,7 +4,7 @@ import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
 import plugin from "./server";
 import { dailyUsageSchema, threadUsageSchema } from "./contract";
 import { UsageStore, DAY } from "./storage";
-import { event, thread, NOW } from "./test-fixtures";
+import { event, turn, thread, NOW } from "./test-fixtures";
 
 type Host = ReturnType<typeof createFakePluginHost>;
 const hosts: Host[] = [];
@@ -44,7 +44,7 @@ it("serializes two triggers and reads pages after the stored cursor", async () =
   await Promise.all([first, second]);
   expect(maxActive).toBe(1);
   expect(store.getThreadUsage(thread.id)?.totals.totalTokens).toBe(10);
-  expect(events.mock.calls[1][0]).toMatchObject({ afterSeq: "1", types: ["thread/tokenUsage/updated"], order: "asc" });
+  expect(events.mock.calls[1][0]).toMatchObject({ afterSeq: "1", types: ["client/turn/requested", "thread/tokenUsage/updated"], order: "asc" });
 });
 
 it("pages event results oldest first", async () => {
@@ -128,4 +128,31 @@ it("runs scheduled rollup without changing thread totals", async () => {
   await harness.behavior.runSchedule("rollup");
   expect(store.db.prepare("SELECT COUNT(*) AS n FROM hourly_usage").get()).toEqual({ n: 0 });
   expect(store.getDailyUsage(9).rows[0].totals.totalTokens).toBe(10);
+});
+
+it("splits hourly usage by model and ignores replayed turns and usage", async () => {
+  const { harness, events, store } = fixture();
+  const batch = [turn(1, "model-a"), event(2, 10), turn(3, "model-b"), event(4, 25)];
+  events.mockResolvedValue(batch);
+  await harness.behavior.emitThreadEvent("experimental_thread.events", { thread, sequence: 4 });
+  await harness.behavior.emitThreadEvent("experimental_thread.events", { thread, sequence: 4 });
+  expect(store.getThreadUsage(thread.id)).toMatchObject({ model: "model-b", totals: { totalTokens: 25 } });
+  expect(store.getHours(NOW - DAY, 7).rows.map((r) => [r.model, r.totals.totalTokens]))
+    .toEqual([["model-a", 10], ["model-b", 15]]);
+  expect(store.cursor(thread.id)).toBe(4);
+});
+
+it("advances the cursor across full pages containing only turn events", async () => {
+  const { harness, events, store } = fixture();
+  events.mockResolvedValueOnce(Array.from({ length: 100 }, (_, i) => turn(i + 1, "model-a")))
+    .mockResolvedValueOnce([]);
+  await harness.behavior.emitThreadEvent("experimental_thread.events", { thread, sequence: 100 });
+  expect(events.mock.calls[1][0]).toMatchObject({ afterSeq: "100" });
+  expect(store.cursor(thread.id)).toBe(100);
+  expect(store.getThreadUsage(thread.id)).toMatchObject({ model: "model-a", totals: { totalTokens: 0 } });
+  expect(store.getHours(NOW - DAY, 7).rows).toEqual([]);
+  events.mockResolvedValueOnce([turn(1, "stale-model")]);
+  await harness.behavior.emitThreadEvent("experimental_thread.events", { thread, sequence: 100 });
+  expect(store.cursor(thread.id)).toBe(100);
+  expect(store.getThreadUsage(thread.id)?.model).toBe("model-a");
 });

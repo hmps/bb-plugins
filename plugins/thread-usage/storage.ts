@@ -28,6 +28,8 @@ export const migrations = [
     PRIMARY KEY (day, project_id, model)
   )`,
   `CREATE INDEX hourly_usage_thread ON hourly_usage (thread_id, hour_start_utc)`,
+  // Turn-only rows must not consume the first usage baseline. Existing rows already have usage.
+  `ALTER TABLE thread_usage ADD COLUMN has_usage INTEGER NOT NULL DEFAULT 1`,
 ];
 export interface ThreadInfo {
   id: string; projectId: string; providerId: string; title: string | null;
@@ -36,6 +38,10 @@ export interface ThreadInfo {
 export interface UsageEvent {
   seq: number; createdAt: number;
   data: { providerThreadId: string; tokenUsage: { total: Partial<Totals> } };
+}
+export interface TurnEvent {
+  seq: number;
+  data: { execution?: { model?: unknown } | null };
 }
 type Row = Record<string, string | number | null>;
 function totals(row: Row, prefix = ""): Totals {
@@ -60,25 +66,40 @@ export class UsageStore {
   cursor(id: string): number {
     return Number((this.db.prepare("SELECT last_seq FROM thread_usage WHERE thread_id = ?").get(id) as Row | undefined)?.last_seq ?? 0);
   }
+  applyTurn(thread: ThreadInfo, event: TurnEvent) {
+    this.db.transaction(() => {
+      const old = this.db.prepare("SELECT * FROM thread_usage WHERE thread_id = ?").get(thread.id) as Row | undefined;
+      if (old && event.seq <= Number(old.last_seq)) return;
+      const model = typeof event.data.execution?.model === "string"
+        ? event.data.execution.model : String(old?.model ?? "unknown");
+      this.db.prepare(`INSERT INTO thread_usage
+        (thread_id, project_id, provider_id, model, title, provider_thread_id, last_seq,
+         baseline, first_seen_at, updated_at, archived_at, has_usage)
+        VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, 0)
+        ON CONFLICT(thread_id) DO UPDATE SET model = excluded.model,
+          last_seq = excluded.last_seq, updated_at = excluded.updated_at`)
+        .run(thread.id, thread.projectId, thread.providerId, model, thread.title, event.seq,
+          Number(thread.createdAt < this.installedAt), this.now(), this.now(), thread.archivedAt);
+    })();
+  }
   apply(thread: ThreadInfo, event: UsageEvent) {
     this.db.transaction(() => {
       const old = this.db.prepare("SELECT * FROM thread_usage WHERE thread_id = ?").get(thread.id) as Row | undefined;
       if (old && event.seq <= Number(old.last_seq)) return;
       const total = Object.fromEntries(fields.map((f) => [f, event.data.tokenUsage.total[f] ?? 0])) as Totals;
-      const baseline = !old && thread.createdAt < this.installedAt;
+      const baseline = (!old || !old.has_usage) && thread.createdAt < this.installedAt;
       const previous = old ? totals(old, "cursor_") : zero();
       const sameSession = old?.provider_thread_id === event.data.providerThreadId && fields.every((f) => total[f] >= previous[f]);
       const delta = Object.fromEntries(fields.map((f) => [f, baseline ? 0 : total[f] - (sameSession ? previous[f] : 0)])) as Totals;
       const counted = old ? totals(old, "counted_") : zero();
       add(counted, delta);
-      // ThreadResponse has no model field in bb 0.49.0.
-      const model = "unknown";
+      const model = String(old?.model ?? "unknown");
       const names = ["thread_id", "project_id", "provider_id", "model", "title", "provider_thread_id", "last_seq",
         ...fields.map((f) => `cursor_${f}`), ...fields.map((f) => `counted_${f}`),
-        "baseline", "first_seen_at", "updated_at", "archived_at"];
+        "baseline", "first_seen_at", "updated_at", "archived_at", "has_usage"];
       const args = [thread.id, thread.projectId, thread.providerId, model, thread.title,
         event.data.providerThreadId, event.seq, ...values(total), ...values(counted),
-        old?.baseline ?? Number(baseline), old?.first_seen_at ?? this.now(), this.now(), thread.archivedAt];
+        old?.baseline ?? Number(baseline), old?.first_seen_at ?? this.now(), this.now(), thread.archivedAt, 1];
       this.db.prepare(`INSERT INTO thread_usage (${names.join(", ")}) VALUES (${names.map(() => "?").join(", ")})
         ON CONFLICT(thread_id) DO UPDATE SET ${names.slice(1).map((n) => `${n} = excluded.${n}`).join(", ")}`).run(...args);
       if (fields.some((f) => delta[f] !== 0)) {
