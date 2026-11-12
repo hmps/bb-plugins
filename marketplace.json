@@ -256,6 +256,29 @@
           "tagPrefix": "child-thread-split/"
         }
       }
+    },
+    {
+      "id": "thread-usage",
+      "displayName": "Thread Usage",
+      "description": "Token totals per thread, hour, and day from bb events, with no model calls.",
+      "icon": "ChartNoAxesColumn",
+      "tags": [
+        "usage",
+        "tokens",
+        "threads"
+      ],
+      "author": {
+        "name": "Hampus Persson",
+        "github": "hmps"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/hmps/bb-plugins.git",
+          "subdir": "plugins/thread-usage",
+          "range": "^0.2.0",
+          "tagPrefix": "thread-usage/"
+        }
+      }
     }
   ]
 }

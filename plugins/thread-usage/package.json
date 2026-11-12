@@ -1,0 +1,47 @@
+{
+  "name": "bb-plugin-thread-usage",
+  "version": "0.2.0",
+  "description": "Token totals per thread and day from bb events, with a thread Info row and a usage page.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "bb": ">=0.49.0",
+    "bbPluginSdk": ">=0.6.133"
+  },
+  "bb": {
+    "name": "Thread Usage",
+    "description": "Track token totals per thread and day without model calls. Shows tokens in each thread's Info tab and a 14-day usage page.",
+    "branding": {
+      "icon": "ChartColumn"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx"
+  },
+  "keywords": [
+    "bb-plugin"
+  ],
+  "scripts": {
+    "build": "bb plugin build",
+    "test": "vitest run --config vitest.config.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.6.133",
+    "@testing-library/react": "^16.3.3",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "better-sqlite3": "^12.11.1",
+    "cron-parser": "^5.10.4",
+    "hono": "^4.13.18",
+    "jsdom": "^29.1.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.11"
+  }
+}
