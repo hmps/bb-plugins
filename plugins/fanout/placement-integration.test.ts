@@ -38,13 +38,13 @@ afterEach(async () => { for (const dispose of cleanups.splice(0)) await dispose(
 describe("E01 offload_legacy_policy_and_exclusions", () => {
   it.each(["absent", "malformed"])("preserves the overload gate for %s policy", async kind => {
     const h = await setup(kind === "absent" ? undefined : "bogus", kind === "absent");
-    expect(String(await h.tool())).toContain("stay on the current machine");
+    expect(String(await h.tool())).toContain("No machine: origin below offload threshold");
     expect((await h.instructions()).instructions).toBeNull();
     h.harness.inspection.sdk.stub("threads.list", async () => [...threads,
       ...Array.from({ length: 8 }, (_, i) => ({ ...threads[0], id: `busy${i}`, status: "active" })),
     ]);
     expect(String(await h.tool())).toContain("Recommended: --machine MSI");
-    expect((await h.instructions()).instructions).toContain("at or over its offload threshold");
+    expect((await h.instructions()).instructions).toContain("Recommended: --machine MSI");
     expect((await h.instructions(true)).instructions).toBeNull();
     h.harness.inspection.sdk.stub("hosts.list", async () => { throw new Error("offline"); });
     expect(String(await h.tool())).toContain("Recommended: --machine MSI");
@@ -58,10 +58,10 @@ describe("E05/E06/E07 registered server boundary", () => {
     expect((await h.instructions()).instructions).not.toContain("Recommended:");
     const text = String(await h.tool());
     expect(text).toContain("Recommended: --machine MSI");
-    expect(text).toContain("including a single child");
+    expect(text).toContain("before you spawn each child");
     expect((await h.instructions()).instructions).toBe(text);
     expect((await h.instructions(true)).instructions).toBeNull();
-    const version = text.match(/snapshot: ([^.]+)\./)![1];
+    const version = (await status(h)).selection.snapshotVersion;
     const restarted = await h.harness.lifecycle.reload(plugin);
     cleanups.push(() => restarted.harness.lifecycle.dispose());
     const afterRestart = await restarted.harness.behavior.resolveAgentConfiguration(makePluginAgentConfigurationContext({ host: { id: "titan" }, project: { id: "project" } }));
@@ -76,7 +76,7 @@ describe("E05/E06/E07 registered server boundary", () => {
     const h = await setup(); await h.tool();
     h.harness.inspection.sdk.stub("threads.list", async () => { throw new Error("collector offline"); });
     const text = String(await h.tool()); expect(text).not.toContain("Recommended:");
-    expect(text).toContain("collector offline"); expect(text).toContain("Defer the spawn");
+    expect(text).toContain("collector offline"); expect(text).toContain("wait a short time and call again");
     expect((await h.instructions()).instructions).not.toContain("Recommended:");
   });
   it("bounds the registered tool at five seconds", async () => {
@@ -97,17 +97,16 @@ describe("E05/E06/E07 registered server boundary", () => {
     expect(pending).not.toContain("Recommended:"); expect(pending).toContain("refresh pending");
     gate.resolve(threads);
     // The tool may supersede the scheduled collection; only its current result can win.
-    expect(String(await h.tool())).toContain("threshold: 70%");
+    await h.tool(); expect((await status(h)).selection.thresholdPercent).toBe(70);
     expect((await h.instructions()).instructions).toContain("Recommended: --machine MSI");
   });
   it("preserves committed state after a rejected threshold write", async () => {
     const h = await setup(); await h.tool();
-    const before = (await h.instructions()).instructions;
+    const before = await status(h);
     await expect(h.harness.behavior.setSettings({ thresholdPercent: "wrong-type" })).rejects.toThrow();
-    // Age can advance, so compare the committed version and threshold.
-    const after = (await h.instructions()).instructions;
-    expect(after?.match(/snapshot: ([^.]+)\./)?.[1]).toBe(before?.match(/snapshot: ([^.]+)\./)?.[1]);
-    expect(after).toContain("threshold: 80%"); expect(after).toContain("Recommended: --machine MSI");
+    const after = await status(h);
+    expect(after.selection.snapshotVersion).toBe(before.selection.snapshotVersion);
+    expect(after.selection.thresholdPercent).toBe(80); expect(after.selection.winner?.hostId).toBe("msi");
   });
   it("expires instructions at the strict boundary without extending age on a duplicate setting", async () => {
     vi.useFakeTimers({ toFake: ["performance", "Date", "setTimeout", "clearTimeout"] });
@@ -228,7 +227,7 @@ describe("E11 surface_policy_order_reason_parity", () => {
     expect(rpc.selection.configuredOrder).toEqual(["msi", "titan", "away"]);
     expect(rpc.selection.eligibleOrder).toEqual(["msi", "titan"]);
     expect(rpc.selection.exclusions.away).toBe("disconnected");
-    expect(tool).toContain(rpc.statusText.split("\n\n")[0]);
+    expect(tool).toContain(`Recommended: --machine ${rpc.selection.winner?.name}`);
     expect((await h.instructions()).instructions).toBe(tool);
     expect(await h.harness.behavior.runCli(["status", "--origin", "titan", "--project", "project"]))
       .toMatchObject({ stdout: `${rpc.statusText}\n` });
@@ -266,20 +265,20 @@ describe("E11 surface_policy_order_reason_parity", () => {
     const fresh = await status(h);
     expect(fresh.selection.thresholdPercent).toBe(70);
     expect(fresh.selection.winner).toBeNull();
-    expect(answer).toContain("Defer the spawn");
+    expect(answer).toContain("wait a short time and call again");
     expect(fresh.selection.exclusions.msi).toBe("at or above threshold");
-    expect(answer).toContain(fresh.statusText.split("\n\n")[0]);
+    expect(answer).toContain(`No machine: ${fresh.selection.reason}`);
     if (policy === "priority") expect((await h.instructions()).instructions).toBe(answer);
     await h.harness.behavior.setSettings({ thresholdPercent: 80 });
     await h.tool();
     expect((await status(h)).selection.winner?.hostId).toBe("msi");
   });
 
-  it("reports disabled origins and current refresh failure without a winner", async () => {
+  it("advises disabled origins but suppresses current refresh failure", async () => {
     const h = await setup(); await h.tool();
     await h.harness.behavior.callRpc("saveMachines", { machines: [{ hostId: "titan", capacity: 10, enabled: false }] });
     await h.tool();
-    expect((await status(h)).selection).toMatchObject({ winner: null, reason: "origin disabled" });
+    expect((await status(h)).selection).toMatchObject({ winner: { hostId: "msi" }, kind: "remote" });
     h.harness.inspection.sdk.stub("hosts.list", async () => { throw new Error("offline"); });
     await h.tool();
     expect((await status(h, "msi")).selection).toMatchObject({ winner: null, reason: "refresh failed: offline" });
@@ -293,22 +292,29 @@ describe("E12 side_chat_instruction_exclusion", () => {
     expect((await h.instructions(true)).instructions).toBeNull();
     if (policy === "priority") {
       const text = (await h.instructions()).instructions;
-      for (const field of ["Placement policy: priority", "snapshot:", "expires at:", "including a single child", "one spawn only"])
+      for (const field of ["Recommended: --machine MSI", "before you spawn each child", "each child its own new environment"])
         expect(text).toContain(field);
     }
   });
 });
 
-describe("E13 remote_write_handoff_contract_inspection", () => {
-  it("publishes the full handoff and stop rules through tool and normal instructions", async () => {
-    const h = await setup(); const text = String(await h.tool());
-    for (const field of ["repository identity", "expected full base commit", "target host ID", "exact checkout/worktree path",
-      "intended branch or detached-HEAD state", "bounded file scope", "one named write owner", "tracked plus untracked",
-      "HEAD against the expected base", "parent must confirm", "wrong base", "unexpected local changes", "shared write ownership",
-      "any unverified state", "Do not reset, clean, stash, checkout, merge", "Repeat all checks after any handoff change",
-      "Read-only work needs no write handoff", "Only a verified handoff permits writes"])
-      expect(text).toContain(field);
-    expect((await h.instructions()).instructions).toContain("Only a verified handoff permits writes");
+describe("E13 short_agent_guidance", () => {
+  it.each(["priority", "offload"])("keeps %s tool and injected advice short", async policy => {
+    const h = await setup(policy);
+    h.harness.inspection.sdk.stub("threads.list", async () => [...threads,
+      ...Array.from({ length: 8 }, (_, i) => ({ ...threads[0], id: `busy${i}`, status: "active" })),
+    ]);
+    const text = String(await h.tool());
+    const guidance = h.harness.inspection.registrations.agentTools[0].instructions!;
+    expect(guidance.split("\n")).toHaveLength(5);
+    expect(text.split("\n")).toHaveLength(6);
+    expect(text).toContain(guidance);
+    for (const phrase of ["before you spawn each child", "with --machine", "wait a short time and call again",
+      "Never spawn on Silicon Knight unless the user asks", "each child its own new environment"])
+      expect(guidance).toContain(phrase);
+    expect((await h.instructions()).instructions).toBe(text);
+    for (const oldText of ["handoff", "In priority mode", "In offload mode", "snapshot:", "Configured order:"])
+      expect(text).not.toContain(oldText);
   });
 });
 
@@ -319,12 +325,7 @@ describe("E14 placement_advice_has_no_side_effects", () => {
     await h.harness.behavior.callRpc("saveMachines", { machines: [{ hostId: "msi", capacity: 1, enabled: true }] });
     const saved = await h.bb.storage.kv.get(PLACEMENT_KEY);
     const answers = await Promise.all([h.tool(), h.tool()]);
-    for (const answer of answers) {
-      const text = String(answer);
-      for (const phrase of ["Recommended: --machine MSI", "contention, delay, or start failure", "does not reserve capacity",
-        "accepted advisory exposure", "Check each spawn result and child progress", "defer further placement"])
-        expect(text).toContain(phrase);
-    }
+    for (const answer of answers) expect(String(answer)).toContain("Recommended: --machine MSI");
     expect((await status(h)).selection.winner).toMatchObject({ running: 0, capacity: 1 });
     await h.instructions();
     await vi.advanceTimersByTimeAsync(30_000);
