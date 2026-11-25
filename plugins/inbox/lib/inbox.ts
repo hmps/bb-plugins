@@ -4,15 +4,23 @@
 import type { CardAnswer, Item, ItemKind, ItemSource } from "../contract";
 
 export const KIND_LABELS: Record<ItemKind, string> = {
-  decide: "Decide",
-  approve: "Approve",
-  do: "Do",
+  decide: "Decision",
+  approve: "Approval",
+  do: "To do",
 };
 
+/** Short source names for the list rows. */
 export const SOURCE_LABELS: Record<ItemSource, string> = {
   card: "card",
-  tool: "tool",
-  detected: "detected",
+  tool: "agent",
+  detected: "reply",
+};
+
+/** How the item reached the inbox, for the item page. */
+export const SOURCE_PHRASES: Record<ItemSource, string> = {
+  card: "From a decision card",
+  tool: "Asked by an agent",
+  detected: "Found in a final reply",
 };
 
 /** Snoozed until a future time. A snooze that has passed counts as open. */
