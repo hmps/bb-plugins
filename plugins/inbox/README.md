@@ -23,6 +23,8 @@ recommendation. It never adds a duplicate and never pings.
 A navigation entry in the left rail with a badge (open, unread count). The
 list shows open items newest ask first, with snoozed items apart. Each item
 shows its question, context, options, recommendation, and source thread.
+A detected item also shows "From the thread": a collapsed quote of the
+passage of the reply that it came from.
 The page refetches on the realtime signal `items-changed`
 (`{ openCount, unreadCount }`), which every write publishes.
 
@@ -68,7 +70,11 @@ child thread is skipped: its final reply goes to an agent, not to the user.
   something, whether that ask is new, a repeat, or already covered, and per
   open item of the thread the probability that the reply resolves it.
 - Pass 2 runs only when the ask score is at or above `askThreshold`. It
-  extracts each ask (kind, question, options, recommendation, context).
+  extracts each ask (kind, question, options, recommendation, context,
+  excerpt). The prompt asks for text that stands alone: it resolves
+  references such as "option 1" to the real option. The excerpt is the
+  source passage, word for word (at most 1500 chars). When the reply does
+  not hold the quoted text, the item keeps the end of the reply instead.
 - A new ask becomes a `detected` item at once. A repeat bumps its item. An
   open tool or detected item whose resolve score is at or above
   `resolveThreshold` closes as `resolved`.

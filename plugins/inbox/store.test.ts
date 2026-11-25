@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
-import { itemSchema } from "./contract";
+import { LIMITS, itemSchema } from "./contract";
 import { DETECTION_LOG_KEEP, createStore, type NewItem } from "./store";
 
 const T0 = 1_800_000_000_000;
@@ -114,5 +114,26 @@ describe("store lifecycle", () => {
     const count = db.prepare("SELECT COUNT(*) AS n FROM detection_log").get() as { n: number };
     expect(count.n).toBe(DETECTION_LOG_KEEP);
     expect(store.listDetections(1)[0]).toMatchObject({ outcome: "no-ask", scores: row.scores });
+  });
+
+  it("adds the excerpt column to a 0.1.3 store and keeps old rows", () => {
+    const db = new Database(":memory:");
+    createStore(db, () => T0);
+    db.exec("ALTER TABLE items DROP COLUMN excerpt");
+    db.prepare(
+      `INSERT INTO items (id, thread_id, kind, question, question_norm, source, status,
+         created_at, updated_at, last_asked_at, ask_count)
+       VALUES ('inb_old0000001', 'thr_a', 'decide', 'Old?', 'old', 'detected', 'open', ?, ?, ?, 1)`,
+    ).run(T0, T0, T0);
+
+    const store = createStore(db, () => T0);
+    const old = store.get("inb_old0000001")!;
+    expect(itemSchema.parse(old)).toEqual(old);
+    expect(old.excerpt).toBeNull();
+
+    const fresh = store.insert({ ...ask, source: "detected", excerpt: "e".repeat(LIMITS.excerpt + 10) });
+    expect(fresh.excerpt).toHaveLength(LIMITS.excerpt);
+    expect(store.bump(fresh.id, { excerpt: "Newer passage" }).excerpt).toBe("Newer passage");
+    expect(store.bump(fresh.id, { excerpt: null }).excerpt).toBe("Newer passage");
   });
 });

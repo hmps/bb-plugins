@@ -30,6 +30,8 @@ export const DEFAULT_DETECTION_MODEL = "gpt-6-luna";
 export const LIMITS = {
   question: 300,
   context: 20_000,
+  /** The passage of the agent message an ask came from. */
+  excerpt: 1_500,
   option: 200,
   options: 8,
   recommendation: 500,
@@ -131,6 +133,11 @@ export const itemSchema = z.object({
   answer: z.string().nullable(),
   /** Thread message sequence of the ask, for a deep link, when known. */
   messageSeq: z.number().int().nullable(),
+  /**
+   * The passage of the agent message the ask came from, verbatim, at most
+   * LIMITS.excerpt chars. Set for detected items; null for older items.
+   */
+  excerpt: z.string().nullable(),
 });
 export type Item = z.infer<typeof itemSchema>;
 
@@ -161,12 +168,26 @@ export type CliItem = z.infer<typeof cliItemSchema>;
 
 export const askInputSchema = z.object({
   kind: itemKindSchema,
-  question: z.string().trim().min(1).max(LIMITS.question),
-  context: z.string().max(LIMITS.context).optional(),
+  question: z
+    .string()
+    .trim()
+    .min(1)
+    .max(LIMITS.question)
+    .describe(
+      "One line that makes sense to someone who has not read this thread. Name the real thing: never \"option 1\", \"the fix above\", or \"it\".",
+    ),
+  context: z
+    .string()
+    .max(LIMITS.context)
+    .optional()
+    .describe(
+      "Markdown for a reader who has not read the thread: what is asked, what each option does, and what happens on yes.",
+    ),
   options: z
     .array(z.string().trim().min(1).max(LIMITS.option))
     .max(LIMITS.options)
-    .optional(),
+    .optional()
+    .describe("Each option as its full text, such as \"Rebuild the index with Redis\", not a number or a reference."),
   recommendation: z.string().trim().min(1).max(LIMITS.recommendation).optional(),
   ref: z.string().trim().min(1).max(LIMITS.ref).optional(),
 });
@@ -284,7 +305,9 @@ export interface DetectedAsk {
   question: string; // one line, at most LIMITS.question chars
   options: string[] | null;
   recommendation: string | null;
-  context: string | null; // short Markdown
+  context: string | null; // 2-4 short lines of Markdown that stand alone
+  /** The passage of the reply the ask came from, verbatim, or null. */
+  excerpt: string | null;
   /** The id of an open item this ask repeats, or null for a new ask. */
   repeatOfItemId: string | null;
 }

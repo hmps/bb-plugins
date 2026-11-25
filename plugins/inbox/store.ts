@@ -47,7 +47,8 @@ const SCHEMA = [
      closed_at INTEGER,
      close_reason TEXT,
      answer TEXT,
-     message_seq INTEGER
+     message_seq INTEGER,
+     excerpt TEXT
    )`,
   `CREATE INDEX IF NOT EXISTS items_thread ON items (thread_id, status)`,
   `CREATE INDEX IF NOT EXISTS items_status ON items (status, last_asked_at)`,
@@ -71,6 +72,11 @@ const SCHEMA = [
 /** Creates the tables when they do not exist. Safe to run on every load. */
 export function initStore(db: Db): void {
   for (const statement of SCHEMA) db.exec(statement);
+  // 0.1.4 added items.excerpt. Older stores get the column; old rows keep NULL.
+  const columns = db.prepare(`PRAGMA table_info(items)`).all() as { name: string }[];
+  if (!columns.some(({ name }) => name === "excerpt")) {
+    db.exec(`ALTER TABLE items ADD COLUMN excerpt TEXT`);
+  }
 }
 
 /** "inb_" + 10 url-safe random characters. */
@@ -133,6 +139,7 @@ interface ItemRow {
   close_reason: string | null;
   answer: string | null;
   message_seq: number | null;
+  excerpt: string | null;
 }
 
 function toItem(row: ItemRow): Item {
@@ -162,6 +169,7 @@ function toItem(row: ItemRow): Item {
     closeReason: row.close_reason as CloseReason | null,
     answer: row.answer,
     messageSeq: row.message_seq,
+    excerpt: row.excerpt,
   };
 }
 
@@ -182,6 +190,7 @@ export interface AskFields {
   options?: readonly string[] | null;
   recommendation?: string | null;
   ref?: string | null;
+  excerpt?: string | null;
 }
 
 export interface NewItem extends ThreadSnapshot, AskFields {
@@ -266,9 +275,9 @@ export function createStore(
          kind, question, question_norm, context, options, recommendation, ref,
          source, card, interaction_id, status, created_at, updated_at,
          last_asked_at, ask_count, read_at, snoozed_until, closed_at,
-         close_reason, answer, message_seq
+         close_reason, answer, message_seq, excerpt
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, 1,
-                 NULL, NULL, NULL, NULL, NULL, ?)`,
+                 NULL, NULL, NULL, NULL, NULL, ?, ?)`,
     ).run(
       id,
       input.threadId,
@@ -290,6 +299,7 @@ export function createStore(
       at,
       at,
       input.messageSeq ?? null,
+      clipOrNull(input.excerpt, LIMITS.excerpt),
     );
     return require(id);
   }
@@ -307,7 +317,7 @@ export function createStore(
       `UPDATE items
           SET ask_count = ask_count + 1, last_asked_at = ?, updated_at = ?,
               context = ?, options = ?, recommendation = ?, ref = ?,
-              thread_title = ?, project_name = ?
+              excerpt = ?, thread_title = ?, project_name = ?
         WHERE id = ?`,
     ).run(
       at,
@@ -318,6 +328,9 @@ export function createStore(
         ? item.recommendation
         : clipOrNull(fields.recommendation, LIMITS.recommendation),
       fields.ref === undefined || fields.ref === null ? item.ref : clipOrNull(fields.ref, LIMITS.ref),
+      fields.excerpt === undefined || fields.excerpt === null
+        ? item.excerpt
+        : clipOrNull(fields.excerpt, LIMITS.excerpt),
       fields.snapshot?.threadTitle ?? item.threadTitle,
       fields.snapshot?.projectName ?? item.projectName,
       id,

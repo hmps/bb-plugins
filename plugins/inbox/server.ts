@@ -71,11 +71,12 @@ const KIND_LABEL: Record<ItemKind, string> = {
 };
 
 export const TOOL_DESCRIPTION =
-  "Put a question, approval, or task in the user's inbox. Non-blocking: it returns at once with the item id. The user's answer arrives later in this thread as a message that starts with [Inbox].";
+  "Put a question, approval, or task in the user's inbox. The user reads it in the inbox, away from this thread, so the question and context must make sense to someone who has not read the thread: name the real things, never \"option 1\", \"the fix above\", or \"it\". Give each option as its full text, not a number or a reference. Non-blocking: it returns at once with the item id. The user's answer arrives later in this thread as a message that starts with [Inbox].";
 
 export const INSTRUCTIONS = `Every ask to the user goes through a decision card (\`request_decisions\`) or \`${TOOL_NAME}\`. The user works from an inbox, not from each thread.
 - Use \`${TOOL_NAME}\` for approvals (kind "approve"), things the user must do themselves (kind "do"), and decisions that do not fit a card (kind "decide").
-- Put the long context in the item's \`context\` (Markdown), not only in chat. Give \`options\` and a \`recommendation\` when you have them.
+- Write the question and \`context\` for someone who has not read the thread. Resolve every reference ("option 1", "the fix above", "it") to what it means. The context says what is asked, what each option does, and what happens on yes.
+- Give each option as its full text, not a number or a reference. Give a \`recommendation\` when you have one.
 - The call does not block. Do not wait for it; continue with other work or end your turn. The answer arrives in this thread as a message that starts with "[Inbox]".
 - Asking the same question again bumps the existing item; it does not add a second one.`;
 
@@ -675,6 +676,7 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
               context: found.context ?? undefined,
               options: found.options ?? undefined,
               recommendation: found.recommendation ?? undefined,
+              excerpt: found.excerpt,
             });
             repeatedIds.push(target.id);
             continue;
@@ -690,6 +692,7 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
             context: found.context,
             options: found.options,
             recommendation: found.recommendation,
+            excerpt: found.excerpt,
             source: "detected",
           });
           createdIds.push(item.id);

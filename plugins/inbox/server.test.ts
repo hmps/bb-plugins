@@ -1,6 +1,7 @@
 import { experimental_BbHttpError } from "@get-bb/plugin-sdk";
 import { createFakePluginHost, makeThreadResponse } from "@get-bb/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import {
   DECISIONS_PLUGIN_ID,
   DECISIONS_RENDERER_ID,
@@ -8,6 +9,7 @@ import {
   PUSH_METHOD,
   PUSH_PLUGIN_ID,
   TOOL_NAME,
+  askInputSchema,
   cliItemSchema,
   type DetectorOptions,
   type DetectionInput,
@@ -15,7 +17,7 @@ import {
   type Item,
 } from "./contract";
 import { createDetector as createOpenAiDetector } from "./detection";
-import { createInboxPlugin } from "./server";
+import { INSTRUCTIONS, TOOL_DESCRIPTION, createInboxPlugin } from "./server";
 
 const T0 = 1_800_000_000_000;
 
@@ -117,6 +119,19 @@ async function setup(options: {
 
   return { bb, harness, clock, detect, createDetector, thread, calls, pings, sends, sentText, list, idle };
 }
+
+describe("inbox_ask guidance", () => {
+  it("asks for a question, context, and options that stand alone", () => {
+    for (const text of [TOOL_DESCRIPTION, INSTRUCTIONS]) {
+      expect(text).toContain("has not read the thread");
+      expect(text).toContain('"option 1"');
+      expect(text).toContain("full text");
+    }
+    const schema = z.toJSONSchema(askInputSchema) as { properties: Record<string, { description?: string }> };
+    expect(schema.properties.question.description).toContain("has not read this thread");
+    expect(schema.properties.options.description).toContain("full text");
+  });
+});
 
 describe("answers in the thread", () => {
   const threadId = "thr_a";
@@ -396,7 +411,7 @@ describe("races and archived threads", () => {
         outcome: "asks",
         passTwoRan: true,
         asks: [
-          { kind: "approve", question: "Merge?", options: null, recommendation: null, context: null, repeatOfItemId: null },
+          { kind: "approve", question: "Merge?", options: null, recommendation: null, context: null, excerpt: null, repeatOfItemId: null },
         ],
       });
     });
@@ -492,12 +507,19 @@ describe("detection", () => {
       options: null,
       recommendation: "Merge",
       context: null,
+      excerpt: "CI is green. May I merge PR 12?",
       repeatOfItemId: null,
     };
     t.detect.mockResolvedValueOnce(result({ outcome: "asks", passTwoRan: true, asks: [ask] }));
     await t.idle("thr_a", "May I merge PR 12?");
     const [created] = await t.list();
-    expect(created).toMatchObject({ source: "detected", kind: "approve", question: "May I merge PR 12?", askCount: 1 });
+    expect(created).toMatchObject({
+      source: "detected",
+      kind: "approve",
+      question: "May I merge PR 12?",
+      excerpt: "CI is green. May I merge PR 12?",
+      askCount: 1,
+    });
     expect(t.pings()).toHaveLength(1);
 
     t.detect.mockResolvedValueOnce(

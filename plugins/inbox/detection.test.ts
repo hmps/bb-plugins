@@ -18,6 +18,8 @@ const ask: DetectedAsk = {
   options: ["EU", "US"],
   recommendation: "EU",
   context: "The region controls data residency.",
+  // A word of every test reply that asks, so the excerpt check keeps it.
+  excerpt: "region",
   repeatOfItemId: null,
 };
 
@@ -128,7 +130,7 @@ describe("inbox detection", () => {
                 type: "array",
                 items: {
                   additionalProperties: false,
-                  required: ["kind", "question", "options", "recommendation", "context", "repeatOfItemId"],
+                  required: ["kind", "question", "options", "recommendation", "context", "excerpt", "repeatOfItemId"],
                 },
               },
             },
@@ -137,6 +139,57 @@ describe("inbox detection", () => {
       },
     });
     expect(JSON.parse(body.input)).toEqual({ reply: input.reply, openItems: [] });
+  });
+
+  it("asks for asks that stand alone, without references to the thread", async () => {
+    const { detect, fetch, input } = setup("Which region should we use?");
+    fetch
+      .mockResolvedValueOnce(Response.json({ answers: [predicate("ask", 0.9)] }))
+      .mockResolvedValueOnce(extraction([ask]));
+
+    await detect(input);
+    const { instructions } = JSON.parse(String(fetch.mock.calls[1][1]?.body));
+    expect(instructions).toContain("has not read the reply");
+    expect(instructions).toContain("Resolve every reference");
+    expect(instructions).toContain("\"option 1\"");
+    expect(instructions).toContain("the full text of each choice");
+    expect(instructions).toContain("what each option does");
+    expect(instructions).toContain("copied word for word");
+    expect(instructions).not.toContain("keep context short");
+  });
+
+  it("stores the quoted passage, bounded, and falls back to the end of the reply", async () => {
+    const options = [
+      "Option 1: rebuild the search index with Redis.",
+      "Option 2: keep Postgres full-text search and add a trigram index.",
+    ];
+    const reply = "x".repeat(3000) + "\n\n1. " + options[0] + "\n2. " + options[1] +
+      "\n\nShould I build option 1 or option 2?";
+    const { detect, fetch, input } = setup(reply);
+    const standalone: DetectedAsk = {
+      kind: "decide",
+      question: "Rebuild search with Redis, or keep Postgres full-text search with a trigram index?",
+      options: ["Rebuild the search index with Redis", "Keep Postgres full-text search and add a trigram index"],
+      recommendation: null,
+      context: "- Redis: a new service.\n- Postgres: no new service.\n- On yes, the agent builds it.",
+      // The model reflows whitespace; the check ignores it.
+      excerpt: "1. " + options[0] + "  2. " + options[1] + "\nShould I build option 1 or option 2?",
+      repeatOfItemId: null,
+    };
+    fetch
+      .mockResolvedValueOnce(Response.json({ answers: [predicate("ask", 0.9)] }))
+      .mockResolvedValueOnce(extraction([
+        standalone,
+        { ...standalone, question: "Invented?", excerpt: "Text the agent never wrote." },
+        { ...standalone, question: "Long?", excerpt: "x".repeat(LIMITS.excerpt + 500) },
+      ]));
+
+    const { asks } = await detect(input);
+    expect(asks[0]).toEqual(standalone);
+    expect(asks[1].excerpt).toHaveLength(LIMITS.excerpt);
+    expect(asks[1].excerpt?.startsWith("…")).toBe(true);
+    expect(asks[1].excerpt?.endsWith("Should I build option 1 or option 2?")).toBe(true);
+    expect(asks[2].excerpt).toHaveLength(LIMITS.excerpt);
   });
 
   it.each([
