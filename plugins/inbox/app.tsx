@@ -17,7 +17,7 @@ import {
   useBbNavigate,
   type PluginNavPanelProps,
 } from "@get-bb/plugin-sdk/app";
-import type { CardDecision, Item, ItemKind } from "./contract";
+import type { CardDecision, CloseReason, Item, ItemKind } from "./contract";
 import {
   KIND_LABELS,
   SOURCE_LABELS,
@@ -446,8 +446,9 @@ function InboxHome({ flash }: { flash: string | null }) {
   );
 }
 
-const CLOSE_LABELS: Record<string, string> = {
+const CLOSE_LABELS: Record<CloseReason, string> = {
   answered: "Answered",
+  "answered-in-thread": "Answered in the thread",
   done: "Done",
   dismissed: "Dismissed",
   handed: "Handed to the parent thread",
