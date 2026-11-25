@@ -252,7 +252,7 @@ function ItemList({ selectedId }: { selectedId: string | null }) {
       {!loaded && (
         <p className="px-2 py-3 text-xs text-muted-foreground">Loading…</p>
       )}
-      {loaded && open.length === 0 && (
+      {loaded && !error && open.length === 0 && (
         <p className="flex items-center gap-2 px-2 py-2 text-[13px] text-muted-foreground">
           <CheckGlyph className="size-3.5 text-success" strokeWidth={2.5} />
           All clear
@@ -788,7 +788,7 @@ function ReplyBox({
             send();
           }
         }}
-        className="block field-sizing-content min-h-14 w-full resize-none bg-transparent px-4 py-1 text-sm leading-relaxed placeholder:text-muted-foreground/80 focus-visible:outline-none"
+        className="block field-sizing-content min-h-14 w-full resize-y bg-transparent px-4 py-1 text-sm leading-relaxed placeholder:text-muted-foreground/80 focus-visible:outline-none"
       />
       <div className="flex items-center justify-end gap-3 px-4 pt-1 pb-3">
         <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
@@ -930,8 +930,10 @@ function ItemView({
   const [fetched, setFetched] = useState<Item | null>(null);
   const [missing, setMissing] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [errorPlace, setErrorPlace] = useState<"header" | "answer">("answer");
+  const [failure, setFailure] = useState<{
+    text: string;
+    place: "header" | "answer";
+  } | null>(null);
   const marked = useRef<string | null>(null);
   const item = listed ?? (fetched?.id === id ? fetched : null);
 
@@ -959,12 +961,11 @@ function ItemView({
     });
   }, [id, listed, rpc]);
 
-  useEffect(() => setError(null), [id]);
+  useEffect(() => setFailure(null), [id]);
 
   const run: Run = async (confirmation, action, place = "answer") => {
     setBusy(true);
-    setError(null);
-    setErrorPlace(place);
+    setFailure(null);
     const openIds = groupItems(items, Date.now()).open.map((other) => other.id);
     try {
       const updated = await action();
@@ -989,8 +990,8 @@ function ItemView({
             : openIds[0];
         navigate.toPluginPanel(PANEL_PATH, { subPath: next ?? "" });
       }
-    } catch (failure) {
-      setError(errorText(failure));
+    } catch (caught) {
+      setFailure({ text: errorText(caught), place });
     } finally {
       setBusy(false);
     }
@@ -1105,9 +1106,8 @@ function ItemView({
                 aria-hidden
               />
             </button>
-            <span className="flex-1" />
             {!closed && (
-              <div className="relative -my-1 -mr-2 flex items-center">
+              <div className="relative -my-1 -mr-2 ml-auto flex items-center">
                 {snoozed ? (
                   <Button
                     size="sm"
@@ -1157,9 +1157,9 @@ function ItemView({
               </div>
             )}
           </div>
-          {error && errorPlace === "header" && (
+          {failure?.place === "header" && (
             <p role="alert" className="mt-3 text-sm text-destructive">
-              {error}
+              {failure.text}
             </p>
           )}
           <h1 className="mt-4 text-[22px] leading-[1.3] font-semibold tracking-[-0.02em] text-balance text-foreground break-words">
@@ -1260,9 +1260,9 @@ function ItemView({
               </section>
             )}
 
-        {error && errorPlace === "answer" && (
+        {failure?.place === "answer" && (
           <p role="alert" className="mt-3 text-sm text-destructive">
-            {error}
+            {failure.text}
           </p>
         )}
       </article>
