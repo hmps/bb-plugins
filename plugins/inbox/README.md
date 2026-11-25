@@ -1,142 +1,154 @@
 # bb-plugin-inbox
 
-A BB plugin that keeps a todo list. It shows every surface a plugin can own:
+One place for everything that waits on you. The inbox collects the items
+that wait on the user from every bb thread, shows them in the left rail with
+a badge, and sends each answer back to the thread that asked. It works in
+every thread and has no dependency on Starbase or Beads.
 
-- `server.ts` — the backend: a todo store in `bb.storage.kv`, RPC methods
-  for the page, a `bb inbox` CLI command, a setting, and a realtime signal
-  that keeps every open page current.
-- `app.tsx` — the frontend: an **Example todos** page in the left sidebar
-  (`app.slots.navPanel`) built from the vendored components.
-- `skills/example-todos/SKILL.md` — a skill that tells agents how to keep the list
-  with `bb inbox`. BB imports it into agent threads automatically.
-- `PLUGIN_OVERVIEW.md` — the store listing text: a longer version of
-  `bb.description` that the plugin detail page shows under it. See
-  [Store listing](#store-listing).
+## Sources
 
-Try it: install the plugin, open **Example todos** in the sidebar, then run
-`bb inbox add "Ship it"` in a terminal. The page updates at once.
+| Source     | Where it comes from                                                                 |
+| ---------- | ----------------------------------------------------------------------------------- |
+| `card`     | A pending decision card of the builtin decisions plugin (`request_decisions`).       |
+| `tool`     | An agent called the `inbox_ask` tool, or someone ran `bb inbox ask`.                 |
+| `detected` | The detection pass found an ask in a top-level thread's final reply (optional key). |
 
-## UI components
+An item is created open and unread. Opening it marks it read; it never
+closes it. A repeated ask (the same open question in the same thread) bumps
+`askCount` and `lastAskedAt` and refreshes the context, options, and
+recommendation. It never adds a duplicate and never pings.
 
-`components/ui/` is vendored source you own (the shadcn model): edit the
-files freely — they never update out from under you. Add more from the BB
-component registry (the full shadcn set, version-matched to your BB install
-via the pinned ref in `components.json`):
+## UI
 
-```
-npx shadcn add @bb/select @bb/table
-```
+A navigation entry in the left rail with a badge (open, unread count). The
+list shows open items newest ask first, with snoozed items apart. Each item
+shows its question, context, options, recommendation, and source thread.
+The page refetches on the realtime signal `items-changed`
+(`{ openCount, unreadCount }`), which every write publishes.
 
-Run `npm install` once before `bb plugin build` — the vendored components'
-npm deps bundle into your dist. React, and BB-shimmed packages like the
-radix portal primitives and `sonner` (`import { toast } from "sonner"`
-reaches BB's own toaster), are provided by the BB app at runtime and never
-bundled. Every shimmed package is declared in `devDependencies` at the
-host's version so those imports typecheck; keep them there (never in
-`dependencies`, which would bundle a second copy), and `bb plugin types`
-repins declared packages alongside the SDK; unused packages may be removed. Ship `dist/` (npm tarball or committed for
-git installs) so people installing your plugin never need npm.
+## Actions
 
-## Manifest
+| Action         | Effect                                                                                           |
+| -------------- | ------------------------------------------------------------------------------------------------ |
+| Answer         | Card: answers the card in its thread. Tool/detected: sends `[Inbox] Answer to inb_… (ref: X): …`. |
+| Done           | "do" items: sends `[Inbox] Done: <question>` (and a note).                                       |
+| Snooze         | Hides the item until a time; it then comes back open and unread.                                 |
+| Dismiss        | Card: cancels the card. Tool: sends `[Inbox] The user dismissed inb_…`. Detected: no message.    |
+| Hand to parent | Sends the item to the source thread's parent thread and closes it.                               |
+| Close          | Closes without a message (`bb inbox close`, `items_close`).                                      |
 
-`package.json` is the plugin manifest. Notable fields:
+An item also closes when its thread is archived or deleted, when its card
+settles outside the inbox, or when detection sees a later reply that
+resolves it (tool and detected items only).
 
-- `bb.server` — backend entry (required).
-- `bb.app` — frontend entry. Delete it, `app.tsx`, `components/`,
-  `hooks/`, and `lib/` for a headless plugin.
-- `bb.skills` — skill roots; omitted here, so BB reads `skills/`. Each
-  directory with a `SKILL.md` is one skill, named after the directory.
-- `bb.name` and `bb.description` — required human-facing identity.
-- `bb.branding` — required; declare `icon` as a BB icon name or a
-  plugin-relative compact SVG, or declare `logo.light` (with optional
-  `logo.dark`). Logo assets must be relative `.svg`, `.png`, or
-  `.webp` files.
-- `engines.bb` — supported bb app version range.
-- `engines.bbPluginSdk` — the lowest plugin SDK you need (scaffold:
-  `>=0.6.190`). BB reads this as a floor, not a ceiling: a later
-  SDK in the same major still loads your plugin.
-- `dependencies` — every package your source imports that BB does not provide.
-  `bb plugin build` inlines them into `dist/`, and git installs resolve this
-  list alone, so a build-required package here rather than in
-  `devDependencies` is what keeps your plugin installable. `devDependencies`
-  is for types and tooling only (BB shims React, the portal primitives, and
-  `@get-bb/plugin-sdk` at runtime — never bundle them).
+## Pings
 
-Run `bb plugin build` before publishing git/npm installs. It writes
-`dist/server.js` + `server.meta.json` and `app.js` / `app.css` /
-`app.meta.json`. Each `*.meta.json` stamps SDK major/version,
-`artifactFormatVersion`, `pluginId`, `pluginVersion`, and
-`builtWith` so managed installs can verify the artifacts. `app.meta.json`
-also lists `runtimeSlots`, the shimmed host modules the bundle imports.
+One push notification per new item, any source: title `Inbox · Decide` (or
+Approve, To do), body the question, linked to the source thread. A repeat
+never pings. One daily nudge while items are open: `Inbox: N open`, `oldest
+3d`, at `nudgeHour`, at most once per calendar day.
 
-## Store listing
+The Plugin SDK has no push API. Pings go through the builtin
+push-notifications plugin's RPC:
+`bb.sdk.plugins.callRpc({ pluginId: "push-notifications", method:
+"notifications.send", input: { title, body, threadId } })`. A failed ping
+logs a warning and changes nothing. Set `pings` to false to turn them off.
 
-Two texts describe the plugin in the store. `bb.description` in package.json
-is the one-sentence hook on every browse card and the lead paragraph on the
-detail page; keep it under about 140 characters. `PLUGIN_OVERVIEW.md` is the
-same claim at length, shown in an Overview section under that paragraph.
-Rewrite the scaffold's copy for your plugin, and update it whenever
-`bb.description` changes, so the two never disagree.
+## Detection
 
-The submission to the public BB Community marketplace requires the file. Keep
-it under 4000 characters (aim for 700 to 1800) and use headings, paragraphs,
-emphasis, code, blockquotes, lists, thematic breaks, and absolute https links
-only — raw HTML, images, tables, footnotes, and task lists are rejected. Do
-not open with a `#` title or repeat `bb.description` verbatim; the page
-shows both directly above.
+Detection is off until you set an OpenAI API key. With no key, nothing calls
+a model, and `bb inbox status` reports `{ enabled: false, reason: "no
+OpenAI API key set" }`.
 
-## Install
+With a key, each turn end (`thread.idle`) of a top-level thread with a
+non-empty final reply runs the detector, one run at a time per thread. A
+child thread is skipped: its final reply goes to an agent, not to the user.
 
-From this directory (`bb plugin new` already ran the install; a fresh clone
-needs it):
+- Pass 1 scores the reply: the probability that it asks the user for
+  something, whether that ask is new, a repeat, or already covered, and per
+  open item of the thread the probability that the reply resolves it.
+- Pass 2 runs only when the ask score is at or above `askThreshold`. It
+  extracts each ask (kind, question, options, recommendation, context).
+- A new ask becomes a `detected` item at once. A repeat bumps its item. An
+  open tool or detected item whose resolve score is at or above
+  `resolveThreshold` closes as `resolved`.
 
-```
-npm install
-bb plugin install .
-```
+Each run writes one row to `detection_log` (outcome, scores, whether pass 2
+ran, created, repeated and resolved ids, duration, error). The plugin keeps
+the last 2000 rows. Use `bb inbox detections` to tune the thresholds. A
+detector error logs a warning and changes nothing.
 
-After editing sources, reload:
+## Settings
+
+| Key                | Default      | Meaning                                                  |
+| ------------------ | ------------ | -------------------------------------------------------- |
+| `openaiApiKey`     | (none)       | Secret. Turns detection on.                              |
+| `detectionModel`   | `gpt-6-luna` | Model for both passes.                                   |
+| `askThreshold`     | `0.6`        | Pass 2 runs at or above this ask score.                  |
+| `resolveThreshold` | `0.8`        | An item resolves at or above this score.                 |
+| `pings`            | `true`       | One push per new item, and the daily nudge.              |
+| `nudgeHour`        | `9`          | Hour of the daily nudge (0-23, server local time).       |
 
 ```
-bb plugin reload inbox
+bb plugin config inbox set pings false
 ```
 
-Or let `bb plugin dev` rebuild and reload on every save.
-
-## Configure
+## CLI
 
 ```
-bb plugin config inbox
-bb plugin config inbox set showDone false
-bb plugin reload inbox
+bb inbox list [--json] [--thread <id>] [--project <id>] [--all] [--limit <n>]
+bb inbox ask --kind <decide|approve|do> --question <q> [--context <md>]
+             [--option <o>]... [--recommendation <r>] [--ref <ref>] [--thread <id>] [--json]
+bb inbox close <id> [--reason <text>] [--json]
+bb inbox status [--json]
+bb inbox detections [--limit <n>] [--json]
 ```
 
-## Types & API reference
+`bb inbox list --json` prints an array that matches `cliItemSchema` in
+`contract.ts` exactly. Starbase reads it; fields are only added, never
+renamed or removed. See `skills/inbox/SKILL.md` for examples.
 
-The plugin API ships as the npm package `@get-bb/plugin-sdk`, pinned to an
-exact version in `devDependencies` (`0.6.190` — the SDK of the BB
-that scaffolded this plugin). After `npm install`, the full surface is on disk
-at:
+## Card sync
+
+The card mirror rests on facts proven live on 2026-11-25:
+
+- A decision card from the builtin decisions plugin is a pending plugin
+  interaction: `{ id: "pint_…", threadId, status: "pending", expiresAt
+  (7 days), origin: { kind: "plugin", pluginId: "bb--decisions",
+  rendererId: "decisions" }, payload: { kind: "plugin", title, data: {
+  headline, decisions: [{ question, context, options: [{ label, does }],
+  suggested, links }] } }, resolution: null }`.
+- The decisions frontend submits `{ answers: [ { option: <index> } | {
+  text: "<own answer>" } ] }`, one per decision, in order.
+- `bb thread interactions respond pint_… thr_… --value
+  '{"answers":[{"option":1}]}'` from outside the thread settled the card:
+  status `resolved`, resolution `{ kind: "plugin_submitted", description:
+  { title: "Decided: <headline>", detail: "- Decision 1 — <question>: Pick
+  B" } }`, and the thread's agent received the answer and replied.
+
+So the plugin:
+
+- mirrors each card on `interaction.pending` (once per interaction id),
+- answers it with `bb.sdk.threads.interactions.respond({ threadId,
+  interactionId, value: { answers } })`, and dismisses it with
+  `interactions.cancel`,
+- closes the item with `card-settled` when the card settles elsewhere
+  (answered or written to in the thread, dismissed, expired). It checks with
+  `interactions.get` on thread activity for threads with open cards, on
+  `thread.idle`, every 5 minutes, and at startup. The item's answer is the
+  resolution detail when there is one.
+- At startup it also scans non-archived threads updated in the last 7 days
+  (at most 200) for cards that went pending while it was not loaded.
+
+## Develop
 
 ```
-node_modules/@get-bb/plugin-sdk/bundled-types/bb-plugin-sdk.d.ts      # backend
-node_modules/@get-bb/plugin-sdk/bundled-types/bb-plugin-sdk-app.d.ts  # frontend
+npm install --include=dev --legacy-peer-deps
+npm test
+npm run typecheck
+bb plugin build .
 ```
 
-Your editor and `tsc` resolve `@get-bb/plugin-sdk` there through ordinary node
-resolution — no path mapping. These are readable declarations: open them for an
-exact signature.
-
-The SDK surface grows with every BB release, so the pin has to track the BB you
-actually run:
-
-```
-bb plugin types          # sync this plugin's SDK surface to the running BB
-bb plugin types --check  # CI: fail when it does not match
-```
-
-Ask BB to write plugins for you: the `bb-plugin-authoring` skill documents
-the whole surface with examples.
-
-Confused by the API, or need something the types don't explain? Clone the BB
-repo and read the source: <https://github.com/get-bb/bb>.
+Files: `contract.ts` (shared shapes), `server.ts` (wiring), `store.ts`
+(SQLite store), `cards.ts` (card parsing and answers), `detection.ts`
+(the two-pass detector), `app.tsx` (UI).
