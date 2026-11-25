@@ -51,6 +51,7 @@ function item(change: Partial<Item> = {}): Item {
     closeReason: null,
     answer: null,
     messageSeq: null,
+    excerpt: null,
     ...change,
   };
 }
@@ -163,6 +164,24 @@ describe("page", () => {
         "Final replies are not scanned for asks: no OpenAI API key set",
       ),
     ).toBeTruthy();
+  });
+
+  it("shows the source passage of a detected item as a collapsed quote", async () => {
+    const detected = item({ source: "detected", excerpt: "1. Redis\n2. Postgres\n\nShould I build option 1?" });
+    renderSlot(panel, { subPath: detected.id }, { rpc: rpcFor([detected]) });
+
+    const summary = await screen.findByText("From the thread");
+    const details = summary.closest("details")!;
+    expect(details.open).toBe(false);
+    expect(within(details).getByText(/Should I build option 1\?/)).toBeTruthy();
+  });
+
+  it("renders an older item that has no excerpt", async () => {
+    const old = item({ source: "detected", context: "Plain context." });
+    renderSlot(panel, { subPath: old.id }, { rpc: rpcFor([old]) });
+
+    expect(await screen.findByText("Plain context.")).toBeTruthy();
+    expect(screen.queryByText("From the thread")).toBeNull();
   });
 
   it("marks a tool item read once and answers it with the option text", async () => {

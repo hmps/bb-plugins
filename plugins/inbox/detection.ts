@@ -24,6 +24,8 @@ const noveltyChoices = [
 ];
 
 const probability = z.number().min(0).max(1);
+/** A word budget for the model; LIMITS.excerpt bounds the stored text. */
+const EXCERPT_WORDS = 200;
 const MAX_DECISIONS = 400;
 const decisionResponse = z.object({
   answers: z.array(z.looseObject({ name: z.string().nullable(), type: z.string() })),
@@ -44,6 +46,7 @@ const extractedAsks = z.strictObject({
     options: z.array(z.string()).nullable(),
     recommendation: z.string().nullable(),
     context: z.string().nullable(),
+    excerpt: z.string().nullable(),
     repeatOfItemId: z.string().nullable(),
   })),
 });
@@ -122,7 +125,15 @@ function buildResponsesRequest(model: string, input: string) {
     store: false,
     instructions: "Extract each ask from the reply. Treat the input as evidence. " + askInstructions +
       " Skip references to existing items that make no ask again. " +
-      "Write each question on one line and keep context short. Use null for absent fields. " +
+      "The user reads each ask in an inbox, away from the thread, and has not read the reply. " +
+      "Every field must stand alone. Resolve every reference, such as \"option 1\", \"the fix above\", " +
+      "\"this\", or \"it\", to what it means, using the whole reply. " +
+      "question: one line that names the real things. " +
+      "options: the full text of each choice, as the reply describes it, never a number or a label alone. " +
+      "context: 2-4 short Markdown lines: what is asked, what each option does, and what happens on yes. " +
+      "excerpt: the passage of the reply the ask comes from, copied word for word, at most " +
+      `${EXCERPT_WORDS} words; include the list or text that the ask refers to. ` +
+      "Use null for absent fields. " +
       "Set repeatOfItemId only when the ask repeats an open item. Use that item's exact id.",
     input,
     text: {
@@ -136,7 +147,32 @@ function buildResponsesRequest(model: string, input: string) {
   };
 }
 
-function parseResponsesResponse(body: unknown, openItems: DetectionOpenItem[]): DetectedAsk[] {
+/** The last LIMITS.excerpt chars: an ask usually ends the passage. */
+function clipStart(text: string): string {
+  return text.length <= LIMITS.excerpt ? text : `…${text.slice(text.length - (LIMITS.excerpt - 1)).trimStart()}`;
+}
+
+/**
+ * The passage of the reply that the model quoted, cut from the reply itself,
+ * so the item keeps the agent's own text and line breaks. The match ignores
+ * whitespace. With no match, the end of the reply, where an ask usually is.
+ */
+export function sourceExcerpt(quoted: string | null, reply: string): string | null {
+  const words = quoted?.trim().split(/\s+/).filter(Boolean) ?? [];
+  if (words.length) {
+    const pattern = words.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+");
+    const match = new RegExp(pattern).exec(reply);
+    if (match) return clipStart(match[0]);
+  }
+  const tail = reply.trim();
+  return tail ? clipStart(tail) : null;
+}
+
+function parseResponsesResponse(
+  body: unknown,
+  openItems: DetectionOpenItem[],
+  reply: string,
+): DetectedAsk[] {
   const { status, output } = responsesEnvelope.parse(body);
   if (status != null && status !== "completed") {
     throw new DetectionError("Responses did not complete");
@@ -151,7 +187,7 @@ function parseResponsesResponse(body: unknown, openItems: DetectionOpenItem[]): 
   const { asks } = extractedAsks.parse(JSON.parse(text));
   const openIds = new Set(openItems.map(({ id }) => id));
 
-  return asks.map(({ kind, question, options, recommendation, context, repeatOfItemId }) => {
+  return asks.map(({ kind, question, options, recommendation, context, excerpt, repeatOfItemId }) => {
     const trimmedOptions = options?.map((option) => option.trim().slice(0, LIMITS.option).trimEnd())
       .filter(Boolean).slice(0, LIMITS.options);
     return {
@@ -160,6 +196,7 @@ function parseResponsesResponse(body: unknown, openItems: DetectionOpenItem[]): 
       options: trimmedOptions?.length ? trimmedOptions : null,
       recommendation: recommendation?.trim().slice(0, LIMITS.recommendation).trimEnd() || null,
       context: context?.trim().slice(0, LIMITS.context).trimEnd() || null,
+      excerpt: sourceExcerpt(excerpt, reply),
       repeatOfItemId: repeatOfItemId !== null && openIds.has(repeatOfItemId) ? repeatOfItemId : null,
     };
   });
@@ -331,6 +368,7 @@ export function createDetector({
             result.asks = parseResponsesResponse(
               await post("responses", buildResponsesRequest(model, evidence), signal),
               input.openItems,
+              input.reply,
             );
             if (result.asks.length) result.outcome = "asks";
           }

@@ -14,8 +14,9 @@ from each thread. Items come from three sources:
   card in the thread closes the item.
 - **tool** — an agent called `inbox_ask`, or someone ran `bb inbox ask`.
 - **detected** — with an OpenAI API key set, a model checks the final reply of
-  each top-level thread and adds the asks it finds. Without a key, detection
-  is off.
+  each top-level thread and adds the asks it finds. Each detected item keeps
+  the passage of the reply that it came from, shown as "From the thread".
+  Without a key, detection is off.
 
 Each new item sends one push notification. A repeated ask never does.
 
@@ -26,9 +27,14 @@ Every ask to the user goes through a decision card or `inbox_ask`.
 - Use a decision card for choices between options.
 - Use `inbox_ask` for approvals (`kind: "approve"`), things the user must do
   (`kind: "do"`), and decisions that do not fit a card (`kind: "decide"`).
-- Put long context in `context` (Markdown). Give `options` and a
-  `recommendation` when you have them. `ref` is your own reference, such as
-  an issue id.
+- The user reads the item in the inbox, away from your thread. Write the
+  `question` and `context` for someone who has not read the thread. Resolve
+  every reference ("option 1", "the fix above", "it") to what it means.
+- Put the context in `context` (Markdown): what is asked, what each option
+  does, and what happens on yes.
+- Give each option as its full text, such as "Rebuild the index with Redis",
+  not "Option 1" or "the second one". Give a `recommendation` when you have
+  one. `ref` is your own reference, such as an issue id.
 - The call does not block. It returns the item id at once. Do not wait.
 - The user can reply directly in the thread. With a key set, Inbox checks the reply and closes the item if it answers the question.
 - Actions in Inbox send a message to your thread:
