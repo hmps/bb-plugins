@@ -499,6 +499,27 @@ describe("detection", () => {
     expect(rows[0]).toMatchObject({ threadId: "thr_a", outcome: "no-ask", passTwoRan: false });
   });
 
+  it("keeps a tool item's question on a detected repeat, so inbox_ask still matches it", async () => {
+    const t = await setup({ settings: key });
+    const input = { kind: "approve", question: "May I merge PR 12?" };
+    await t.harness.behavior.callAgentTool(TOOL_NAME, input, { threadId: "thr_a" });
+    const [tool] = await t.list();
+    t.detect.mockResolvedValueOnce(result({
+      outcome: "asks",
+      passTwoRan: true,
+      asks: [{
+        kind: "approve", question: "May I merge PR 12 (the login fix)?", options: null,
+        recommendation: null, context: null, excerpt: null, repeatOfItemId: tool!.id,
+      }],
+    }));
+    await t.idle("thr_a", "Again: may I merge PR 12?");
+    expect((await t.list())[0]).toMatchObject({ id: tool!.id, question: "May I merge PR 12?", askCount: 2 });
+
+    await t.harness.behavior.callAgentTool(TOOL_NAME, input, { threadId: "thr_a" });
+    expect(await t.list()).toEqual([expect.objectContaining({ id: tool!.id, askCount: 3 })]);
+    expect(t.pings()).toHaveLength(1);
+  });
+
   it("creates a new ask, bumps a repeat, and resolves an item", async () => {
     const t = await setup({ settings: key });
     const ask = {
