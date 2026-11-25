@@ -30,7 +30,8 @@ Every ask to the user goes through a decision card or `inbox_ask`.
   `recommendation` when you have them. `ref` is your own reference, such as
   an issue id.
 - The call does not block. It returns the item id at once. Do not wait.
-- The answer arrives later in your thread as a message:
+- The user can reply directly in the thread. With a key set, Inbox checks the reply and closes the item if it answers the question.
+- Actions in Inbox send a message to your thread:
   - `[Inbox] Answer to inb_… (ref: X): <question>` and the answer,
   - `[Inbox] Done: <question>` (and a note) for a "do" item,
   - `[Inbox] The user dismissed inb_…: <question>. Continue with your best judgement.`
@@ -105,13 +106,16 @@ open | snoozed. Dates are ISO 8601.
 - `detectionModel` (default `gpt-6-luna`).
 - `askThreshold` (0.6) — pass 2 runs only at or above this ask score.
 - `resolveThreshold` (0.8) — an open item closes as resolved at or above this.
+- `answerThreshold` (0.8) — a direct user reply closes an open tool or detected
+  item at or above this score. See `answered-in-thread` in `bb inbox detections`.
 - `pings` (true) — one push per new item and a daily nudge.
 - `nudgeHour` (9) — hour of the daily nudge, server local time.
 
 ## Constraints
 
-- Detection checks only top-level threads (a child thread's final reply goes
-  to an agent) and only replies that are not empty.
+- Turn-end detection checks non-empty final replies in top-level threads.
+- Answer checks run when the user sends a message in a thread with open items.
+  Inbox replies and messages from other agents are skipped.
 - Card items close only through their card (answer, dismiss, or the card
   settling in its thread), never by detection.
 - Never put secrets in an item: the question, context, and answer are stored

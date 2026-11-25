@@ -32,12 +32,14 @@ import {
   DEFAULT_DETECTION_MODEL,
   ITEMS_CHANGED,
   LIMITS,
+  PLUGIN_ID,
   PUSH_METHOD,
   PUSH_PLUGIN_ID,
   TOOL_NAME,
   askInputSchema,
   itemKindSchema,
   rpcContract,
+  type AnswerCheckResult,
   type AskInput,
   type CardAnswer,
   type CliItem,
@@ -60,6 +62,7 @@ const DISCOVERY_MAX_THREADS = 200;
 const DISCOVERY_PAGE = 100;
 const NO_KEY_REASON = "no OpenAI API key set";
 const NUDGE_DATE_KEY = "nudge-date";
+const ANSWER_EVENT_PAGE = 100;
 
 const KIND_LABEL: Record<ItemKind, string> = {
   decide: "Decide",
@@ -187,13 +190,13 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
         type: "string",
         label: "OpenAI API key",
         description:
-          "Used only to detect asks in agents' final replies. Detection is off without it; cards and inbox_ask work either way.",
+          "Checks agents' final replies and user messages that may answer open items. Detection is off without it.",
         secret: true,
       },
       detectionModel: {
         type: "string",
         label: "Detection model",
-        description: "OpenAI model for both detection passes.",
+        description: "OpenAI model for ask detection and answer checks.",
         default: DEFAULT_DETECTION_MODEL,
       },
       askThreshold: {
@@ -208,6 +211,13 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
         type: "number",
         label: "Resolve threshold",
         description: "An open item closes as resolved when its score is at or above this (0-1).",
+        experimental_schema: z.number().min(0).max(1),
+        default: 0.8,
+      },
+      answerThreshold: {
+        type: "number",
+        label: "Answer threshold",
+        description: "An item closes as answered in thread when its score is at or above this (0-1).",
         experimental_schema: z.number().min(0).max(1),
         default: 0.8,
       },
@@ -253,6 +263,7 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
           model,
           askThreshold: values.askThreshold,
           resolveThreshold: values.resolveThreshold,
+          answerThreshold: values.answerThreshold,
         });
         detectorCache = { detector, status: { enabled: true, reason: null, model } };
       } catch (error) {
@@ -498,6 +509,115 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
 
     /** Threads the plugin saw archived or deleted (until unarchived). */
     const archivedThreads = new Set<string>();
+    const answerChecksStartedAt = now();
+    const answerCursors = new Map<string, number>();
+    const answerScans = new Map<string, Promise<void>>();
+
+    function scanForAnswers(thread: ThreadLike, sequence: number): Promise<void> {
+      const { id } = thread;
+      const previous = answerScans.get(id) ?? Promise.resolve();
+      const next = previous
+        .then(() => readAnswerEvents(thread, sequence))
+        .catch((error) => bb.log.warn(`answer check: ${id}: ${errorMessage(error)}`));
+      answerScans.set(id, next);
+      void next.finally(() => {
+        if (answerScans.get(id) === next) answerScans.delete(id);
+      });
+      return next;
+    }
+
+    async function readAnswerEvents(thread: ThreadLike, sequence: number): Promise<void> {
+      const { id } = thread;
+      if (lifetime.signal.aborted || thread.archivedAt || archivedThreads.has(id)) return;
+      const afterSeq = answerCursors.get(id) ?? 0;
+      if (sequence <= afterSeq) return;
+
+      const items = store.threadItems(id).filter((item) => item.source !== "card" && item.status === "open");
+      if (!items.length) {
+        answerCursors.delete(id);
+        return;
+      }
+      const { detector } = await detection();
+      if (!detector) {
+        answerCursors.set(id, sequence);
+        return;
+      }
+      const oldest = Math.max(answerChecksStartedAt, Math.min(...items.map((item) => item.createdAt)));
+      const messages: { text: string; at: number }[] = [];
+      let beforeSeq = sequence + 1;
+      // The notification can cover several new events. Use its sequence as
+      // the upper bound, and stop at the first event older than the items.
+      while (!lifetime.signal.aborted) {
+        const rows = await bb.sdk.threads.events.list({
+          threadId: id,
+          afterSeq: String(afterSeq),
+          beforeSeq: String(beforeSeq),
+          types: ["client/turn/requested"],
+          order: "desc",
+          limit: String(ANSWER_EVENT_PAGE),
+          signal: lifetime.signal,
+        });
+        for (const row of rows) {
+          if (row.createdAt < oldest) break;
+          if (row.type !== "client/turn/requested") continue;
+          const request = row.data;
+          if (request.initiator !== "user" || request.senderThreadId || request.retryOfRequestId ||
+              request.originPluginId === PLUGIN_ID) continue;
+          const text = request.input
+            .filter((part) => part.visibility !== "agent-only")
+            .filter((part) => part.type === "text")
+            .map((part) => part.text).join("\n").trim();
+          if (!text || text.startsWith("[Inbox]") || text.startsWith("[bb message from thread:")) continue;
+          messages.push({ text, at: row.createdAt });
+        }
+        const last = rows.at(-1);
+        if (!last || rows.length < ANSWER_EVENT_PAGE || last.createdAt < oldest) break;
+        beforeSeq = last.seq;
+      }
+      if (archivedThreads.has(id)) return;
+      answerCursors.set(id, sequence);
+
+      for (const { text, at } of messages.reverse()) {
+        if (lifetime.signal.aborted || archivedThreads.has(id)) break;
+        const candidates = items.filter((item) => item.createdAt <= at && store.get(item.id)?.status === "open");
+        if (candidates.length) await checkAnswer(detector, id, text, candidates);
+      }
+    }
+
+    async function checkAnswer(detector: Detector, threadId: string, text: string, items: Item[]): Promise<void> {
+      const at = now();
+      let result: AnswerCheckResult;
+      try {
+        result = await detector.checkAnswer(text, items.map(({ id, question, options, recommendation }) => ({
+          id, question, options, recommendation,
+        })), lifetime.signal);
+      } catch (error) {
+        bb.log.warn(`answer check: ${threadId}: ${errorMessage(error)}`);
+        return;
+      }
+      if (lifetime.signal.aborted || archivedThreads.has(threadId)) return;
+      const resolvedIds: string[] = [];
+      const answered = new Set(result.answeredItemIds);
+      for (const { id } of items) {
+        if (!answered.has(id) || busyItems.has(id) || store.get(id)?.status !== "open") continue;
+        store.close(id, "answered-in-thread", text);
+        resolvedIds.push(id);
+      }
+      if (!resolvedIds.length) return;
+      store.logDetection({
+        threadId,
+        at,
+        outcome: "answered-in-thread",
+        scores: { answered: result.scores },
+        passTwoRan: false,
+        createdIds: [],
+        repeatedIds: [],
+        resolvedIds,
+        durationMs: now() - at,
+        error: null,
+      });
+      publish();
+    }
 
     async function runDetection(thread: ThreadLike, reply: string): Promise<void> {
       const { detector } = await detection();
@@ -727,8 +847,11 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
       await mirrorCard(interaction as InteractionLike, thread);
     });
 
-    bb.events.on("experimental_thread.events", async ({ thread }) => {
-      if (store.liveCards(thread.id).length > 0) await syncCards(thread.id);
+    bb.events.on("experimental_thread.events", async ({ thread, sequence }) => {
+      await Promise.all([
+        store.liveCards(thread.id).length > 0 ? syncCards(thread.id) : undefined,
+        thread.deletedAt === null ? scanForAnswers(thread, sequence) : undefined,
+      ]);
     });
 
     bb.events.on("thread.idle", async ({ thread, lastAssistantText }) => {
@@ -741,6 +864,7 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
 
     const closeThreadItems = ({ thread }: { thread: { id: string } }) => {
       archivedThreads.add(thread.id);
+      answerCursors.delete(thread.id);
       if (store.closeThread(thread.id, "archived").length > 0) publish();
     };
     bb.events.on("thread.archived", closeThreadItems);
