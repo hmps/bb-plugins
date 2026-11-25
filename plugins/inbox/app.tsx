@@ -17,10 +17,11 @@ import {
   useBbNavigate,
   type PluginNavPanelProps,
 } from "@get-bb/plugin-sdk/app";
-import type { CardDecision, Item } from "./contract";
+import type { CardDecision, Item, ItemKind } from "./contract";
 import {
   KIND_LABELS,
   SOURCE_LABELS,
+  SOURCE_PHRASES,
   badgeFor,
   canAcceptRecommendation,
   cardAnswers,
@@ -46,6 +47,15 @@ import {
 } from "./hooks/use-inbox";
 import { Button } from "./components/ui/button";
 import { Icon } from "./components/ui/icon";
+import {
+  ApproveGlyph,
+  CheckGlyph,
+  CircleCheckGlyph,
+  HandGlyph,
+  SplitGlyph,
+  ThumbGlyph,
+  TrayGlyph,
+} from "./components/ui/glyphs";
 import { useIsCompactViewport } from "./components/ui/hooks/use-compact-viewport";
 import { cn } from "./lib/utils";
 
@@ -87,11 +97,39 @@ function useInboxBadge() {
 // ---------------------------------------------------------------------------
 // Small pieces
 
-function KindChip({ item }: { item: Item }) {
+/** Each kind keeps one glyph and one hue, in the list and on the page. */
+const KIND_STYLE: Record<
+  ItemKind,
+  { Glyph: typeof SplitGlyph; hue: string }
+> = {
+  decide: { Glyph: SplitGlyph, hue: "text-timeline-accent" },
+  approve: { Glyph: ApproveGlyph, hue: "text-attention" },
+  do: { Glyph: HandGlyph, hue: "text-warning" },
+};
+
+function KindTag({ kind, large = false }: { kind: ItemKind; large?: boolean }) {
+  const { Glyph, hue } = KIND_STYLE[kind];
   return (
-    <span className="inline-flex shrink-0 items-center rounded bg-muted px-1 py-px text-[10px] font-medium leading-4 text-muted-foreground">
-      {KIND_LABELS[item.kind]}
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center font-medium",
+        large
+          ? "gap-1.5 text-xs text-foreground"
+          : "gap-1 text-[11px] text-muted-foreground",
+      )}
+    >
+      <Glyph className={cn(large ? "size-3.5" : "size-3", hue)} strokeWidth={2.25} />
+      {KIND_LABELS[kind]}
     </span>
+  );
+}
+
+/** Key caps for keyboard hints. */
+function Kbd({ children }: { children: ReactNode }) {
+  return (
+    <kbd className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded border border-border bg-surface-raised px-1 font-sans text-[10px] font-medium text-muted-foreground">
+      {children}
+    </kbd>
   );
 }
 
@@ -137,7 +175,7 @@ function ItemRow({
         <UnreadDot unread={unread} />
         <span className="min-w-0 flex-1 space-y-0.5">
           <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <KindChip item={item} />
+            <KindTag kind={item.kind} />
             {snoozed && item.snoozedUntil !== null && (
               <span className="truncate">
                 until {wakeLabel(item.snoozedUntil, now)}
@@ -215,8 +253,9 @@ function ItemList({ selectedId }: { selectedId: string | null }) {
         <p className="px-2 py-3 text-xs text-muted-foreground">Loading…</p>
       )}
       {loaded && open.length === 0 && (
-        <p className="px-2 py-6 text-center text-[13px] text-muted-foreground">
-          Nothing waits on you.
+        <p className="flex items-center gap-2 px-2 py-2 text-[13px] text-muted-foreground">
+          <CheckGlyph className="size-3.5 text-success" strokeWidth={2.5} />
+          All clear
         </p>
       )}
       {open.length > 0 && (
@@ -277,14 +316,24 @@ function InboxSidebar({ subPath }: PluginNavPanelProps) {
 // ---------------------------------------------------------------------------
 // Page
 
-function DetectionLine() {
+/** Whether final replies are read for asks, as one quiet status line. */
+function DetectionStatus() {
   const { detection } = useInbox();
   if (!detection) return null;
   return (
-    <p className="text-xs text-muted-foreground">
-      {detection.enabled
-        ? `Prose detection on (${detection.model}).`
-        : `Prose detection off: ${detection.reason ?? "not configured"}`}
+    <p className="flex items-start justify-center gap-2 text-xs text-muted-foreground">
+      <span
+        aria-hidden
+        className={cn(
+          "mt-[5px] size-1.5 shrink-0 rounded-full",
+          detection.enabled ? "bg-success" : "bg-muted-foreground/40",
+        )}
+      />
+      <span className="text-balance">
+        {detection.enabled
+          ? `Final replies are scanned for asks (${detection.model}).`
+          : `Final replies are not scanned for asks: ${detection.reason ?? "not configured"}`}
+      </span>
     </p>
   );
 }
@@ -294,11 +343,25 @@ function Flash({ text }: { text: string | null }) {
   return (
     <p
       role="status"
-      className="flex items-center gap-1.5 rounded-md bg-muted px-3 py-2 text-xs text-foreground"
+      className="flex items-center gap-2 rounded-lg bg-surface-recessed px-3 py-2 text-[13px] text-foreground motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1 motion-safe:duration-200"
     >
-      <Icon name="Check" className="size-3.5 text-muted-foreground" aria-hidden />
+      <CheckGlyph className="size-3.5 shrink-0 text-success" strokeWidth={2.5} />
       {text}
     </p>
+  );
+}
+
+/** The tray mark; with `cleared`, a check settles on its corner. */
+function TrayEmblem({ cleared }: { cleared: boolean }) {
+  return (
+    <div className="relative grid size-16 place-items-center rounded-2xl border border-border bg-surface-raised text-muted-foreground">
+      <TrayGlyph className="size-7" strokeWidth={1.5} />
+      {cleared && (
+        <span className="absolute -right-2 -bottom-2 grid size-6 place-items-center rounded-full bg-success text-background ring-4 ring-background motion-safe:animate-in motion-safe:zoom-in-50 motion-safe:fade-in motion-safe:duration-500 motion-safe:ease-out">
+          <CheckGlyph className="size-3.5" strokeWidth={3} />
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -309,61 +372,76 @@ function InboxHome({ flash }: { flash: string | null }) {
   const navigate = useBbNavigate();
   const { open, snoozed } = groupItems(items, now);
   const unread = open.filter(isUnread).length;
+  const nextWake = snoozed[0]?.snoozedUntil ?? null;
+  // A phone has no sidebar: the page shows the list while it has rows.
+  const showList = compact && (open.length > 0 || snoozed.length > 0);
 
   return (
-    <div className="h-full overflow-y-auto p-4 md:p-5">
-      <div className="mx-auto w-full max-w-3xl space-y-4">
+    <div className="flex h-full flex-col overflow-y-auto p-4 md:p-6">
+      <div className="mx-auto w-full max-w-2xl">
         <Flash text={flash} />
-        {compact ? (
-          <ItemList selectedId={null} />
-        ) : (
-          <div className="flex min-h-[40vh] flex-col items-center justify-center gap-2 text-center">
-            <Icon
-              name="Inbox"
-              className="size-6 text-muted-foreground/60"
-              aria-hidden
-            />
-            {!loaded ? (
-              <p className="text-sm text-muted-foreground">Loading…</p>
-            ) : open.length === 0 ? (
-              <>
-                <p className="text-sm font-medium text-foreground">
-                  Nothing waits on you.
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {snoozed.length > 0
-                    ? `${snoozed.length} snoozed.`
-                    : "New asks from your threads show up here."}
-                </p>
-              </>
-            ) : (
-              <>
-                <p className="text-sm font-medium text-foreground">
-                  {open.length} waiting
-                  {unread > 0 ? ` · ${unread} unread` : ""}
-                </p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() =>
-                    navigate.toPluginPanel(PANEL_PATH, {
-                      subPath: open[0]!.id,
-                    })
-                  }
-                >
-                  Open the first
-                </Button>
-                <p className="text-xs text-muted-foreground">
-                  Use j and k to move through the list.
-                </p>
-              </>
-            )}
-          </div>
-        )}
-        <div className={cn(compact ? "pt-2" : "text-center")}>
-          <DetectionLine />
-        </div>
       </div>
+      {showList ? (
+        <div className="mx-auto w-full max-w-2xl flex-1 pt-2">
+          <ItemList selectedId={null} />
+        </div>
+      ) : (
+        <div className="flex flex-1 flex-col items-center justify-center px-2 py-12 text-center">
+          {!loaded ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : open.length === 0 ? (
+            <>
+              <TrayEmblem cleared />
+              <h1 className="mt-7 text-xl font-semibold tracking-[-0.02em] text-foreground">
+                Nothing waits on you.
+              </h1>
+              <p className="mt-2 max-w-sm text-sm leading-relaxed text-balance text-muted-foreground">
+                When a thread needs a decision, an approval, or a task only
+                you can do, it lands here.
+              </p>
+              {snoozed.length > 0 && nextWake !== null && (
+                <p className="mt-4 text-xs text-muted-foreground tabular-nums">
+                  {snoozed.length} snoozed · the next one is back{" "}
+                  {wakeLabel(nextWake, now)}
+                </p>
+              )}
+            </>
+          ) : (
+            <>
+              <TrayEmblem cleared={false} />
+              <h1 className="mt-7 text-xl font-semibold tracking-[-0.02em] text-foreground tabular-nums">
+                {open.length} waiting
+                {unread > 0 && (
+                  <span className="font-normal text-muted-foreground">
+                    {" "}
+                    · {unread} unread
+                  </span>
+                )}
+              </h1>
+              <Button
+                className="mt-5"
+                onClick={() =>
+                  navigate.toPluginPanel(PANEL_PATH, {
+                    subPath: open[0]!.id,
+                  })
+                }
+              >
+                Open the first
+              </Button>
+              <p className="mt-4 flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Kbd>J</Kbd>
+                <Kbd>K</Kbd>
+                move through the list
+              </p>
+            </>
+          )}
+        </div>
+      )}
+      {loaded && (
+        <div className="shrink-0 pt-6 pb-2">
+          <DetectionStatus />
+        </div>
+      )}
     </div>
   );
 }
@@ -384,17 +462,25 @@ type Run = (
   action: () => Promise<Item>,
 ) => Promise<void>;
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+/** A quiet sentence-case label over a group inside the answer panel. */
+function PanelLabel({ children }: { children: ReactNode }) {
   return (
-    <section className="space-y-2">
-      <h2 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        {title}
-      </h2>
+    <p className="px-4 pt-3 pb-1.5 text-xs font-medium text-muted-foreground">
       {children}
-    </section>
+    </p>
   );
 }
 
+function RecommendedTag() {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-success/12 px-2 py-0.5 text-[11px] font-medium text-foreground">
+      <ThumbGlyph className="size-3 text-success" strokeWidth={2.25} />
+      Recommended
+    </span>
+  );
+}
+
+/** One answer. A click sends it at once, so the row reads as a choice. */
 function OptionButton({
   label,
   detail,
@@ -409,41 +495,50 @@ function OptionButton({
   onClick: () => void;
 }) {
   return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        "flex w-full items-start gap-3 rounded-md border px-3 py-2 text-left text-sm transition-colors duration-150",
-        "hover:bg-state-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
-        recommended ? "border-primary/40" : "border-border",
-      )}
-    >
-      <span className="min-w-0 flex-1">
-        <span className="block font-medium text-foreground">{label}</span>
-        {detail && (
-          <span className="mt-0.5 block text-xs text-muted-foreground">
-            {detail}
-          </span>
+    <li>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onClick}
+        className={cn(
+          "group flex w-full items-center gap-3 px-4 py-3 text-left transition-colors duration-150",
+          "hover:bg-state-hover focus-visible:bg-state-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
+          "disabled:cursor-not-allowed disabled:opacity-50",
         )}
-      </span>
-      {recommended && (
-        <span className="shrink-0 text-[11px] font-medium text-primary">
-          Recommended
+      >
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-medium text-foreground break-words">
+            {label}
+          </span>
+          {detail && (
+            <span className="mt-0.5 block text-[13px] leading-snug text-muted-foreground break-words">
+              {detail}
+            </span>
+          )}
         </span>
-      )}
-    </button>
+        {recommended && <RecommendedTag />}
+        <Icon
+          name="ChevronRight"
+          aria-hidden
+          className="size-4 shrink-0 text-muted-foreground/60 transition-transform duration-150 ease-out group-hover:translate-x-0.5 group-hover:text-foreground"
+        />
+      </button>
+    </li>
   );
 }
 
 function Links({ decision }: { decision: CardDecision }) {
   if (decision.links.length === 0) return null;
   return (
-    <ul className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+    <ul className="flex flex-wrap gap-x-4 gap-y-1 px-4 pb-3 text-xs">
       {decision.links.map((link) => (
         <li key={link.href}>
-          <UrlLink href={link.href} className="text-primary hover:underline">
+          <UrlLink
+            href={link.href}
+            className="inline-flex items-center gap-1 text-foreground underline decoration-border underline-offset-[3px] hover:decoration-foreground"
+          >
             {link.label}
+            <Icon name="ArrowUpRight" className="size-3" aria-hidden />
           </UrlLink>
         </li>
       ))}
@@ -457,18 +552,21 @@ function SingleOptions({
   busy,
   run,
   rpc,
+  label,
 }: {
   item: Item;
   busy: boolean;
   run: Run;
   rpc: InboxRpc;
+  label: string;
 }) {
   const decision = item.card?.decisions.length === 1 ? item.card.decisions[0]! : null;
   if (decision) {
     if (decision.options.length === 0) return null;
     return (
-      <Section title="Options">
-        <div className="space-y-1.5">
+      <div className="border-t border-border first:border-t-0">
+        <PanelLabel>{label}</PanelLabel>
+        <ul aria-label="Options" className="pb-1">
           {decision.options.map((option, index) => (
             <OptionButton
               key={index}
@@ -486,32 +584,33 @@ function SingleOptions({
               }
             />
           ))}
-        </div>
+        </ul>
         <Links decision={decision} />
-      </Section>
+      </div>
     );
   }
   if (item.source === "card" || !item.options || item.options.length === 0) {
     return null;
   }
   return (
-    <Section title="Options">
-      <div className="space-y-1.5">
-        {item.options.map((label) => (
+    <div className="border-t border-border first:border-t-0">
+      <PanelLabel>{label}</PanelLabel>
+      <ul aria-label="Options" className="pb-1">
+        {item.options.map((option) => (
           <OptionButton
-            key={label}
-            label={label}
-            recommended={item.recommendation === label}
+            key={option}
+            label={option}
+            recommended={item.recommendation === option}
             disabled={busy}
             onClick={() =>
-              void run(`Answered: ${label}`, () =>
-                rpc.call("items_answer", { id: item.id, text: label }),
+              void run(`Answered: ${option}`, () =>
+                rpc.call("items_answer", { id: item.id, text: option }),
               )
             }
           />
         ))}
-      </div>
-    </Section>
+      </ul>
+    </div>
   );
 }
 
@@ -533,12 +632,13 @@ function MultiDecisionForm({
     decisions.map(() => null),
   );
   const answers = cardAnswers(picks);
+  const answered = picks.filter((pick) => cardAnswers([pick]) !== null).length;
   const setPick = (index: number, pick: DecisionPick) =>
     setPicks((current) => current.map((value, i) => (i === index ? pick : value)));
 
   return (
     <form
-      className="space-y-5"
+      className="border-t border-border first:border-t-0"
       onSubmit={(event) => {
         event.preventDefault();
         if (!answers) return;
@@ -551,79 +651,92 @@ function MultiDecisionForm({
         const pick = picks[index] ?? null;
         const name = `${item.id}-decision-${index}`;
         return (
-          <fieldset key={index} className="space-y-2">
-            <legend className="text-sm font-medium text-foreground">
-              <span className="mr-1.5 text-muted-foreground tabular-nums">
-                {index + 1}.
+          <fieldset
+            key={index}
+            className="space-y-2.5 border-b border-border px-4 py-4"
+          >
+            <legend className="float-left mb-1 flex w-full items-baseline gap-2 text-sm font-semibold text-foreground">
+              <span className="grid size-5 shrink-0 translate-y-px place-items-center rounded-full bg-surface-recessed text-[11px] font-medium text-muted-foreground tabular-nums">
+                {index + 1}
               </span>
-              {decision.question}
+              <span className="min-w-0 break-words">{decision.question}</span>
             </legend>
             {decision.context && (
               <Markdown
                 content={decision.context}
-                className="text-sm text-muted-foreground"
+                className="clear-left max-w-[66ch] pl-7 text-[13px] leading-relaxed text-muted-foreground"
               />
             )}
-            <div className="space-y-1">
-              {decision.options.map((option, optionIndex) => (
-                <label
-                  key={optionIndex}
-                  className={cn(
-                    "flex cursor-pointer items-start gap-2.5 rounded-md border px-3 py-2 text-sm hover:bg-state-hover",
-                    pick?.kind === "option" && pick.option === optionIndex
-                      ? "border-foreground/40 bg-state-active"
-                      : "border-border",
-                  )}
-                >
-                  <input
-                    type="radio"
-                    name={name}
-                    className="mt-1 accent-current"
-                    checked={pick?.kind === "option" && pick.option === optionIndex}
-                    onChange={() =>
-                      setPick(index, { kind: "option", option: optionIndex })
-                    }
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="block font-medium text-foreground">
-                      {option.label}
-                    </span>
-                    {option.does && (
-                      <span className="block text-xs text-muted-foreground">
-                        {option.does}
-                      </span>
+            <div className="clear-left space-y-1.5 pl-7">
+              {decision.options.map((option, optionIndex) => {
+                const checked =
+                  pick?.kind === "option" && pick.option === optionIndex;
+                return (
+                  <label
+                    key={optionIndex}
+                    className={cn(
+                      "flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2.5 text-sm transition-colors duration-150",
+                      "has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-ring",
+                      checked
+                        ? "border-foreground/30 bg-surface-selected"
+                        : "border-border hover:bg-state-hover",
                     )}
-                  </span>
-                  {decision.suggested === optionIndex && (
-                    <span className="shrink-0 text-[11px] font-medium text-primary">
-                      Recommended
+                  >
+                    <input
+                      type="radio"
+                      name={name}
+                      className="mt-[3px] accent-current"
+                      checked={checked}
+                      onChange={() =>
+                        setPick(index, { kind: "option", option: optionIndex })
+                      }
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block font-medium text-foreground">
+                        {option.label}
+                      </span>
+                      {option.does && (
+                        <span className="block text-[13px] leading-snug text-muted-foreground">
+                          {option.does}
+                        </span>
+                      )}
                     </span>
-                  )}
-                </label>
-              ))}
+                    {decision.suggested === optionIndex && <RecommendedTag />}
+                  </label>
+                );
+              })}
+              <input
+                type="text"
+                aria-label={`Own answer for decision ${index + 1}`}
+                placeholder="Or write your own answer"
+                value={pick?.kind === "text" ? pick.text : ""}
+                onChange={(event) =>
+                  setPick(
+                    index,
+                    event.target.value
+                      ? { kind: "text", text: event.target.value }
+                      : null,
+                  )
+                }
+                className="h-9 w-full rounded-lg border border-dashed border-border bg-transparent px-3 text-sm placeholder:text-muted-foreground focus-visible:border-solid focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
             </div>
-            <input
-              type="text"
-              aria-label={`Own answer for decision ${index + 1}`}
-              placeholder="Or write your own answer"
-              value={pick?.kind === "text" ? pick.text : ""}
-              onChange={(event) =>
-                setPick(
-                  index,
-                  event.target.value
-                    ? { kind: "text", text: event.target.value }
-                    : null,
-                )
-              }
-              className="h-8 w-full rounded-md border border-input bg-transparent px-3 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            />
-            <Links decision={decision} />
+            {decision.links.length > 0 && (
+              <div className="-mx-4 -mb-3 pl-7">
+                <Links decision={decision} />
+              </div>
+            )}
           </fieldset>
         );
       })}
-      <Button type="submit" size="sm" disabled={busy || !answers}>
-        Submit answers
-      </Button>
+      <div className="flex items-center justify-between gap-3 bg-surface-raised px-4 py-3">
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {answered} of {decisions.length} answered
+        </span>
+        <Button type="submit" size="sm" disabled={busy || !answers}>
+          Submit answers
+        </Button>
+      </div>
     </form>
   );
 }
@@ -633,11 +746,13 @@ function ReplyBox({
   busy,
   run,
   rpc,
+  label,
 }: {
   item: Item;
   busy: boolean;
   run: Run;
   rpc: InboxRpc;
+  label: string;
 }) {
   const [text, setText] = useState("");
   const isCard = item.source === "card";
@@ -654,11 +769,12 @@ function ReplyBox({
     );
   };
   return (
-    <Section title={isCard ? "Own answer" : "Reply"}>
+    <div className="border-t border-border transition-colors duration-150 first:border-t-0 focus-within:bg-surface-raised focus-within:ring-1 focus-within:ring-ring focus-within:ring-inset">
+      <PanelLabel>{label}</PanelLabel>
       <textarea
         aria-label={isCard ? "Own answer" : "Reply"}
         value={text}
-        rows={3}
+        rows={2}
         placeholder={isCard ? "Write your own answer" : "Write a reply to the thread"}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => {
@@ -667,17 +783,25 @@ function ReplyBox({
             send();
           }
         }}
-        className="block w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        className="block field-sizing-content max-h-64 min-h-14 w-full resize-none bg-transparent px-4 py-1 text-sm leading-relaxed placeholder:text-muted-foreground/80 focus-visible:outline-none"
       />
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] text-muted-foreground">
-          Ctrl/⌘ + Enter sends
+      <div className="flex items-center justify-end gap-3 px-4 pt-1 pb-3">
+        <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+          <Kbd>Ctrl</Kbd>/<Kbd>⌘</Kbd>
+          <span aria-hidden>+</span>
+          <Kbd>Enter</Kbd>
+          <span className="ml-0.5">sends</span>
         </span>
-        <Button size="sm" disabled={busy || !text.trim()} onClick={send}>
+        <Button
+          size="sm"
+          variant={text.trim() ? "default" : "outline"}
+          disabled={busy || !text.trim()}
+          onClick={send}
+        >
           Send
         </Button>
       </div>
-    </Section>
+    </div>
   );
 }
 
@@ -730,7 +854,7 @@ function SnoozeMenu({
         <div
           role="menu"
           aria-label="Snooze until"
-          className="absolute bottom-full left-0 z-10 mb-1 w-64 space-y-0.5 rounded-lg border border-border bg-popover p-1 text-sm text-popover-foreground shadow-lg"
+          className="absolute top-full right-0 z-10 mt-1 w-64 space-y-0.5 rounded-lg border border-border bg-popover p-1 text-sm text-popover-foreground shadow-lg"
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.preventDefault();
@@ -867,7 +991,7 @@ function ItemView({
   if (!item) {
     return (
       <div className="h-full overflow-y-auto p-4 md:p-5">
-        <div className="mx-auto w-full max-w-3xl space-y-3 py-10 text-center">
+        <div className="mx-auto w-full max-w-2xl space-y-3 py-10 text-center">
           <p className="text-sm text-muted-foreground">
             {missing ? "This item is gone." : "Loading…"}
           </p>
@@ -897,176 +1021,233 @@ function ItemView({
         : undefined,
     );
 
+  const recommendationRow = recommendation && (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-3 bg-surface-raised px-4 py-3.5">
+      <div className="min-w-[14rem] flex-1">
+        <p className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+          <ThumbGlyph className="size-3.5 text-success" strokeWidth={2.25} />
+          Recommended
+        </p>
+        <p className="mt-1 text-sm leading-relaxed text-foreground break-words">
+          {recommendation}
+        </p>
+      </div>
+      {canAccept && (
+        <Button
+          disabled={busy}
+          onClick={() =>
+            void run("Accepted the recommendation", () =>
+              rpc.call(
+                "items_answer",
+                // Send the text on screen: a repeated ask can change the
+                // recommendation before this page refreshes. A card's
+                // suggested options do not change.
+                item.source === "card" || !item.recommendation
+                  ? { id: item.id, acceptRecommendation: true }
+                  : { id: item.id, text: item.recommendation },
+              ),
+            )
+          }
+        >
+          <CheckGlyph className="size-4" strokeWidth={2.5} />
+          Accept recommendation
+        </Button>
+      )}
+    </div>
+  );
+  const doneRow = item.kind === "do" && (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-3 border-t border-border px-4 py-3.5 first:border-t-0">
+      <p className="min-w-[14rem] flex-1 text-sm text-foreground">
+        Did it yourself? Mark it done.
+      </p>
+      <Button
+        variant={recommendation ? "outline" : "default"}
+        disabled={busy}
+        onClick={() =>
+          void run("Marked done", () => rpc.call("items_done", { id: item.id }))
+        }
+      >
+        <Icon name="Check" aria-hidden />
+        Done
+      </Button>
+    </div>
+  );
+  const hasOptions =
+    item.source === "card"
+      ? decisions.length === 1 && decisions[0]!.options.length > 0
+      : (item.options?.length ?? 0) > 0;
+
   return (
-    <div className="h-full overflow-y-auto p-4 md:p-5">
-      <article className="mx-auto w-full max-w-3xl space-y-5" aria-busy={busy}>
-        <header className="space-y-2">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-            <KindChip item={item} />
-            <span>{SOURCE_LABELS[item.source]}</span>
+    <div className="h-full overflow-y-auto px-4 py-5 md:px-8 md:py-8">
+      <article className="mx-auto w-full max-w-2xl" aria-busy={busy}>
+        <header>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <KindTag kind={item.kind} large />
+            <button
+              type="button"
+              onClick={openThread}
+              title="Open thread"
+              aria-label={`Open thread: ${threadLine(item)}`}
+              className="group -my-1 inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-foreground transition-colors duration-150 hover:bg-state-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              <span className="min-w-0 truncate">{threadLine(item)}</span>
+              <Icon
+                name="ArrowUpRight"
+                className="size-3 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground"
+                aria-hidden
+              />
+            </button>
+            <span className="flex-1" />
+            {!closed && (
+              <div className="-my-1 -mr-2 flex items-center">
+                {snoozed ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() =>
+                      void run("Back in the inbox", () =>
+                        rpc.call("items_unsnooze", { id: item.id }),
+                      )
+                    }
+                  >
+                    Unsnooze
+                  </Button>
+                ) : (
+                  <SnoozeMenu item={item} busy={busy} run={run} rpc={rpc} />
+                )}
+                {item.parentThreadId && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() =>
+                      void run("Handed to the parent thread", () =>
+                        rpc.call("items_hand_to_parent", { id: item.id }),
+                      )
+                    }
+                  >
+                    Hand to parent
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  className="text-muted-foreground"
+                  onClick={() =>
+                    void run("Dismissed", () =>
+                      rpc.call("items_dismiss", { id: item.id }),
+                    )
+                  }
+                >
+                  Dismiss
+                </Button>
+              </div>
+            )}
+          </div>
+          <h1 className="mt-4 text-[22px] leading-[1.3] font-semibold tracking-[-0.02em] text-balance text-foreground break-words">
+            {item.question}
+          </h1>
+          <p className="mt-2 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+            <span>{SOURCE_PHRASES[item.source]}</span>
             <span aria-hidden>·</span>
-            <span title={new Date(item.lastAskedAt).toLocaleString()}>
+            <time
+              dateTime={new Date(item.lastAskedAt).toISOString()}
+              title={new Date(item.lastAskedAt).toLocaleString()}
+              className="tabular-nums"
+            >
               {relativeAge(item.lastAskedAt, now)} ago
-            </span>
+            </time>
             {item.askCount > 1 && (
               <>
                 <span aria-hidden>·</span>
-                <span>asked {item.askCount} times</span>
+                <span className="tabular-nums">asked {item.askCount} times</span>
               </>
             )}
             {snoozed && item.snoozedUntil !== null && (
               <>
                 <span aria-hidden>·</span>
-                <span>snoozed until {wakeLabel(item.snoozedUntil, now)}</span>
+                <span className="inline-flex items-center gap-1">
+                  <Icon name="Clock" className="size-3" aria-hidden />
+                  snoozed until {wakeLabel(item.snoozedUntil, now)}
+                </span>
               </>
             )}
-          </div>
-          <h1 className="text-lg leading-snug font-semibold text-foreground break-words">
-            {item.question}
-          </h1>
-          <div className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-            <span className="min-w-0 truncate">{threadLine(item)}</span>
-            <button
-              type="button"
-              onClick={openThread}
-              className="inline-flex items-center gap-1 text-primary hover:underline"
-            >
-              Open thread
-              <Icon name="ArrowUpRight" className="size-3" aria-hidden />
-            </button>
-          </div>
+          </p>
         </header>
 
         {closed && (
-          <p className="rounded-md bg-muted px-3 py-2 text-sm text-foreground">
-            {CLOSE_LABELS[item.closeReason ?? "closed"] ?? "Closed"}
-            {item.answer ? `: ${item.answer}` : "."}
+          <p className="mt-6 flex items-start gap-2 rounded-lg bg-surface-recessed px-3.5 py-3 text-sm text-foreground">
+            <CircleCheckGlyph className="mt-px size-4 shrink-0 text-success" />
+            <span className="min-w-0 break-words">
+              {CLOSE_LABELS[item.closeReason ?? "closed"] ?? "Closed"}
+              {item.answer ? `: ${item.answer}` : "."}
+            </span>
           </p>
         )}
 
         {item.context && !multi && (
-          <Markdown content={item.context} className="text-sm" />
+          <Markdown
+            content={item.context}
+            className="mt-6 max-w-[66ch] text-sm leading-relaxed text-foreground/90"
+          />
         )}
 
-        {recommendation && (
-          <div className="flex flex-wrap items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2.5">
-            <div className="min-w-0 flex-1">
-              <p className="text-[11px] font-medium uppercase tracking-wide text-primary">
-                Recommended
-              </p>
-              <p className="text-sm text-foreground break-words">
-                {recommendation}
-              </p>
-            </div>
-            {canAccept && (
-              <Button
-                size="sm"
-                disabled={busy}
-                onClick={() =>
-                  void run("Accepted the recommendation", () =>
-                    rpc.call(
-                      "items_answer",
-                      // Send the text on screen: a repeated ask can change the
-                      // recommendation before this page refreshes. A card's
-                      // suggested options do not change.
-                      item.source === "card" || !item.recommendation
-                        ? { id: item.id, acceptRecommendation: true }
-                        : { id: item.id, text: item.recommendation },
-                    ),
-                  )
-                }
+        {closed
+          ? recommendation && (
+              <div className="mt-6 overflow-hidden rounded-xl border border-border">
+                {recommendationRow}
+              </div>
+            )
+          : (
+              <section
+                aria-label="Answer"
+                className="mt-7 overflow-hidden rounded-xl border border-border"
               >
-                Accept recommendation
-              </Button>
+                {recommendationRow}
+                {doneRow}
+                {multi ? (
+                  <MultiDecisionForm
+                    key={item.id}
+                    item={item}
+                    decisions={decisions}
+                    busy={busy}
+                    run={run}
+                    rpc={rpc}
+                  />
+                ) : (
+                  <>
+                    <SingleOptions
+                      item={item}
+                      busy={busy}
+                      run={run}
+                      rpc={rpc}
+                      label={recommendation ? "Or pick an answer" : "Pick an answer"}
+                    />
+                    <ReplyBox
+                      key={item.id}
+                      item={item}
+                      busy={busy}
+                      run={run}
+                      rpc={rpc}
+                      label={
+                        hasOptions || recommendation
+                          ? "Or answer in your own words"
+                          : item.source === "card"
+                            ? "Your answer"
+                            : "Reply to the thread"
+                      }
+                    />
+                  </>
+                )}
+              </section>
             )}
-          </div>
-        )}
-
-        {!closed &&
-          (multi ? (
-            <MultiDecisionForm
-              key={item.id}
-              item={item}
-              decisions={decisions}
-              busy={busy}
-              run={run}
-              rpc={rpc}
-            />
-          ) : (
-            <>
-              <SingleOptions item={item} busy={busy} run={run} rpc={rpc} />
-              <ReplyBox key={item.id} item={item} busy={busy} run={run} rpc={rpc} />
-            </>
-          ))}
 
         {error && (
-          <p role="alert" className="text-sm text-destructive">
+          <p role="alert" className="mt-3 text-sm text-destructive">
             {error}
           </p>
-        )}
-
-        {!closed && (
-          <footer className="flex flex-wrap items-center gap-1 border-t border-border pt-3">
-            {item.kind === "do" && (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={busy}
-                onClick={() =>
-                  void run("Marked done", () =>
-                    rpc.call("items_done", { id: item.id }),
-                  )
-                }
-              >
-                <Icon name="Check" aria-hidden />
-                Done
-              </Button>
-            )}
-            {snoozed ? (
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={busy}
-                onClick={() =>
-                  void run("Back in the inbox", () =>
-                    rpc.call("items_unsnooze", { id: item.id }),
-                  )
-                }
-              >
-                Unsnooze
-              </Button>
-            ) : (
-              <SnoozeMenu item={item} busy={busy} run={run} rpc={rpc} />
-            )}
-            {item.parentThreadId && (
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={busy}
-                onClick={() =>
-                  void run("Handed to the parent thread", () =>
-                    rpc.call("items_hand_to_parent", { id: item.id }),
-                  )
-                }
-              >
-                Hand to parent
-              </Button>
-            )}
-            <span className="flex-1" />
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={busy}
-              className="text-muted-foreground"
-              onClick={() =>
-                void run("Dismissed", () =>
-                  rpc.call("items_dismiss", { id: item.id }),
-                )
-              }
-            >
-              Dismiss
-            </Button>
-          </footer>
         )}
       </article>
     </div>
@@ -1119,7 +1300,7 @@ function InboxPage({ subPath }: PluginNavPanelProps) {
   return (
     <div className="flex h-full flex-col">
       {flash && (
-        <div className="mx-auto w-full max-w-3xl px-4 pt-4 md:px-5">
+        <div className="mx-auto w-full max-w-2xl px-4 pt-4 md:px-0 md:pt-6">
           <Flash text={flash} />
         </div>
       )}
@@ -1134,23 +1315,7 @@ function InboxPage({ subPath }: PluginNavPanelProps) {
 const TRAY_ICON = "inbox/tray";
 
 function TrayIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden="true"
-      data-inbox-icon="tray"
-    >
-      <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
-      <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
-    </svg>
-  );
+  return <TrayGlyph className={className} />;
 }
 
 export default definePluginApp((app) => {
