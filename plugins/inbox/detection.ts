@@ -183,20 +183,20 @@ function clipDetail(text: string): string {
  * (`{ "error": { "type", "code", "message" } }`). Any other body gives "",
  * so a plain-text body is never reflected.
  */
-async function openAiErrorDetail(response: Response): Promise<string> {
+async function openAiErrorDetail(response: Response, redact: (text: string) => string): Promise<string> {
   try {
     const parsed = openAiErrorBody.safeParse(await response.json());
     if (!parsed.success) return "";
     const { type, code, message } = parsed.data.error;
     const label = [type, code != null && code !== type ? String(code) : null].filter(Boolean).join("/");
-    return clipDetail([label, message].filter(Boolean).join(": "));
+    return clipDetail(redact([label, message].filter(Boolean).join(": ")));
   } catch {
     return "";
   }
 }
 
 /** The name, message and system code of a fetch failure and its cause. */
-function requestFailureCause(error: unknown): string {
+function requestFailureCause(error: unknown, redact: (text: string) => string): string {
   const describe = (value: unknown): string => {
     if (!(value instanceof Error)) return "";
     const code = (value as { code?: unknown }).code;
@@ -205,7 +205,7 @@ function requestFailureCause(error: unknown): string {
   };
   const outer = describe(error);
   const inner = error instanceof Error ? describe(error.cause) : "";
-  return clipDetail([outer, inner].filter(Boolean).join(" <- "));
+  return clipDetail(redact([outer, inner].filter(Boolean).join(" <- ")));
 }
 
 export function createDetector({
@@ -220,7 +220,7 @@ export function createDetector({
   const key = apiKey.trim();
   if (!key) throw new Error("OpenAI API key is empty");
   const root = baseUrl.replace(/\/+$/, "");
-  /** Error text is logged and shown in the CLI; never let the key through. */
+  /** Error text is logged and shown in the CLI; redact the key before any clipping. */
   const scrub = (text: string) => text.split(key).join("***");
 
   async function post(endpoint: "decisions" | "responses", body: object, caller?: AbortSignal) {
@@ -241,8 +241,8 @@ export function createDetector({
           signal,
         });
         if (!response.ok) {
-          const detail = await openAiErrorDetail(response);
-          throw new DetectionError(scrub(`${endpoint} HTTP ${response.status}${detail ? `: ${detail}` : ""}`));
+          const detail = await openAiErrorDetail(response, scrub);
+          throw new DetectionError(`${endpoint} HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
         }
         try {
           return await response.json();
@@ -256,8 +256,8 @@ export function createDetector({
         throw new DetectionError(timeout.aborted ? `${endpoint} timed out` : `${endpoint} cancelled`);
       }
       if (error instanceof DetectionError) throw error;
-      const cause = requestFailureCause(error);
-      throw new DetectionError(scrub(`${endpoint} request failed${cause ? `: ${cause}` : ""}`));
+      const cause = requestFailureCause(error, scrub);
+      throw new DetectionError(`${endpoint} request failed${cause ? `: ${cause}` : ""}`);
     } finally {
       signal.removeEventListener("abort", onAbort);
     }

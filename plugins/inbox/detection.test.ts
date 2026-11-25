@@ -226,6 +226,17 @@ describe("inbox detection", () => {
     expect(result.error).not.toContain("questions");
   });
 
+  it("redacts the key before it clips a long OpenAI error message", async () => {
+    const { detect, fetch, input } = setup("Which region should we use?");
+    fetch.mockResolvedValueOnce(Response.json({
+      error: { type: "invalid_request_error", message: `${"x".repeat(270)} ${apiKey}` },
+    }, { status: 401 }));
+
+    const result = await detect(input);
+    expect(result.error).not.toContain("test-sec");
+    expect(result.error).toContain("***");
+  });
+
   it("reports the cause of a decisions request that fails before a response", async () => {
     const { detect, fetch, input } = setup("Which region should we use?");
     const cause = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
