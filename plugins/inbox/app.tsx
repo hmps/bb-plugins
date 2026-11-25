@@ -836,8 +836,13 @@ function ItemView({
     const openIds = groupItems(items, Date.now()).open.map((other) => other.id);
     try {
       const updated = await action();
+      // The card can settle in its thread before this answer reaches it.
       const text =
-        typeof confirmation === "function" ? confirmation(updated) : confirmation;
+        updated.closeReason === "card-settled"
+          ? "The card was already settled in its thread"
+          : typeof confirmation === "function"
+            ? confirmation(updated)
+            : confirmation;
       const leaves = updated.status !== "open";
       upsertItem(updated);
       // Keep showing the closed item until the next one opens.
