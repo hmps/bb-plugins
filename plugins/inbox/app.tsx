@@ -476,6 +476,28 @@ function PanelLabel({ children }: { children: ReactNode }) {
   );
 }
 
+/** The passage of the agent message an ask came from, collapsed by default. */
+function SourceExcerpt({ text }: { text: string }) {
+  return (
+    <details className="group mt-5 max-w-[66ch]">
+      <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded-sm text-xs font-medium text-muted-foreground transition-colors duration-150 select-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none [&::-webkit-details-marker]:hidden">
+        <Icon
+          name="ChevronRight"
+          className="size-3 transition-transform duration-150 group-open:rotate-90"
+          aria-hidden
+        />
+        From the thread
+      </summary>
+      <blockquote className="mt-2 border-l-2 border-border pl-3.5">
+        <Markdown
+          content={text}
+          className="text-[13px] leading-relaxed text-muted-foreground"
+        />
+      </blockquote>
+    </details>
+  );
+}
+
 function RecommendedTag() {
   return (
     <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-success/12 px-2 py-0.5 text-[11px] font-medium text-foreground">
@@ -1209,6 +1231,8 @@ function ItemView({
             className="mt-6 max-w-[66ch] text-sm leading-relaxed text-foreground/90"
           />
         )}
+
+        {item.excerpt && <SourceExcerpt text={item.excerpt} />}
 
         {closed
           ? recommendation && (
