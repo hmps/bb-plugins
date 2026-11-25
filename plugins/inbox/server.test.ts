@@ -200,11 +200,74 @@ describe("card mirror", () => {
     });
     t.harness.sdk.stub("threads.interactions.get", async () => card({ status: "interrupted" }));
 
-    const closed = (await t.harness.behavior.callRpc("items_answer", {
-      id: item!.id,
-      answers: [{ option: 0 }],
-    })) as Item;
+    await expect(
+      t.harness.behavior.callRpc("items_answer", { id: item!.id, answers: [{ option: 0 }] }),
+    ).rejects.toThrow(/already settled/);
+    const closed = (await t.harness.behavior.callRpc("items_get", { id: item!.id })) as Item;
     expect(closed).toMatchObject({ status: "closed", closeReason: "card-settled" });
+  });
+
+  it("keeps the item open when the cancel fails and the card still waits", async () => {
+    const t = await setup();
+    await t.harness.behavior.emitThreadEvent("interaction.pending", {
+      thread: t.thread("thr_a"),
+      interaction: card() as never,
+    });
+    const [item] = await t.list();
+    t.harness.sdk.stub("threads.interactions.cancel", async () => {
+      throw new Error("fetch failed");
+    });
+    await expect(t.harness.behavior.callRpc("items_dismiss", { id: item!.id })).rejects.toThrow();
+    expect(await t.list()).toHaveLength(1);
+  });
+});
+
+describe("races and archived threads", () => {
+  it("sends one answer when two clients answer at once", async () => {
+    const t = await setup();
+    await t.harness.behavior.callAgentTool(TOOL_NAME, { kind: "decide", question: "Ship?" }, { threadId: "thr_a" });
+    const [item] = await t.list();
+    let release!: () => void;
+    t.harness.sdk.stub("threads.send", () => new Promise((resolve) => (release = () => resolve({}))));
+    const first = t.harness.behavior.callRpc("items_answer", { id: item!.id, text: "Yes" });
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    await expect(
+      t.harness.behavior.callRpc("items_answer", { id: item!.id, text: "No" }),
+    ).rejects.toThrow(/being handled/);
+    release();
+    expect(await first).toMatchObject({ status: "closed", answer: "Yes" });
+    expect(t.calls("threads.send")).toHaveLength(1);
+  });
+
+  it("refuses bb inbox ask for an archived thread", async () => {
+    const t = await setup();
+    t.harness.sdk.stub("threads.get", async () => ({ ...t.thread("thr_a"), archivedAt: T0 }));
+    const run = t.harness.behavior
+      .runCli(["ask", "--kind", "do", "--question", "Late"], {
+        threadId: "thr_a",
+        signal: new AbortController().signal,
+      })
+      .then((out) => out.exitCode, () => 1);
+    expect(await run).not.toBe(0);
+    expect(await t.list()).toHaveLength(0);
+  });
+
+  it("adds no detected item when the thread was archived during detection", async () => {
+    const t = await setup({ settings: { openaiApiKey: "sk-test" } });
+    t.detect.mockImplementationOnce(async () => {
+      t.harness.sdk.stub("threads.get", async () => ({ ...t.thread("thr_a"), archivedAt: T0 }));
+      return result({
+        outcome: "asks",
+        passTwoRan: true,
+        asks: [
+          { kind: "approve", question: "Merge?", options: null, recommendation: null, context: null, repeatOfItemId: null },
+        ],
+      });
+    });
+    await t.idle("thr_a", "May I merge?");
+    expect(t.detect).toHaveBeenCalledTimes(1);
+    expect(await t.list()).toHaveLength(0);
+    expect(t.pings()).toHaveLength(0);
   });
 });
 

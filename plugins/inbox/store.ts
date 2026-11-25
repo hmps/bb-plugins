@@ -212,7 +212,12 @@ export interface Counts {
 
 export type Store = ReturnType<typeof createStore>;
 
-export function createStore(db: Db, now: () => number = Date.now) {
+export function createStore(
+  db: Db,
+  now: () => number = Date.now,
+  /** Called when a read wakes snoozed items, so the caller can publish. */
+  onWake: () => void = () => {},
+) {
   initStore(db);
 
   const one = (sql: string, ...params: unknown[]): Item | null => {
@@ -228,13 +233,15 @@ export function createStore(db: Db, now: () => number = Date.now) {
    */
   function wakeSnoozed(): number {
     const at = now();
-    return db
+    const woken = db
       .prepare(
         `UPDATE items
             SET status = 'open', snoozed_until = NULL, read_at = NULL, updated_at = ?
           WHERE status = 'snoozed' AND snoozed_until <= ?`,
       )
       .run(at, at).changes;
+    if (woken > 0) onWake();
+    return woken;
   }
 
   function get(id: string): Item | null {

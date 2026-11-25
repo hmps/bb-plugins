@@ -89,6 +89,7 @@ type ThreadLike = {
   title: string | null;
   titleFallback?: string | null;
   parentThreadId: string | null;
+  archivedAt?: number | null;
 };
 
 /** Item → the stable CLI JSON shape (cliItemSchema). */
@@ -128,16 +129,6 @@ function errorMessage(error: unknown): string {
   // A bare "fetch failed" hides the real reason in `cause`.
   const cause = error.cause instanceof Error ? `: ${error.cause.message}` : "";
   return error.message + cause;
-}
-
-/** bb.sdk calls can fail once with a bare "fetch failed"; retry those once. */
-async function retryOnce<T>(call: () => Promise<T>): Promise<T> {
-  try {
-    return await call();
-  } catch (error) {
-    if (!(error instanceof TypeError && error.message === "fetch failed")) throw error;
-    return call();
-  }
 }
 
 function refuse(code: "not_found" | "conflict" | "invalid", message: string): never {
@@ -235,7 +226,7 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
       },
     });
 
-    const store = createStore(bb.storage.database(), now);
+    const store = createStore(bb.storage.database(), now, () => publish());
     const lifetime = new AbortController();
     bb.onDispose(() => lifetime.abort());
 
@@ -358,13 +349,13 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
     }
 
     async function sendToThread(threadId: string, text: string): Promise<void> {
-      await retryOnce(() =>
-        bb.sdk.threads.send({
-          threadId,
-          mode: "auto",
-          input: [{ type: "text", text, mentions: [] }],
-        }),
-      );
+      // No retry: a lost response after delivery would send the text twice.
+      // The item stays open on failure, so the user can try again.
+      await bb.sdk.threads.send({
+        threadId,
+        mode: "auto",
+        input: [{ type: "text", text, mentions: [] }],
+      });
     }
 
     function liveItem(id: string): Item {
@@ -565,7 +556,12 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
             repeatedIds.push(target.id);
             continue;
           }
-          snapshot ??= await snapshotOf(thread);
+          if (snapshot === null) {
+            // The thread can be archived while detection runs.
+            const fresh = await bb.sdk.threads.get({ threadId: thread.id });
+            if (fresh.archivedAt) break;
+            snapshot = await snapshotOf(fresh);
+          }
           const item = await createItem({
             ...snapshot,
             kind: itemKindSchema.catch("decide").parse(found.kind),
@@ -603,7 +599,7 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
     // -----------------------------------------------------------------------
     // Actions (shared by RPC and CLI)
 
-    async function answerItem(input: {
+    async function answerItemUnlocked(input: {
       id: string;
       answers?: CardAnswer[];
       text?: string;
@@ -625,9 +621,12 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
             value: response,
           });
         } catch (error) {
-          // The card may have settled in its thread meanwhile.
+          // The card may have settled in its thread meanwhile. Say so, so the
+          // page does not confirm an answer the card did not take.
           const settled = await refreshCard(item);
-          if (settled) return settled;
+          if (settled) {
+            refuse("conflict", `the card of ${item.id} was already settled in its thread`);
+          }
           throw error;
         }
         return closeItem(item.id, "answered", describeCardResponse(item.card, response));
@@ -651,7 +650,7 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
       return closeItem(item.id, "answered", answer);
     }
 
-    async function doneItem(id: string, note: string | undefined): Promise<Item> {
+    async function doneItemUnlocked(id: string, note: string | undefined): Promise<Item> {
       const item = liveItem(id);
       if (item.kind !== "do") refuse("invalid", `${id} is not a "do" item`);
       const cleanNote = note?.trim() || undefined;
@@ -659,7 +658,7 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
       return closeItem(item.id, "done", cleanNote ?? null);
     }
 
-    async function dismissItem(id: string): Promise<Item> {
+    async function dismissItemUnlocked(id: string): Promise<Item> {
       const item = liveItem(id);
       if (item.source === "card" && item.card) {
         try {
@@ -668,7 +667,10 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
             interactionId: item.card.interactionId,
           });
         } catch (error) {
-          bb.log.debug(`card ${item.card.interactionId}: cancel failed: ${errorMessage(error)}`);
+          // Close only when the card no longer waits; else keep the item open.
+          const settled = await refreshCard(item);
+          if (settled) return settled;
+          throw error;
         }
       } else if (item.source === "tool") {
         await sendToThread(item.threadId, dismissMessage(item));
@@ -676,7 +678,7 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
       return closeItem(item.id, "dismissed");
     }
 
-    async function handToParent(id: string, note: string | undefined): Promise<Item> {
+    async function handToParentUnlocked(id: string, note: string | undefined): Promise<Item> {
       const item = liveItem(id);
       let parent: string | null = null;
       try {
@@ -690,6 +692,23 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
       await sendToThread(parent, handMessage(item, cleanNote));
       return closeItem(item.id, "handed", cleanNote ?? null);
     }
+
+    // One action at a time per item: two clients that answer at once must
+    // not both send a message to the thread.
+    const busyItems = new Set<string>();
+    async function exclusive<T>(id: string, action: () => Promise<T>): Promise<T> {
+      if (busyItems.has(id)) refuse("conflict", `${id} is being handled; try again`);
+      busyItems.add(id);
+      try {
+        return await action();
+      } finally {
+        busyItems.delete(id);
+      }
+    }
+    const answerItem = (input: Parameters<typeof answerItemUnlocked>[0]) => exclusive(input.id, () => answerItemUnlocked(input));
+    const doneItem = (id: string, note: string | undefined) => exclusive(id, () => doneItemUnlocked(id, note));
+    const dismissItem = (id: string) => exclusive(id, () => dismissItemUnlocked(id));
+    const handToParent = (id: string, note: string | undefined) => exclusive(id, () => handToParentUnlocked(id, note));
 
     function closeById(id: string, reason: string | undefined): Item {
       liveItem(id);
@@ -728,7 +747,7 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
     bb.background.service("startup", {
       async start(signal) {
         try {
-          if (store.wakeSnoozed() > 0) publish();
+          store.wakeSnoozed();
           await syncCards();
           await discoverCards(signal);
         } catch (error) {
@@ -742,7 +761,7 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
     });
 
     bb.background.schedule("sweep", "*/5 * * * *", async () => {
-      if (store.wakeSnoozed() > 0) publish();
+      store.wakeSnoozed();
       await syncCards();
     });
 
@@ -933,7 +952,13 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
               }
               let snapshot: ThreadSnapshot;
               try {
-                snapshot = await snapshotOf(await bb.sdk.threads.get({ threadId }));
+                const thread = await bb.sdk.threads.get({ threadId });
+                if (thread.archivedAt) {
+                  throw new PluginCliError(`thread ${threadId} is archived`, {
+                    code: "thread_archived",
+                  });
+                }
+                snapshot = await snapshotOf(thread);
               } catch (error) {
                 if (error instanceof experimental_BbHttpError && error.status === 404) {
                   throw new PluginCliError(`thread ${threadId} not found`, {

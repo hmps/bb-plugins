@@ -959,10 +959,15 @@ function ItemView({
                 disabled={busy}
                 onClick={() =>
                   void run("Accepted the recommendation", () =>
-                    rpc.call("items_answer", {
-                      id: item.id,
-                      acceptRecommendation: true,
-                    }),
+                    rpc.call(
+                      "items_answer",
+                      // Send the text on screen: a repeated ask can change the
+                      // recommendation before this page refreshes. A card's
+                      // suggested options do not change.
+                      item.source === "card" || !item.recommendation
+                        ? { id: item.id, acceptRecommendation: true }
+                        : { id: item.id, text: item.recommendation },
+                    ),
                   )
                 }
               >
