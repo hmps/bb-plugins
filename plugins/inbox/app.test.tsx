@@ -148,15 +148,20 @@ describe("sidebar", () => {
 
   it("shows the empty state", async () => {
     renderSlot({ component: panel.experimental_sidebar! }, { subPath: "" }, { rpc: rpcFor([]) });
-    expect(await screen.findByText("Nothing waits on you.")).toBeTruthy();
+    expect(await screen.findByText("All clear")).toBeTruthy();
   });
 });
 
 describe("page", () => {
-  it("shows the detection line with no item selected", async () => {
+  it("shows the empty state and the detection status with no item selected", async () => {
     renderSlot(panel, { subPath: "" }, { rpc: rpcFor([]) });
     expect(
-      await screen.findByText("Prose detection off: no OpenAI API key set"),
+      await screen.findByRole("heading", { name: "Nothing waits on you." }),
+    ).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "Final replies are not scanned for asks: no OpenAI API key set",
+      ),
     ).toBeTruthy();
   });
 
