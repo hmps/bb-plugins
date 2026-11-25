@@ -14,6 +14,13 @@ afterEach(() => {
   resetInboxStore();
 });
 
+describe("rail icon", () => {
+  it("points the nav panel at the registered tray icon, not a missing built-in", () => {
+    expect(panel.icon).toBe("inbox/tray");
+    expect(app.icons.map((icon) => icon.name)).toContain("inbox/tray");
+  });
+});
+
 const NOW = Date.now();
 const DETECTION = { enabled: false, reason: "no OpenAI API key set", model: "gpt-6-luna" };
 

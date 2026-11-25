@@ -288,7 +288,9 @@
       "id": "inbox",
       "displayName": "Inbox",
       "description": "One inbox for everything that waits on you: decision cards, inbox_ask items from agents, and asks found in final replies.",
-      "icon": "Inbox",
+      "icon": {
+        "url": "./plugins/inbox/assets/inbox.svg"
+      },
       "tags": [
         "inbox",
         "decisions",

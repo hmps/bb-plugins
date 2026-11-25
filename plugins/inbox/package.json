@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-inbox",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "engines": {
     "bb": ">=0.50",
@@ -10,7 +10,7 @@
     "name": "Inbox",
     "description": "One place for everything that waits on you. Mirrors decision cards from every thread, gives agents an inbox_ask tool, detects asks in final replies with an optional OpenAI key, and pings once per new item. Answers go back to the source thread. Adds `bb inbox list|ask|close`.",
     "branding": {
-      "icon": "Inbox"
+      "icon": "./assets/inbox.svg"
     },
     "server": "./server.ts",
     "app": "./app.tsx"
