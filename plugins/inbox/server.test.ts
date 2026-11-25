@@ -523,14 +523,18 @@ describe("detection", () => {
     expect(t.pings()).toHaveLength(1);
 
     t.detect.mockResolvedValueOnce(
-      result({ outcome: "asks", passTwoRan: true, asks: [{ ...ask, repeatOfItemId: created!.id }] }),
+      result({
+        outcome: "asks",
+        passTwoRan: true,
+        asks: [{ ...ask, question: "May I merge PR 12 (the login fix)?", repeatOfItemId: created!.id }],
+      }),
     );
     await t.idle("thr_a", "Again: may I merge PR 12?");
     expect(t.detect.mock.calls[1]![0].openItems).toEqual([
       expect.objectContaining({ id: created!.id, source: "detected", askCount: 1 }),
     ]);
     const [repeated] = await t.list();
-    expect(repeated).toMatchObject({ id: created!.id, askCount: 2 });
+    expect(repeated).toMatchObject({ id: created!.id, askCount: 2, question: "May I merge PR 12 (the login fix)?" });
     expect(t.pings()).toHaveLength(1);
 
     t.detect.mockResolvedValueOnce(result({ outcome: "resolved-only", resolvedItemIds: [created!.id] }));

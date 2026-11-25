@@ -185,11 +185,17 @@ describe("inbox detection", () => {
       ]));
 
     const { asks } = await detect(input);
-    expect(asks[0]).toEqual(standalone);
+    // Cut from the reply itself, with the agent's own line breaks.
+    expect(asks[0]).toEqual({
+      ...standalone,
+      excerpt: "1. " + options[0] + "\n2. " + options[1] + "\n\nShould I build option 1 or option 2?",
+    });
     expect(asks[1].excerpt).toHaveLength(LIMITS.excerpt);
     expect(asks[1].excerpt?.startsWith("…")).toBe(true);
     expect(asks[1].excerpt?.endsWith("Should I build option 1 or option 2?")).toBe(true);
+    // A long match keeps its end, where the ask is.
     expect(asks[2].excerpt).toHaveLength(LIMITS.excerpt);
+    expect(asks[2].excerpt?.startsWith("…x")).toBe(true);
   });
 
   it.each([

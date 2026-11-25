@@ -147,21 +147,25 @@ function buildResponsesRequest(model: string, input: string) {
   };
 }
 
-const flat = (text: string) => text.replace(/\s+/g, " ").trim();
+/** The last LIMITS.excerpt chars: an ask usually ends the passage. */
+function clipStart(text: string): string {
+  return text.length <= LIMITS.excerpt ? text : `…${text.slice(text.length - (LIMITS.excerpt - 1)).trimStart()}`;
+}
 
 /**
- * The excerpt the model quoted, when the reply holds it word for word
- * (whitespace aside). Otherwise the end of the reply, where an ask usually
- * is, so the item never shows text the agent did not write.
+ * The passage of the reply that the model quoted, cut from the reply itself,
+ * so the item keeps the agent's own text and line breaks. The match ignores
+ * whitespace. With no match, the end of the reply, where an ask usually is.
  */
 export function sourceExcerpt(quoted: string | null, reply: string): string | null {
-  const text = quoted?.trim();
-  if (text && flat(reply).includes(flat(text))) {
-    return text.length <= LIMITS.excerpt ? text : `${text.slice(0, LIMITS.excerpt - 1)}…`;
+  const words = quoted?.trim().split(/\s+/).filter(Boolean) ?? [];
+  if (words.length) {
+    const pattern = words.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+");
+    const match = new RegExp(pattern).exec(reply);
+    if (match) return clipStart(match[0]);
   }
   const tail = reply.trim();
-  if (!tail) return null;
-  return tail.length <= LIMITS.excerpt ? tail : `…${tail.slice(tail.length - (LIMITS.excerpt - 1))}`;
+  return tail ? clipStart(tail) : null;
 }
 
 function parseResponsesResponse(

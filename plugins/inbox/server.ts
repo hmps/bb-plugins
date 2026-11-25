@@ -673,6 +673,8 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
           const target = found.repeatOfItemId ? byId.get(found.repeatOfItemId) : undefined;
           if (target) {
             store.bump(target.id, {
+              // A card keeps its headline; a detected repeat can name the real options now.
+              question: target.source === "card" ? undefined : found.question,
               context: found.context ?? undefined,
               options: found.options ?? undefined,
               recommendation: found.recommendation ?? undefined,

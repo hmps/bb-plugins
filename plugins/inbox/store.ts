@@ -306,22 +306,25 @@ export function createStore(
 
   /**
    * A repeat of an open ask: bump askCount and lastAskedAt, refresh the
-   * fields the new ask carries. Never changes status or read state.
+   * fields the new ask carries (a detected repeat can reword the question). Never changes status or read state.
    */
   function bump(id: string, fields: Partial<AskFields> & { snapshot?: ThreadSnapshot }): Item {
     const item = require(id);
     const at = now();
     const options =
       fields.options === undefined ? item.options : cleanOptions(fields.options);
+    const question = fields.question?.trim() ? clip(fields.question.trim(), LIMITS.question) : item.question;
     db.prepare(
       `UPDATE items
           SET ask_count = ask_count + 1, last_asked_at = ?, updated_at = ?,
-              context = ?, options = ?, recommendation = ?, ref = ?,
+              question = ?, question_norm = ?, context = ?, options = ?, recommendation = ?, ref = ?,
               excerpt = ?, thread_title = ?, project_name = ?
         WHERE id = ?`,
     ).run(
       at,
       at,
+      question,
+      normalizeQuestion(question),
       fields.context === undefined ? item.context : clipOrNull(fields.context, LIMITS.context),
       options === null ? null : JSON.stringify(options),
       fields.recommendation === undefined
