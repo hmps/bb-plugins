@@ -207,6 +207,24 @@ describe("card mirror", () => {
     expect(closed).toMatchObject({ status: "closed", closeReason: "card-settled" });
   });
 
+  it("reports no conflict when a network error hides a landed answer", async () => {
+    const t = await setup();
+    await t.harness.behavior.emitThreadEvent("interaction.pending", {
+      thread: t.thread("thr_a"),
+      interaction: card() as never,
+    });
+    const [item] = await t.list();
+    t.harness.sdk.stub("threads.interactions.respond", async () => {
+      throw new TypeError("fetch failed");
+    });
+    t.harness.sdk.stub("threads.interactions.get", async () => card({ status: "resolved" }));
+    const closed = (await t.harness.behavior.callRpc("items_answer", {
+      id: item!.id,
+      answers: [{ option: 0 }],
+    })) as Item;
+    expect(closed).toMatchObject({ status: "closed", closeReason: "card-settled" });
+  });
+
   it("keeps the item open when the cancel fails and the card still waits", async () => {
     const t = await setup();
     await t.harness.behavior.emitThreadEvent("interaction.pending", {
@@ -255,7 +273,7 @@ describe("races and archived threads", () => {
   it("adds no detected item when the thread was archived during detection", async () => {
     const t = await setup({ settings: { openaiApiKey: "sk-test" } });
     t.detect.mockImplementationOnce(async () => {
-      t.harness.sdk.stub("threads.get", async () => ({ ...t.thread("thr_a"), archivedAt: T0 }));
+      await t.harness.behavior.emitThreadEvent("thread.archived", { thread: t.thread("thr_a") });
       return result({
         outcome: "asks",
         passTwoRan: true,

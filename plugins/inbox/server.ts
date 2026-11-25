@@ -496,6 +496,9 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
       return next;
     }
 
+    /** Thread id → when the plugin saw it archived or deleted. */
+    const archivedThreads = new Map<string, number>();
+
     async function runDetection(thread: ThreadLike, reply: string): Promise<void> {
       const { detector } = await detection();
       if (!detector) return;
@@ -556,12 +559,10 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
             repeatedIds.push(target.id);
             continue;
           }
-          if (snapshot === null) {
-            // The thread can be archived while detection runs.
-            const fresh = await bb.sdk.threads.get({ threadId: thread.id });
-            if (fresh.archivedAt) break;
-            snapshot = await snapshotOf(fresh);
-          }
+          snapshot ??= await snapshotOf(thread);
+          // The thread can be archived while detection runs. Check with no
+          // await between the check and the insert in createItem.
+          if ((archivedThreads.get(thread.id) ?? -1) >= started) break;
           const item = await createItem({
             ...snapshot,
             kind: itemKindSchema.catch("decide").parse(found.kind),
@@ -624,9 +625,12 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
           // The card may have settled in its thread meanwhile. Say so, so the
           // page does not confirm an answer the card did not take.
           const settled = await refreshCard(item);
-          if (settled) {
+          // An HTTP error means bb refused the answer. A network error is
+          // ambiguous: the answer may have landed, so report no conflict.
+          if (settled && error instanceof experimental_BbHttpError) {
             refuse("conflict", `the card of ${item.id} was already settled in its thread`);
           }
+          if (settled) return settled;
           throw error;
         }
         return closeItem(item.id, "answered", describeCardResponse(item.card, response));
@@ -736,6 +740,7 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
     });
 
     const closeThreadItems = ({ thread }: { thread: { id: string } }) => {
+      archivedThreads.set(thread.id, now());
       if (store.closeThread(thread.id, "archived").length > 0) publish();
     };
     bb.events.on("thread.archived", closeThreadItems);
