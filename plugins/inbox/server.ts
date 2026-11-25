@@ -124,7 +124,20 @@ function localDate(date: Date): string {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (!(error instanceof Error)) return String(error);
+  // A bare "fetch failed" hides the real reason in `cause`.
+  const cause = error.cause instanceof Error ? `: ${error.cause.message}` : "";
+  return error.message + cause;
+}
+
+/** bb.sdk calls can fail once with a bare "fetch failed"; retry those once. */
+async function retryOnce<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    if (!(error instanceof TypeError && error.message === "fetch failed")) throw error;
+    return call();
+  }
 }
 
 function refuse(code: "not_found" | "conflict" | "invalid", message: string): never {
@@ -345,11 +358,13 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
     }
 
     async function sendToThread(threadId: string, text: string): Promise<void> {
-      await bb.sdk.threads.send({
-        threadId,
-        mode: "auto",
-        input: [{ type: "text", text, mentions: [] }],
-      });
+      await retryOnce(() =>
+        bb.sdk.threads.send({
+          threadId,
+          mode: "auto",
+          input: [{ type: "text", text, mentions: [] }],
+        }),
+      );
     }
 
     function liveItem(id: string): Item {
