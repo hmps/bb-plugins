@@ -50,6 +50,10 @@
     {
       "name": "child-thread-split",
       "source": "./plugins/child-thread-split"
+    },
+    {
+      "name": "inbox",
+      "source": "./plugins/inbox"
     }
   ]
 }

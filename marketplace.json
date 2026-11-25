@@ -197,7 +197,11 @@
       "displayName": "Custom Model Picker",
       "description": "Adds a composer model picker with a configurable model list, favorites, and reasoning controls.",
       "icon": "Cpu",
-      "tags": ["composer", "models", "interface"],
+      "tags": [
+        "composer",
+        "models",
+        "interface"
+      ],
       "author": {
         "name": "Hampus Persson",
         "github": "hmps"
@@ -277,6 +281,29 @@
           "subdir": "plugins/thread-usage",
           "range": "^0.2.0",
           "tagPrefix": "thread-usage/"
+        }
+      }
+    },
+    {
+      "id": "inbox",
+      "displayName": "Inbox",
+      "description": "One inbox for everything that waits on you: decision cards, inbox_ask items from agents, and asks found in final replies.",
+      "icon": "Inbox",
+      "tags": [
+        "inbox",
+        "decisions",
+        "agents"
+      ],
+      "author": {
+        "name": "Hampus Persson",
+        "github": "hmps"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/hmps/bb-plugins.git",
+          "subdir": "plugins/inbox",
+          "range": "^0.1.0",
+          "tagPrefix": "inbox/"
         }
       }
     }
