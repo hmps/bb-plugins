@@ -496,8 +496,8 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
       return next;
     }
 
-    /** Thread id → when the plugin saw it archived or deleted. */
-    const archivedThreads = new Map<string, number>();
+    /** Threads the plugin saw archived or deleted (until unarchived). */
+    const archivedThreads = new Set<string>();
 
     async function runDetection(thread: ThreadLike, reply: string): Promise<void> {
       const { detector } = await detection();
@@ -560,9 +560,9 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
             continue;
           }
           snapshot ??= await snapshotOf(thread);
-          // The thread can be archived while detection runs. Check with no
-          // await between the check and the insert in createItem.
-          if ((archivedThreads.get(thread.id) ?? -1) >= started) break;
+          // The thread can be archived while detection runs or waits in the
+          // queue. Check with no await between the check and the insert.
+          if (archivedThreads.has(thread.id)) break;
           const item = await createItem({
             ...snapshot,
             kind: itemKindSchema.catch("decide").parse(found.kind),
@@ -740,11 +740,14 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
     });
 
     const closeThreadItems = ({ thread }: { thread: { id: string } }) => {
-      archivedThreads.set(thread.id, now());
+      archivedThreads.add(thread.id);
       if (store.closeThread(thread.id, "archived").length > 0) publish();
     };
     bb.events.on("thread.archived", closeThreadItems);
     bb.events.on("thread.deleted", closeThreadItems);
+    bb.events.on("thread.unarchived", ({ thread }: { thread: { id: string } }) => {
+      archivedThreads.delete(thread.id);
+    });
 
     // -----------------------------------------------------------------------
     // Background work
