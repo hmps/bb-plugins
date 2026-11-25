@@ -366,15 +366,17 @@ function TrayEmblem({ cleared }: { cleared: boolean }) {
 }
 
 function InboxHome({ flash }: { flash: string | null }) {
-  const { items, loaded } = useInbox();
+  const { items, loaded, error } = useInbox();
   const now = useNow();
   const compact = useIsCompactViewport();
   const navigate = useBbNavigate();
   const { open, snoozed } = groupItems(items, now);
   const unread = open.filter(isUnread).length;
   const nextWake = snoozed[0]?.snoozedUntil ?? null;
-  // A phone has no sidebar: the page shows the list while it has rows.
-  const showList = compact && (open.length > 0 || snoozed.length > 0);
+  // A phone has no sidebar: the page shows the list while it has rows,
+  // and shows it on a load error, which only the list displays.
+  const showList =
+    compact && (open.length > 0 || snoozed.length > 0 || error !== null);
 
   return (
     <div className="flex h-full flex-col overflow-y-auto p-4 md:p-6">
@@ -461,6 +463,8 @@ const CLOSE_LABELS: Record<CloseReason, string> = {
 type Run = (
   confirmation: string | ((item: Item) => string),
   action: () => Promise<Item>,
+  /** Where a failure shows: next to the header actions or the answer. */
+  place?: "header" | "answer",
 ) => Promise<void>;
 
 /** A quiet sentence-case label over a group inside the answer panel. */
@@ -784,7 +788,7 @@ function ReplyBox({
             send();
           }
         }}
-        className="block field-sizing-content max-h-64 min-h-14 w-full resize-none bg-transparent px-4 py-1 text-sm leading-relaxed placeholder:text-muted-foreground/80 focus-visible:outline-none"
+        className="block field-sizing-content min-h-14 w-full resize-none bg-transparent px-4 py-1 text-sm leading-relaxed placeholder:text-muted-foreground/80 focus-visible:outline-none"
       />
       <div className="flex items-center justify-end gap-3 px-4 pt-1 pb-3">
         <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
@@ -835,12 +839,13 @@ function SnoozeMenu({
     setOpen(false);
     void run(`Snoozed until ${wakeLabel(until, Date.now())}`, () =>
       rpc.call("items_snooze", { id: item.id, until }),
+      "header",
     );
   };
   const customUntil = parseLocalDateTime(custom, now);
 
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={rootRef}>
       <Button
         size="sm"
         variant="ghost"
@@ -855,7 +860,7 @@ function SnoozeMenu({
         <div
           role="menu"
           aria-label="Snooze until"
-          className="absolute top-full right-0 z-10 mt-1 w-64 space-y-0.5 rounded-lg border border-border bg-popover p-1 text-sm text-popover-foreground shadow-lg"
+          className="absolute top-full right-2 z-10 mt-1 w-64 max-w-[calc(100vw-2rem)] space-y-0.5 rounded-lg border border-border bg-popover p-1 text-sm text-popover-foreground shadow-lg"
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.preventDefault();
@@ -926,6 +931,7 @@ function ItemView({
   const [missing, setMissing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorPlace, setErrorPlace] = useState<"header" | "answer">("answer");
   const marked = useRef<string | null>(null);
   const item = listed ?? (fetched?.id === id ? fetched : null);
 
@@ -955,9 +961,10 @@ function ItemView({
 
   useEffect(() => setError(null), [id]);
 
-  const run: Run = async (confirmation, action) => {
+  const run: Run = async (confirmation, action, place = "answer") => {
     setBusy(true);
     setError(null);
+    setErrorPlace(place);
     const openIds = groupItems(items, Date.now()).open.map((other) => other.id);
     try {
       const updated = await action();
@@ -1100,7 +1107,7 @@ function ItemView({
             </button>
             <span className="flex-1" />
             {!closed && (
-              <div className="-my-1 -mr-2 flex items-center">
+              <div className="relative -my-1 -mr-2 flex items-center">
                 {snoozed ? (
                   <Button
                     size="sm"
@@ -1109,6 +1116,7 @@ function ItemView({
                     onClick={() =>
                       void run("Back in the inbox", () =>
                         rpc.call("items_unsnooze", { id: item.id }),
+                        "header",
                       )
                     }
                   >
@@ -1125,6 +1133,7 @@ function ItemView({
                     onClick={() =>
                       void run("Handed to the parent thread", () =>
                         rpc.call("items_hand_to_parent", { id: item.id }),
+                        "header",
                       )
                     }
                   >
@@ -1139,6 +1148,7 @@ function ItemView({
                   onClick={() =>
                     void run("Dismissed", () =>
                       rpc.call("items_dismiss", { id: item.id }),
+                      "header",
                     )
                   }
                 >
@@ -1147,6 +1157,11 @@ function ItemView({
               </div>
             )}
           </div>
+          {error && errorPlace === "header" && (
+            <p role="alert" className="mt-3 text-sm text-destructive">
+              {error}
+            </p>
+          )}
           <h1 className="mt-4 text-[22px] leading-[1.3] font-semibold tracking-[-0.02em] text-balance text-foreground break-words">
             {item.question}
           </h1>
@@ -1245,7 +1260,7 @@ function ItemView({
               </section>
             )}
 
-        {error && (
+        {error && errorPlace === "answer" && (
           <p role="alert" className="mt-3 text-sm text-destructive">
             {error}
           </p>
