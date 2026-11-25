@@ -73,7 +73,15 @@ child thread is skipped: its final reply goes to an agent, not to the user.
   open tool or detected item whose resolve score is at or above
   `resolveThreshold` closes as `resolved`.
 
-Each run writes one row to `detection_log` (outcome, scores, whether pass 2
+Inbox also checks user messages as they arrive. It listens for
+`experimental_thread.events` and reads user-initiated `client/turn/requested`
+events from the SDK. It skips Inbox replies and messages from other agents.
+For each open tool or detected item, the Decisions API scores whether the
+message answers the item's question. The request includes the options and
+recommendation. A score at or above `answerThreshold` closes the item as
+`answered-in-thread`, with a row in `bb inbox detections`.
+
+Each turn-end run writes one row to `detection_log` (outcome, scores, whether pass 2
 ran, created, repeated and resolved ids, duration, error). The plugin keeps
 the last 2000 rows. Use `bb inbox detections` to tune the thresholds. A
 detector error logs a warning and changes nothing.
@@ -83,9 +91,10 @@ detector error logs a warning and changes nothing.
 | Key                | Default      | Meaning                                                  |
 | ------------------ | ------------ | -------------------------------------------------------- |
 | `openaiApiKey`     | (none)       | Secret. Turns detection on.                              |
-| `detectionModel`   | `gpt-6-luna` | Model for both passes.                                   |
+| `detectionModel`   | `gpt-6-luna` | Model for ask detection and answer checks.               |
 | `askThreshold`     | `0.6`        | Pass 2 runs at or above this ask score.                  |
 | `resolveThreshold` | `0.8`        | An item resolves at or above this score.                 |
+| `answerThreshold`  | `0.8`        | An item closes as answered in thread at or above this score. |
 | `pings`            | `true`       | One push per new item, and the daily nudge.              |
 | `nudgeHour`        | `9`          | Hour of the daily nudge (0-23, server local time).       |
 

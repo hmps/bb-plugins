@@ -3,6 +3,7 @@ import {
   DEFAULT_DETECTION_MODEL,
   LIMITS,
   itemKindSchema,
+  type AnswerCheckItem,
   type DetectedAsk,
   type DetectionInput,
   type DetectionOpenItem,
@@ -23,6 +24,7 @@ const noveltyChoices = [
 ];
 
 const probability = z.number().min(0).max(1);
+const MAX_DECISIONS = 400;
 const decisionResponse = z.object({
   answers: z.array(z.looseObject({ name: z.string().nullable(), type: z.string() })),
 });
@@ -213,6 +215,7 @@ export function createDetector({
   model = DEFAULT_DETECTION_MODEL,
   askThreshold = 0.6,
   resolveThreshold = 0.8,
+  answerThreshold = 0.8,
   fetch: send = globalThis.fetch,
   baseUrl = "https://api.openai.com/v1",
   timeoutMs = 20_000,
@@ -264,6 +267,38 @@ export function createDetector({
   }
 
   return {
+    async checkAnswer(message, items, signal) {
+      const scores: Record<string, number> = {};
+      for (let offset = 0; offset < items.length; offset += MAX_DECISIONS) {
+        const batch: AnswerCheckItem[] = items.slice(offset, offset + MAX_DECISIONS);
+        const body = await post("decisions", {
+          model,
+          input: JSON.stringify({ message, openItems: batch }),
+          questions: batch.map(({ id }) => ({
+            type: "predicate",
+            name: `answered_${id}`,
+            instructions: `Does the user's message answer open item ${JSON.stringify(id)}? ` +
+              "An explicit choice, approval, refusal, or confirmation that the task is done counts. " +
+              "Count a short reply only if it clearly applies to this item. " +
+              "An unrelated message, follow-up question, or request for more information does not count.",
+          })),
+        }, signal);
+        try {
+          const { answers } = decisionResponse.parse(body);
+          const byName = new Map(answers.map((answer) => [answer.name, answer]));
+          for (const { id } of batch) {
+            scores[id] = predicateAnswer.parse(byName.get(`answered_${id}`)).probability;
+          }
+        } catch {
+          throw new DetectionError("Invalid Decisions answers");
+        }
+      }
+      return {
+        scores,
+        answeredItemIds: Object.keys(scores).filter((id) => scores[id] >= answerThreshold),
+      };
+    },
+
     async detect(input, signal) {
       const startedAt = performance.now();
       const result: DetectionResult = {
@@ -278,8 +313,8 @@ export function createDetector({
       try {
         const evidence = serializeEvidence(input);
         const request = buildDecisionsRequest(model, evidence, input.openItems);
-        if (request.questions.length > 400) {
-          throw new DetectionError("Decisions supports at most 400 questions");
+        if (request.questions.length > MAX_DECISIONS) {
+          throw new DetectionError(`Decisions supports at most ${MAX_DECISIONS} questions`);
         }
         const scores = parseDecisionsResponse(await post("decisions", request, signal), input.openItems);
         result.scores = scores;

@@ -9,10 +9,12 @@ import {
   PUSH_PLUGIN_ID,
   TOOL_NAME,
   cliItemSchema,
+  type DetectorOptions,
   type DetectionInput,
   type DetectionResult,
   type Item,
 } from "./contract";
+import { createDetector as createOpenAiDetector } from "./detection";
 import { createInboxPlugin } from "./server";
 
 const T0 = 1_800_000_000_000;
@@ -65,10 +67,17 @@ function card(overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function setup(options: { settings?: Record<string, unknown>; parents?: Record<string, string> } = {}) {
+async function setup(options: {
+  settings?: Record<string, unknown>;
+  parents?: Record<string, string>;
+  fetch?: typeof fetch;
+} = {}) {
   const clock = { now: T0 };
   const detect = vi.fn(async (_input: DetectionInput): Promise<DetectionResult> => result());
-  const createDetector = vi.fn(() => ({ detect }));
+  const createDetector = vi.fn((config: DetectorOptions) => ({
+    detect,
+    checkAnswer: createOpenAiDetector({ ...config, fetch: options.fetch }).checkAnswer,
+  }));
   const parents = options.parents ?? {};
   const thread = (id: string) =>
     makeThreadResponse({ id, projectId: "proj_1", title: `Thread ${id}`, parentThreadId: parents[id] ?? null });
@@ -108,6 +117,115 @@ async function setup(options: { settings?: Record<string, unknown>; parents?: Re
 
   return { bb, harness, clock, detect, createDetector, thread, calls, pings, sends, sentText, list, idle };
 }
+
+describe("answers in the thread", () => {
+  const threadId = "thr_a";
+
+  async function setupAnswers(settings: Record<string, unknown> = {}) {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const t = await setup({ settings: { openaiApiKey: "test-key", ...settings }, fetch });
+    const add = async (question: string) => {
+      await t.harness.behavior.callAgentTool(TOOL_NAME, {
+        kind: "decide", question, options: ["Blue", "Green"], recommendation: "Blue",
+      }, { threadId });
+      return (await t.list()).find((item) => item.question === question)!;
+    };
+    const rows: { type: string; seq: number; createdAt: number; data: unknown }[] = [];
+    t.harness.sdk.stub("threads.events.list", async ({ afterSeq, beforeSeq }) =>
+      rows.filter(({ seq }) => seq > Number(afterSeq) && seq < Number(beforeSeq)).reverse() as never);
+    const emit = (sequence: number) =>
+      t.harness.behavior.emitThreadEvent("experimental_thread.events", { thread: t.thread(threadId), sequence });
+    const append = (text: string, data: Record<string, unknown> = {}) => {
+      const seq = rows.length + 1;
+      rows.push({
+        type: "client/turn/requested", seq, createdAt: t.clock.now,
+        data: { initiator: "user", senderThreadId: null, input: [{ type: "text", text }], ...data },
+      });
+      return seq;
+    };
+    return { ...t, fetch, add, emit, append };
+  }
+
+  it("closes only the matching item before the turn ends and logs the close", async () => {
+    const t = await setupAnswers({ answerThreshold: 0.9 });
+    const oldSeq = t.append("Blue");
+    t.clock.now++;
+    const matching = await t.add("Which color should I use?");
+    const other = await t.add("Which color should I use for the sidebar?");
+    await t.harness.behavior.emitThreadEvent("interaction.pending", {
+      thread: t.thread(threadId), interaction: card() as never,
+    });
+    await t.emit(oldSeq);
+    expect(t.fetch).not.toHaveBeenCalled();
+
+    t.fetch.mockResolvedValueOnce(Response.json({
+      answers: [
+        { type: "predicate", name: `answered_${matching.id}`, probability: 0.9 },
+        { type: "predicate", name: `answered_${other.id}`, probability: 0.89 },
+      ],
+    }));
+    const seq = t.append("Use green for the header.");
+    await Promise.all([t.emit(seq), t.emit(seq)]);
+    expect(t.fetch).toHaveBeenCalledTimes(1);
+    const [url, request] = t.fetch.mock.calls[0]!;
+    expect(url).toMatch(/\/decisions$/);
+    const body = JSON.parse(String(request?.body));
+    expect(body.questions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: `answered_${matching.id}`, type: "predicate" }),
+      expect.objectContaining({ name: `answered_${other.id}`, type: "predicate" }),
+    ]));
+    expect(body.questions).toHaveLength(2);
+    expect(JSON.parse(body.input)).toEqual({
+      message: "Use green for the header.",
+      openItems: expect.arrayContaining([{
+        id: matching.id, question: matching.question, options: ["Blue", "Green"], recommendation: "Blue",
+      }]),
+    });
+    expect((await t.list()).map((item) => item.source).sort()).toEqual(["card", "tool"]);
+    expect(await t.harness.behavior.callRpc("items_get", { id: matching.id })).toMatchObject({
+      status: "closed", closeReason: "answered-in-thread", answer: "Use green for the header.",
+    });
+    const log = await t.harness.behavior.runCli(["detections"]);
+    expect(log.stdout).toContain("answered-in-thread");
+    expect(log.stdout).toContain(matching.id);
+    expect(log.stdout).not.toContain(other.id);
+    expect(t.detect).not.toHaveBeenCalled();
+  });
+
+  it("leaves the item open for unrelated user messages", async () => {
+    const t = await setupAnswers();
+    const item = await t.add("Which color should I use?");
+    t.fetch.mockResolvedValueOnce(Response.json({
+      answers: [{ type: "predicate", name: `answered_${item.id}`, probability: 0.1 }],
+    }));
+    await t.emit(t.append("What is the time?"));
+    expect(t.fetch).toHaveBeenCalledTimes(1);
+    expect(await t.list()).toEqual([item]);
+  });
+
+  it("ignores inbox replies and agent messages", async () => {
+    const t = await setupAnswers();
+    const item = await t.add("Which color should I use?");
+    const other = await t.add("Which color should I use for the sidebar?");
+    await t.harness.behavior.callRpc("items_answer", { id: item.id, text: "Blue" });
+    t.append(t.sentText());
+    t.append("Use green", { originPluginId: "inbox" });
+    t.append("Use green", { senderThreadId: "thr_other" });
+    t.append("Use green", { initiator: "agent" });
+    await t.emit(t.append("[bb message from thread:thr_other]\nUse green"));
+    expect(t.fetch).not.toHaveBeenCalled();
+    expect(await t.list()).toEqual([other]);
+  });
+
+  it("makes no OpenAI or event history call without a key", async () => {
+    const t = await setupAnswers({ openaiApiKey: "" });
+    const item = await t.add("Which color should I use?");
+    await t.emit(t.append("Use green"));
+    expect(t.fetch).not.toHaveBeenCalled();
+    expect(t.calls("threads.events.list")).toHaveLength(0);
+    expect(await t.list()).toEqual([item]);
+  });
+});
 
 describe("card mirror", () => {
   it("mirrors a pending card into one item with parsed fields", async () => {

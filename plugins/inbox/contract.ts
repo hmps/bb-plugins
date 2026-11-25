@@ -53,6 +53,7 @@ export type ItemStatus = z.infer<typeof itemStatusSchema>;
 
 export const closeReasonSchema = z.enum([
   "answered", // answered in the inbox (reply, option, or accepted recommendation)
+  "answered-in-thread", // detection saw a user answer in the source thread
   "done", // the user clicked Done on a "do" item
   "dismissed", // the user dismissed it
   "handed", // handed to the thread's parent
@@ -295,6 +296,13 @@ export type DetectionOutcome =
   | "resolved-only" // no ask, but one or more open items resolved
   | "error";
 
+export type AnswerCheckItem = Pick<Item, "id" | "question" | "options" | "recommendation">;
+
+export interface AnswerCheckResult {
+  scores: Record<string, number>;
+  answeredItemIds: string[];
+}
+
 export interface DetectionScores {
   /** Pass 1: probability that the reply asks the user for something. */
   ask: number | null;
@@ -320,6 +328,7 @@ export interface DetectionResult {
 
 export interface Detector {
   detect(input: DetectionInput, signal?: AbortSignal): Promise<DetectionResult>;
+  checkAnswer(message: string, items: AnswerCheckItem[], signal?: AbortSignal): Promise<AnswerCheckResult>;
 }
 
 export interface DetectorOptions {
@@ -329,6 +338,8 @@ export interface DetectorOptions {
   askThreshold: number;
   /** An open item resolves when its score >= resolveThreshold. Default 0.8. */
   resolveThreshold: number;
+  /** A user message answers an item when its score >= answerThreshold. Default 0.8. */
+  answerThreshold: number;
   /** Injected for tests. Defaults to globalThis.fetch. */
   fetch?: typeof fetch;
   /** Default "https://api.openai.com/v1". */

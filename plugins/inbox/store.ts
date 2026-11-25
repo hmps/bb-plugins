@@ -194,7 +194,7 @@ export interface DetectionLogRow {
   id: number;
   threadId: string;
   at: number;
-  outcome: DetectionOutcome;
+  outcome: DetectionOutcome | "answered-in-thread";
   scores: unknown;
   passTwoRan: boolean;
   createdIds: string[];
@@ -499,7 +499,7 @@ export function createStore(
       id: row.id,
       threadId: row.thread_id,
       at: row.at,
-      outcome: row.outcome as DetectionOutcome,
+      outcome: row.outcome as DetectionLogRow["outcome"],
       scores: row.scores === null ? null : JSON.parse(row.scores),
       passTwoRan: row.pass_two_ran === 1,
       createdIds: JSON.parse(row.created_ids) as string[],
