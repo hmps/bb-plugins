@@ -15,6 +15,7 @@ bb plugin install ios-status-bar@hmps
 bb plugin install mobile-fixes@hmps
 bb plugin install github-plus@hmps
 bb plugin install quiet-push@hmps
+bb plugin install inbox@hmps
 ```
 
 `bb plugin update` moves installed plugins to newer releases inside the range
@@ -36,6 +37,7 @@ that `marketplace.json` lists.
 | [custom-model-picker](plugins/custom-model-picker) | Adds a composer model picker with a configurable model list, favorites, and reasoning controls. |
 | [child-thread-split](plugins/child-thread-split) | Adds Open in split buttons beside child threads in the composer and conversation. |
 | [starbase](plugins/starbase) | The Starbase Sentinel: relays Crew questions and failures to the Commander, `bb starbase sitrep` and `settle`, and a read-only Mission Queue board. |
+| [inbox](plugins/inbox) | One inbox for everything that waits on you: decision cards, `inbox_ask` items, and asks found in final replies. Badge, pings, and `bb inbox` CLI. |
 
 ## Layout
 
