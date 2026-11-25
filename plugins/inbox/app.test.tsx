@@ -280,7 +280,10 @@ describe("page", () => {
       },
     });
     fireEvent.click(await screen.findByRole("button", { name: "Dismiss" }));
-    expect((await screen.findByRole("alert")).textContent).toContain("server down");
-    expect(screen.getByRole("heading", { name: "Ship it now?" })).toBeTruthy();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("server down");
+    const heading = screen.getByRole("heading", { name: "Ship it now?" });
+    // A header action shows its failure next to the header, above the question.
+    expect(alert.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
