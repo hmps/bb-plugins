@@ -163,6 +163,51 @@ function parseResponsesResponse(body: unknown, openItems: DetectionOpenItem[]): 
   });
 }
 
+const ERROR_DETAIL_MAX = 300;
+
+const openAiErrorBody = z.object({
+  error: z.object({
+    type: z.string().nullish(),
+    code: z.union([z.string(), z.number()]).nullish(),
+    message: z.string().nullish(),
+  }),
+});
+
+function clipDetail(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > ERROR_DETAIL_MAX ? `${flat.slice(0, ERROR_DETAIL_MAX - 1)}…` : flat;
+}
+
+/**
+ * The error type and message from an OpenAI error body
+ * (`{ "error": { "type", "code", "message" } }`). Any other body gives "",
+ * so a plain-text body is never reflected.
+ */
+async function openAiErrorDetail(response: Response): Promise<string> {
+  try {
+    const parsed = openAiErrorBody.safeParse(await response.json());
+    if (!parsed.success) return "";
+    const { type, code, message } = parsed.data.error;
+    const label = [type, code != null && code !== type ? String(code) : null].filter(Boolean).join("/");
+    return clipDetail([label, message].filter(Boolean).join(": "));
+  } catch {
+    return "";
+  }
+}
+
+/** The name, message and system code of a fetch failure and its cause. */
+function requestFailureCause(error: unknown): string {
+  const describe = (value: unknown): string => {
+    if (!(value instanceof Error)) return "";
+    const code = (value as { code?: unknown }).code;
+    return [`${value.name}: ${value.message}`, typeof code === "string" ? `(${code})` : ""]
+      .filter(Boolean).join(" ");
+  };
+  const outer = describe(error);
+  const inner = error instanceof Error ? describe(error.cause) : "";
+  return clipDetail([outer, inner].filter(Boolean).join(" <- "));
+}
+
 export function createDetector({
   apiKey,
   model = DEFAULT_DETECTION_MODEL,
@@ -175,6 +220,8 @@ export function createDetector({
   const key = apiKey.trim();
   if (!key) throw new Error("OpenAI API key is empty");
   const root = baseUrl.replace(/\/+$/, "");
+  /** Error text is logged and shown in the CLI; never let the key through. */
+  const scrub = (text: string) => text.split(key).join("***");
 
   async function post(endpoint: "decisions" | "responses", body: object, caller?: AbortSignal) {
     const timeout = AbortSignal.timeout(timeoutMs);
@@ -193,7 +240,10 @@ export function createDetector({
           body: JSON.stringify(body),
           signal,
         });
-        if (!response.ok) throw new DetectionError(`${endpoint} HTTP ${response.status}`);
+        if (!response.ok) {
+          const detail = await openAiErrorDetail(response);
+          throw new DetectionError(scrub(`${endpoint} HTTP ${response.status}${detail ? `: ${detail}` : ""}`));
+        }
         try {
           return await response.json();
         } catch {
@@ -206,7 +256,8 @@ export function createDetector({
         throw new DetectionError(timeout.aborted ? `${endpoint} timed out` : `${endpoint} cancelled`);
       }
       if (error instanceof DetectionError) throw error;
-      throw new DetectionError(`${endpoint} request failed`);
+      const cause = requestFailureCause(error);
+      throw new DetectionError(scrub(`${endpoint} request failed${cause ? `: ${cause}` : ""}`));
     } finally {
       signal.removeEventListener("abort", onAbort);
     }
