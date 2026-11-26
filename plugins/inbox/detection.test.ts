@@ -97,10 +97,11 @@ describe("inbox detection", () => {
   it.each(["## Blocked on you", "**Blocked on you**"])("skips reminder bullets under %s", async (heading) => {
     const reminder = "The card for Swedish letters (å, ä, ö) in LinkedIn URLs.";
     const decision = "Which region should we use for the new search index?";
+    const action = "Review the card layout for the inbox redesign.";
     const { detect, fetch, input } = setup([
       "Done.",
       heading,
-      "- The Growth Stripe price fix (inbox).\n- " + reminder + "\n- " + decision,
+      ["- The Growth Stripe price fix (inbox).", "- " + reminder, "- " + decision, "- " + action].join("\n"),
       "## Changed\n\n- Fixed X.",
     ].join("\n\n"));
     fetch
@@ -108,9 +109,10 @@ describe("inbox detection", () => {
       .mockResolvedValueOnce(extraction([
         { ...ask, kind: "do", question: "Can you handle the Swedish letters card?", excerpt: reminder },
         { ...ask, question: decision, excerpt: decision },
+        { ...ask, kind: "do", question: action, context: "Check the new inbox card layout.", excerpt: action },
       ]));
 
-    expect((await detect(input)).asks.map(({ question }) => question)).toEqual([decision]);
+    expect((await detect(input)).asks.map(({ question }) => question)).toEqual([decision, action]);
   });
 
   it.each(["numbered", "bulleted"])("keeps a %s iPhone test checklist in one item", async (format) => {

@@ -176,7 +176,7 @@ function findQuote(quoted: string | null, reply: string): RegExpExecArray | null
 }
 
 const blockedOnYou = /^\s*(?:[-*]\s+|#{1,6}\s+)?\*{0,2}blocked on you\*{0,2}(?::\*{0,2}\s*(.*)|\s*)$/i;
-const existingItem = /\(inbox\)|\b(?:the card|decision card|(?:the |open )inbox item)\b/i;
+const existingItem = /\(inbox\)|\b(?:decision card|(?:the |open )inbox item)\b|^\s*the card(?:\s+(?:for|about|on|in)\b|[.!]?\s*$)/i;
 const listMarker = /^(?: {0,3})(?:\d+[.)]|[-+*])[ \t]+/;
 
 function reminderLines(reply: string) {
