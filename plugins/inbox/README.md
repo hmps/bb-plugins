@@ -25,6 +25,9 @@ list shows open items newest ask first, with snoozed items apart. Each item
 shows its question, context, options, recommendation, and source thread.
 A detected item also shows "From the thread": a collapsed quote of the
 passage of the reply that it came from.
+The source thread chip opens the thread in place; its split button opens it
+beside the inbox. Both scroll to the message that made the item and
+highlight it. Items from before 0.1.5 have no message and open at the end.
 The page refetches on the realtime signal `items-changed`
 (`{ openCount, unreadCount }`), which every write publishes.
 
