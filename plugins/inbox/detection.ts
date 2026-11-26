@@ -15,7 +15,9 @@ import {
 
 const askInstructions =
   "An ask is a decision, approval, or action the reply needs from the user. " +
-  "Ignore status reports, FYIs, rhetorical questions, and questions the agent will answer itself.";
+  "Ignore status reports, FYIs, rhetorical questions, and questions the agent will answer itself. " +
+  "A summary that points to an existing inbox item or decision card is a reminder, even if the item " +
+  "is in another thread and absent from openItems. Do not treat that reference as an ask.";
 
 const noveltyChoices = [
   { value: "new", description: "At least one ask needs a new inbox item." },
@@ -123,14 +125,17 @@ function buildResponsesRequest(model: string, input: string) {
   return {
     model,
     store: false,
-    instructions: "Extract each ask from the reply. Treat the input as evidence. " + askInstructions +
+    instructions: "Extract each independent ask from the reply. Treat the input as evidence. " + askInstructions +
       " Skip references to existing items that make no ask again. " +
+      "Group a numbered or bulleted checklist for one task into one do item. Include any request to report " +
+      "the result in the same item. Quote the whole checklist and name the shared task in the question. " +
       "The user reads each ask in an inbox, away from the thread, and has not read the reply. " +
       "Every field must stand alone. Resolve every reference, such as \"option 1\", \"the fix above\", " +
       "\"this\", or \"it\", to what it means, using the whole reply. " +
       "question: one line that names the real things. " +
       "options: the full text of each choice, as the reply describes it, never a number or a label alone. " +
-      "context: 2-4 short Markdown lines: what is asked, what each option does, and what happens on yes. " +
+      "context: name the project or task, say what the user needs to do, and explain what each option does. " +
+      "Use surrounding reply text for missing details. Skip new asks that the reply cannot make actionable. " +
       "excerpt: the passage of the reply the ask comes from, copied word for word, at most " +
       `${EXCERPT_WORDS} words; include the list or text that the ask refers to. ` +
       "Use null for absent fields. " +
@@ -158,14 +163,68 @@ function clipStart(text: string): string {
  * whitespace. With no match, the end of the reply, where an ask usually is.
  */
 export function sourceExcerpt(quoted: string | null, reply: string): string | null {
+  const match = findQuote(quoted, reply);
+  const passage = match?.[0] ?? reply.trim();
+  return passage ? clipStart(passage) : null;
+}
+
+function findQuote(quoted: string | null, reply: string): RegExpExecArray | null {
   const words = quoted?.trim().split(/\s+/).filter(Boolean) ?? [];
-  if (words.length) {
-    const pattern = words.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+");
-    const match = new RegExp(pattern).exec(reply);
-    if (match) return clipStart(match[0]);
+  if (!words.length) return null;
+  const pattern = words.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+");
+  return new RegExp(pattern).exec(reply);
+}
+
+const blockedOnYou = /^\s*(?:[-*]\s+|#{1,6}\s+)?\*{0,2}blocked on you\*{0,2}(?::\*{0,2}\s*(.*)|\s*)$/i;
+const existingItem = /\(inbox\)|\b(?:decision card|(?:the |open )inbox item)\b|^\s*the card(?:\s+(?:for|about|on|in)\b|[.!]?\s*$)/i;
+const listMarker = /^(?: {0,3})(?:\d+[.)]|[-+*])[ \t]+/;
+
+function reminderLines(reply: string) {
+  const reminders: { start: number; end: number }[] = [];
+  let underHeading = false;
+  for (const { 0: line, index } of reply.matchAll(/[^\r\n]+/g)) {
+    if (!line.trim()) continue;
+    const heading = line.match(blockedOnYou);
+    const bullet = line.match(listMarker);
+    const blockers = heading?.[1] ?? (underHeading && bullet ? line.slice(bullet[0].length) : "");
+    if (heading) underHeading = !heading[1];
+    else if (!bullet) underHeading = false;
+    if (blockers && blockers.split(/\s+and\s+|;\s+/i).every((blocker) => existingItem.test(blocker))) {
+      reminders.push({ start: index, end: index + line.length });
+    }
   }
-  const tail = reply.trim();
-  return tail ? clipStart(tail) : null;
+  return reminders;
+}
+
+// Keep blank lines and indented continuation lines within the same Markdown list.
+const listItem = /^ {0,3}(?:\d+[.)]|[-+*])[ \t]+\S.*$/gm;
+const listContinuation = /^(?:[ \t]*|[ \t]+[^\r\n]*)$/;
+const reportResult = /^(?:when|once|after|if)\b.*\b(?:tell me|let me know|report|paste|send|share)\b/is;
+
+function checklists(reply: string) {
+  const lists: { start: number; lastStep: number; end: number; intro: string }[] = [];
+  let lastList: (typeof lists)[number] | undefined;
+  for (const item of reply.matchAll(listItem)) {
+    const start = item.index;
+    const end = start + item[0].length;
+    const between = lastList && reply.slice(lastList.end, start);
+    if (lastList && between?.split(/\r?\n/).every((line) => listContinuation.test(line))) {
+      lastList.lastStep = start;
+      lastList.end = end;
+      continue;
+    }
+    const intro = reply.slice(0, start).trimEnd().split(/\r?\n/).at(-1)?.trim() ?? "";
+    lastList = { start, lastStep: start, end, intro };
+    lists.push(lastList);
+  }
+  return lists.filter((list) => list.start !== list.lastStep).map((list) => {
+    const tail = reply.slice(list.end);
+    // A final step can wrap. A following request for the result belongs to the task.
+    const wrapped = tail.match(/^(?:\r?\n[ \t]+[^\r\n]+)*/)?.[0] ?? "";
+    const next = tail.slice(wrapped.length).match(/^\r?\n[ \t]*\r?\n([^\r\n]+(?:\r?\n[^\r\n]+)*)/);
+    const end = list.end + wrapped.length + (next && reportResult.test(next[1]) ? next[0].length : 0);
+    return { ...list, end, steps: reply.slice(list.start, end) };
+  });
 }
 
 function parseResponsesResponse(
@@ -186,20 +245,56 @@ function parseResponsesResponse(
   }).join("");
   const { asks } = extractedAsks.parse(JSON.parse(text));
   const openIds = new Set(openItems.map(({ id }) => id));
+  const reminders = reminderLines(reply);
+  if (reminders.length === 1 && reply.slice(reminders[0].start, reminders[0].end).trim() === reply.trim()) return [];
+  const lists = checklists(reply).filter(({ start, end }) =>
+    !reminders.some((reminder) => reminder.start < end && reminder.end > start));
+  const listAsks = new Map<number, { index: number; fullQuote: boolean }>();
+  const detected: DetectedAsk[] = [];
 
-  return asks.map(({ kind, question, options, recommendation, context, excerpt, repeatOfItemId }) => {
+  for (const { kind, question, options, recommendation, context, excerpt, repeatOfItemId } of asks) {
+    const quote = findQuote(excerpt, reply);
+    if (quote && reminders.some(({ start, end }) => quote.index >= start && quote.index < end)) continue;
+
+    const repeatId = repeatOfItemId !== null && openIds.has(repeatOfItemId) ? repeatOfItemId : null;
+    const list = kind === "do" && quote && lists.find(({ start, end }) =>
+      quote.index < end && quote.index + quote[0].length > start);
     const trimmedOptions = options?.map((option) => option.trim().slice(0, LIMITS.option).trimEnd())
       .filter(Boolean).slice(0, LIMITS.options);
-    return {
+    const found: DetectedAsk = {
       kind,
       question: question.replace(/\s+/g, " ").slice(0, LIMITS.question).trimEnd(),
       options: trimmedOptions?.length ? trimmedOptions : null,
       recommendation: recommendation?.trim().slice(0, LIMITS.recommendation).trimEnd() || null,
       context: context?.trim().slice(0, LIMITS.context).trimEnd() || null,
       excerpt: sourceExcerpt(excerpt, reply),
-      repeatOfItemId: repeatOfItemId !== null && openIds.has(repeatOfItemId) ? repeatOfItemId : null,
+      repeatOfItemId: repeatId,
     };
-  });
+    if (list && quote) {
+      const fullQuote = quote.index <= list.start && quote.index + quote[0].length > list.lastStep;
+      const previous = listAsks.get(list.start);
+      if (previous && (previous.fullQuote || !fullQuote)) continue;
+      const checklist = [list.intro, list.steps].filter(Boolean).join("\n\n");
+      if (checklist.length > LIMITS.context) continue;
+      if (!fullQuote) found.question = "Can you complete this checklist?";
+      const summary = fullQuote && found.context && !found.context.includes(list.steps) ? found.context : null;
+      found.context = summary && summary.length + checklist.length + 2 <= LIMITS.context
+        ? `${summary}\n\n${checklist}`
+        : checklist;
+      found.excerpt = clipStart(checklist);
+      if (!fullQuote) {
+        found.options = null;
+        found.recommendation = null;
+        found.repeatOfItemId = null;
+      }
+      const index = previous?.index ?? detected.length;
+      detected[index] = found;
+      listAsks.set(list.start, { index, fullQuote });
+    } else if (found.context || repeatId) {
+      detected.push(found);
+    }
+  }
+  return detected;
 }
 
 const ERROR_DETAIL_MAX = 300;
