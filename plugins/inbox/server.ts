@@ -133,11 +133,18 @@ export interface MessageEventRow {
   data: unknown;
 }
 
+/** A sub-agent's event (with a parent tool call) is not in the timeline. */
+function isSubAgent(row: MessageEventRow): boolean {
+  return Boolean((row.data as { parentToolCallId?: string } | null)?.parentToolCallId);
+}
+
 function isAgentMessage(row: MessageEventRow): boolean {
-  if (row.type !== "item/completed") return false;
-  const data = row.data as { item?: { type?: string }; parentToolCallId?: string } | null;
-  // A sub-agent's message (with a parent tool call) is not in the timeline.
-  return data?.item?.type === "agentMessage" && !data.parentToolCallId;
+  if (row.type !== "item/completed" || isSubAgent(row)) return false;
+  return (row.data as { item?: { type?: string } } | null)?.item?.type === "agentMessage";
+}
+
+function isTurnStart(row: MessageEventRow): boolean {
+  return row.type === "turn/started" && !isSubAgent(row);
 }
 
 /**
@@ -145,22 +152,24 @@ function isAgentMessage(row: MessageEventRow): boolean {
  * newest first. The agent's last message before the ask in the same turn wins;
  * the card or tool call shows just below it. Without one, the agent's first
  * message after the ask in that turn. Null when the turn has neither, or the
- * rows do not reach the ask. An agent message's link sequence is the sequence
- * of its `item/completed` event.
+ * rows do not reach back to the ask. An agent message's link sequence is the
+ * sequence of its `item/completed` event.
  */
 export function pickMessageSeq(rows: readonly MessageEventRow[], at: number): number | null {
   let after: number | null = null;
   for (const row of rows) {
     if (row.createdAt >= at) {
       // A turn that starts after the ask is a later turn: its messages do not count.
-      if (row.type === "turn/started") after = null;
+      if (isTurnStart(row)) after = null;
       else if (isAgentMessage(row)) after = row.seq;
       continue;
     }
     if (isAgentMessage(row)) return row.seq;
-    if (row.type === "turn/started") return after;
+    if (isTurnStart(row)) return after;
   }
-  return after;
+  // The rows end before the ask's turn starts. With no row older than the ask,
+  // `after` may be in a later turn whose start is not in the rows.
+  return rows.some((row) => row.createdAt < at) ? after : null;
 }
 
 function localDate(date: Date): string {
@@ -392,55 +401,55 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
       }
     }
 
-    /**
-     * The link sequence of the agent message an ask at `at` belongs to, or
-     * null. Reads the newest events of the thread; see {@link pickMessageSeq}.
-     */
-    async function locateMessage(threadId: string, at: number): Promise<number | null> {
+    /** The newest message and turn events of a thread, or null on failure. */
+    async function messageEvents(threadId: string): Promise<MessageEventRow[] | null> {
       try {
-        const rows = await bb.sdk.threads.events.list({
+        return await bb.sdk.threads.events.list({
           threadId,
           types: ["item/completed", "turn/started"],
           order: "desc",
           limit: String(MESSAGE_EVENT_PAGE),
           signal: lifetime.signal,
         });
-        return pickMessageSeq(rows, at);
       } catch (error) {
         bb.log.warn(`message lookup: ${threadId}: ${errorMessage(error)}`);
         return null;
       }
     }
 
-    /** Points an item at its source message when the thread has one. */
-    async function attachMessage(item: Item): Promise<Item> {
-      const seq = await locateMessage(item.threadId, item.createdAt);
-      if (seq === null || store.get(item.id) === null) return store.get(item.id) ?? item;
-      return store.setMessageSeq(item.id, seq);
-    }
-
     /**
-     * Points the thread's live items that have no message yet at one. A tool
-     * or card ask often comes before the agent's text in its turn, so its
-     * message is known only when the turn ends.
+     * Points items at their source message, picked from one read of the
+     * thread's events for an ask at `at(item)`. An item with no message in
+     * its turn gets -1, so it is not looked up again; it opens at the end of
+     * the thread. Publishes when an item gets a message.
      */
-    async function attachMessages(threadId: string): Promise<void> {
-      const pending = store.threadItems(threadId).filter((item) => item.messageSeq === null);
+    async function attachMessages(items: Item[], at: (item: Item) => number): Promise<void> {
+      if (items.length === 0) return;
+      const rows = await messageEvents(items[0]!.threadId);
+      if (rows === null) return;
       let changed = false;
-      for (const item of pending) {
-        changed = (await attachMessage(item)).messageSeq !== null || changed;
+      for (const item of items) {
+        const current = store.get(item.id);
+        if (current === null || current.status === "closed") continue;
+        const seq = pickMessageSeq(rows, at(item));
+        store.setMessageSeq(item.id, seq ?? -1);
+        changed ||= seq !== null;
       }
       if (changed) publish();
     }
 
-    /** Creates an item, publishes, and pings once. */
-    async function createItem(input: NewItem): Promise<Item> {
-      // Insert first: callers check for races with no await before the insert.
-      let item = store.insert(input);
-      if (item.messageSeq === null) item = await attachMessage(item);
+    /**
+     * Creates an item, publishes, and pings once. `messageAt` is the time of
+     * the reply a detected item comes from. A tool or card ask comes during a
+     * turn, often before the agent's text, so it gets its message when the
+     * thread goes idle.
+     */
+    async function createItem(input: NewItem, messageAt?: number): Promise<Item> {
+      const item = store.insert(input);
       publish();
       await ping(`Inbox · ${KIND_LABEL[item.kind]}`, item.question, item.threadId);
-      return item;
+      if (messageAt !== undefined) await attachMessages([item], () => messageAt);
+      return store.get(item.id) ?? item;
     }
 
     async function sendToThread(threadId: string, text: string): Promise<void> {
@@ -579,10 +588,10 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
     const detectionChains = new Map<string, Promise<void>>();
 
     /** Runs detection for a thread after any detection already running there. */
-    function queueDetection(thread: ThreadLike, reply: string): Promise<void> {
+    function queueDetection(thread: ThreadLike, reply: string, idleAt: number): Promise<void> {
       const previous = detectionChains.get(thread.id) ?? Promise.resolve();
       const next = previous
-        .then(() => runDetection(thread, reply))
+        .then(() => runDetection(thread, reply, idleAt))
         .catch((error) => bb.log.warn(`detection: ${thread.id}: ${errorMessage(error)}`));
       detectionChains.set(thread.id, next);
       void next.finally(() => {
@@ -703,7 +712,7 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
       publish();
     }
 
-    async function runDetection(thread: ThreadLike, reply: string): Promise<void> {
+    async function runDetection(thread: ThreadLike, reply: string, idleAt: number): Promise<void> {
       const { detector } = await detection();
       if (!detector) return;
       const openItems = store.threadItems(thread.id);
@@ -780,7 +789,7 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
             recommendation: found.recommendation,
             excerpt: found.excerpt,
             source: "detected",
-          });
+          }, idleAt);
           createdIds.push(item.id);
         }
         for (const id of result.resolvedItemIds) {
@@ -944,12 +953,16 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
     });
 
     bb.events.on("thread.idle", async ({ thread, lastAssistantText }) => {
+      const idleAt = now();
       if (store.liveCards(thread.id).length > 0) await syncCards(thread.id);
-      await attachMessages(thread.id);
+      await attachMessages(
+        store.threadItems(thread.id).filter((item) => item.messageSeq === null),
+        (item) => item.createdAt,
+      );
       const reply = lastAssistantText?.trim() ?? "";
       // A child thread's final reply goes to an agent, not to the user.
       if (reply === "" || thread.parentThreadId !== null) return;
-      await queueDetection(thread, reply);
+      await queueDetection(thread, reply, idleAt);
     });
 
     const closeThreadItems = ({ thread }: { thread: { id: string } }) => {

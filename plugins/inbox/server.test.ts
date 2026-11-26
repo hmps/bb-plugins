@@ -237,8 +237,7 @@ describe("answers in the thread", () => {
     const item = await t.add("Which color should I use?");
     await t.emit(t.append("Use green"));
     expect(t.fetch).not.toHaveBeenCalled();
-    // The only history read is the item's message lookup, not an answer scan.
-    expect(t.calls("threads.events.list").filter(([args]) => args!.afterSeq !== undefined)).toHaveLength(0);
+    expect(t.calls("threads.events.list")).toHaveLength(0);
     expect(await t.list()).toEqual([item]);
   });
 });
@@ -521,19 +520,42 @@ describe("source message", () => {
     expect((await t.list())[0]!.messageSeq).toBe(14);
   });
 
-  it("points a detected item at the final reply", async () => {
+  it("marks an ask whose turn has no agent message, so it is not looked up again", async () => {
+    const t = await setup();
+    t.harness.sdk.stub("threads.events.list", async () => [turn(10, T0 - 100)] as never);
+    await t.harness.behavior.callAgentTool(TOOL_NAME, { kind: "do", question: "Rotate the key" }, { threadId: "thr_a" });
+    await t.idle("thr_a", null);
+    await t.idle("thr_a", null);
+    expect((await t.list())[0]!.messageSeq).toBe(-1);
+    expect(t.calls("threads.events.list")).toHaveLength(1);
+  });
+
+  it("points a detected item at the reply it came from, not at a later turn", async () => {
     const t = await setup({ settings: { openaiApiKey: "sk-test-key" } });
-    t.harness.sdk.stub("threads.events.list", async () => [message(22, T0 - 10), turn(10, T0 - 100)] as never);
-    t.detect.mockResolvedValueOnce(result({
-      outcome: "asks",
-      passTwoRan: true,
-      asks: [{
-        kind: "approve", question: "May I merge?", options: null,
-        recommendation: null, context: null, excerpt: null, repeatOfItemId: null,
-      }],
-    }));
+    // Newest first: a new turn started while detection ran.
+    t.harness.sdk.stub("threads.events.list", async () =>
+      [message(30, T0 + 50), turn(25, T0 + 20), message(22, T0 - 10), turn(10, T0 - 100)] as never);
+    t.detect.mockImplementationOnce(async () => {
+      t.clock.now += 100;
+      return result({
+        outcome: "asks",
+        passTwoRan: true,
+        asks: [{
+          kind: "approve", question: "May I merge?", options: null,
+          recommendation: null, context: null, excerpt: null, repeatOfItemId: null,
+        }],
+      });
+    });
     await t.idle("thr_a", "May I merge?");
     expect((await t.list())[0]).toMatchObject({ source: "detected", messageSeq: 22 });
+  });
+
+  it("does not guess when the events do not reach back to the ask", () => {
+    expect(pickMessageSeq([message(40, 400), message(35, 350)], 130)).toBeNull();
+  });
+
+  it("skips a sub-agent's turn start", () => {
+    expect(pick([turn(10, 100), message(12, 120), { ...turn(13, 125), data: { parentToolCallId: "t1" } }], 130)).toBe(12);
   });
 });
 
