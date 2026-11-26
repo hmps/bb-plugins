@@ -151,27 +151,29 @@ function isTurnStart(row: MessageEventRow): boolean {
 
 /**
  * Picks the message link sequence for an ask made at `at`, from thread events
- * newest first. The agent's last message before the ask in the same turn wins;
- * the card or tool call shows just below it. Without one, the agent's first
- * message after the ask in that turn. Null when the turn has neither, or the
- * rows do not reach back to the ask. An agent message's link sequence is the
- * sequence of its `item/completed` event.
+ * newest first: the agent's last message in the ask's turn. bb shows that
+ * message, with the turn's work (the card or tool call too) folded above it.
+ * bb cannot reveal an earlier message of the turn: it is inside the folded
+ * work, and a link to it shows "Message not found". Null when the turn has no
+ * agent message, or the rows do not reach back to the ask. An agent message's
+ * link sequence is the sequence of its `item/completed` event.
  */
 export function pickMessageSeq(rows: readonly MessageEventRow[], at: number): number | null {
-  let after: number | null = null;
+  let last: number | null = null;
   for (const row of rows) {
     if (row.createdAt >= at) {
       // A turn that starts after the ask is a later turn: its messages do not count.
-      if (isTurnStart(row)) after = null;
-      else if (isAgentMessage(row)) after = row.seq;
+      if (isTurnStart(row)) last = null;
+      else if (isAgentMessage(row)) last ??= row.seq;
       continue;
     }
+    if (last !== null) return last;
     if (isAgentMessage(row)) return row.seq;
-    if (isTurnStart(row)) return after;
+    if (isTurnStart(row)) return null;
   }
   // The rows end before the ask's turn starts. With no row older than the ask,
-  // `after` may be in a later turn whose start is not in the rows.
-  return rows.some((row) => row.createdAt < at) ? after : null;
+  // `last` may be in a later turn whose start is not in the rows.
+  return rows.some((row) => row.createdAt < at) ? last : null;
 }
 
 function localDate(date: Date): string {
