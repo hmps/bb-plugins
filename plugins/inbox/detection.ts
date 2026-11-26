@@ -187,7 +187,8 @@ function reminderLines(reply: string) {
     const heading = line.match(blockedOnYou);
     const bullet = line.match(listMarker);
     const blockers = heading?.[1] ?? (underHeading && bullet ? line.slice(bullet[0].length) : "");
-    underHeading = heading ? !blockers : underHeading && bullet !== null;
+    if (heading) underHeading = !heading[1];
+    else if (!bullet) underHeading = false;
     if (blockers && blockers.split(/\s+and\s+|;\s+/i).every((blocker) => existingItem.test(blocker))) {
       reminders.push({ start: index, end: index + line.length });
     }
