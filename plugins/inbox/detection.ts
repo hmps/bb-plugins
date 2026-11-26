@@ -175,17 +175,24 @@ function findQuote(quoted: string | null, reply: string): RegExpExecArray | null
   return new RegExp(pattern).exec(reply);
 }
 
-const reminderSummary = /^\s*(?:[-*]\s+|#{1,6}\s+)?\*{0,2}blocked on you(?::\*{0,2}|\*{1,2}:)\s*/i;
+const blockedOnYou = /^\s*(?:[-*]\s+|#{1,6}\s+)?\*{0,2}blocked on you\*{0,2}(?::\*{0,2}\s*(.*)|\s*)$/i;
 const existingItem = /\(inbox\)|\b(?:the card|decision card|(?:the |open )inbox item)\b/i;
+const listMarker = /^(?: {0,3})(?:\d+[.)]|[-+*])[ \t]+/;
 
-function isReminderSummary(passage: string): boolean {
-  const lines = passage.trim().split(/\r?\n/);
-  return lines.every((line) => {
-    const summary = line.match(reminderSummary);
-    if (!summary) return false;
-    const blockers = line.slice(summary[0].length).split(/\s+and\s+|;\s+/i);
-    return blockers.every((blocker) => existingItem.test(blocker));
-  });
+function reminderLines(reply: string) {
+  const reminders: { start: number; end: number }[] = [];
+  let underHeading = false;
+  for (const { 0: line, index } of reply.matchAll(/[^\r\n]+/g)) {
+    if (!line.trim()) continue;
+    const heading = line.match(blockedOnYou);
+    const bullet = line.match(listMarker);
+    const blockers = heading?.[1] ?? (underHeading && bullet ? line.slice(bullet[0].length) : "");
+    underHeading = heading ? !blockers : underHeading && bullet !== null;
+    if (blockers && blockers.split(/\s+and\s+|;\s+/i).every((blocker) => existingItem.test(blocker))) {
+      reminders.push({ start: index, end: index + line.length });
+    }
+  }
+  return reminders;
 }
 
 // Keep blank lines and indented continuation lines within the same Markdown list.
@@ -237,14 +244,16 @@ function parseResponsesResponse(
   }).join("");
   const { asks } = extractedAsks.parse(JSON.parse(text));
   const openIds = new Set(openItems.map(({ id }) => id));
-  if (isReminderSummary(reply)) return [];
-  const lists = checklists(reply);
+  const reminders = reminderLines(reply);
+  if (reminders.length === 1 && reply.slice(reminders[0].start, reminders[0].end).trim() === reply.trim()) return [];
+  const lists = checklists(reply).filter(({ start, end }) =>
+    !reminders.some((reminder) => reminder.start < end && reminder.end > start));
   const listAsks = new Map<number, { index: number; fullQuote: boolean }>();
   const detected: DetectedAsk[] = [];
 
   for (const { kind, question, options, recommendation, context, excerpt, repeatOfItemId } of asks) {
     const quote = findQuote(excerpt, reply);
-    if (quote && isReminderSummary(lineContaining(reply, quote.index))) continue;
+    if (quote && reminders.some(({ start, end }) => quote.index >= start && quote.index < end)) continue;
 
     const repeatId = repeatOfItemId !== null && openIds.has(repeatOfItemId) ? repeatOfItemId : null;
     const list = kind === "do" && quote && lists.find(({ start, end }) =>
@@ -285,12 +294,6 @@ function parseResponsesResponse(
     }
   }
   return detected;
-}
-
-function lineContaining(reply: string, index: number): string {
-  const start = reply.lastIndexOf("\n", index - 1) + 1;
-  const end = reply.indexOf("\n", index);
-  return reply.slice(start, end === -1 ? reply.length : end);
 }
 
 const ERROR_DETAIL_MAX = 300;

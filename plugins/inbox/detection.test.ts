@@ -94,6 +94,25 @@ describe("inbox detection", () => {
     expect((await detect(input)).asks.map(({ question }) => question)).toEqual([decision]);
   });
 
+  it.each(["## Blocked on you", "**Blocked on you**"])("skips reminder bullets under %s", async (heading) => {
+    const reminder = "The card for Swedish letters (å, ä, ö) in LinkedIn URLs.";
+    const decision = "Which region should we use for the new search index?";
+    const { detect, fetch, input } = setup([
+      "Done.",
+      heading,
+      "- The Growth Stripe price fix (inbox).\n- " + reminder + "\n- " + decision,
+      "## Changed\n\n- Fixed X.",
+    ].join("\n\n"));
+    fetch
+      .mockResolvedValueOnce(Response.json({ answers: [predicate("ask", 0.9)] }))
+      .mockResolvedValueOnce(extraction([
+        { ...ask, kind: "do", question: "Can you handle the Swedish letters card?", excerpt: reminder },
+        { ...ask, question: decision, excerpt: decision },
+      ]));
+
+    expect((await detect(input)).asks.map(({ question }) => question)).toEqual([decision]);
+  });
+
   it.each(["numbered", "bulleted"])("keeps a %s iPhone test checklist in one item", async (format) => {
     const steps = [
       "Connect your iPhone to Silicon Knight with a cable, or use the same Wi-Fi.",
