@@ -166,6 +166,30 @@ describe("page", () => {
     ).toBeTruthy();
   });
 
+  it("opens the source thread in place or in a split, at the source message", async () => {
+    const asked = item({ messageSeq: 42 });
+    const slot = renderSlot(panel, { subPath: asked.id }, { rpc: rpcFor([asked]) });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open thread: Fix login · web" }));
+    expect(slot.inspection.navigateCalls.at(-1)).toEqual({
+      method: "toThread", threadId: "thr_a", options: { messageSeq: 42 },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open thread in split: Fix login · web" }));
+    expect(slot.inspection.navigateCalls.at(-1)).toEqual({
+      method: "toThread", threadId: "thr_a", options: { split: true, messageSeq: 42 },
+    });
+  });
+
+  it("opens an older item without a source message at the end of its thread", async () => {
+    const old = item();
+    const slot = renderSlot(panel, { subPath: old.id }, { rpc: rpcFor([old]) });
+
+    fireEvent.click(await screen.findByRole("button", { name: /^Open thread in split/ }));
+    expect(slot.inspection.navigateCalls.at(-1)).toEqual({
+      method: "toThread", threadId: "thr_a", options: { split: true },
+    });
+  });
+
   it("shows the source passage of a detected item as a collapsed quote", async () => {
     const detected = item({ source: "detected", excerpt: "1. Redis\n2. Postgres\n\nShould I build option 1?" });
     renderSlot(panel, { subPath: detected.id }, { rpc: rpcFor([detected]) });

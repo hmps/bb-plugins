@@ -14,6 +14,7 @@ import {
   Markdown,
   UrlLink,
   definePluginApp,
+  experimental_useSidebarThreadSplit,
   useBbNavigate,
   type PluginNavPanelProps,
 } from "@get-bb/plugin-sdk/app";
@@ -554,6 +555,58 @@ function OptionButton({
   );
 }
 
+/**
+ * The source thread chip: open the thread in place, or beside the inbox in a
+ * split. Both open at the item's source message when it is known.
+ */
+function ThreadLinks({ item }: { item: Item }) {
+  const navigate = useBbNavigate();
+  // False on compact viewports, with splits off, and for unknown threads.
+  const { isAvailable: canSplit } = experimental_useSidebarThreadSplit(item.threadId);
+  const line = threadLine(item);
+  const open = (split: boolean) =>
+    navigate.toThread(item.threadId, {
+      ...(split ? { split: true } : {}),
+      ...(item.messageSeq !== null && item.messageSeq >= 0 ? { messageSeq: item.messageSeq } : {}),
+    });
+  const part =
+    "inline-flex items-center py-1 text-xs text-foreground transition-colors duration-150 hover:bg-state-hover focus-visible:relative focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
+
+  return (
+    <div className="-my-1 inline-flex min-w-0 max-w-full items-stretch rounded-md border border-border">
+      <button
+        type="button"
+        onClick={() => open(false)}
+        title="Open thread"
+        aria-label={`Open thread: ${line}`}
+        className={`group min-w-0 gap-1 px-2 ${canSplit ? "rounded-l-[5px]" : "rounded-[5px]"} ${part}`}
+      >
+        <span className="min-w-0 truncate">{line}</span>
+        <Icon
+          name="ArrowUpRight"
+          className="size-3 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground"
+          aria-hidden
+        />
+      </button>
+      {canSplit && (
+        <button
+          type="button"
+          onClick={() => open(true)}
+          title="Open in split"
+          aria-label={`Open thread in split: ${line}`}
+          className={`group shrink-0 rounded-r-[5px] border-l border-border px-1.5 ${part}`}
+        >
+          <Icon
+            name="Columns2"
+            className="size-3.5 text-muted-foreground transition-colors group-hover:text-foreground"
+            aria-hidden
+          />
+        </button>
+      )}
+    </div>
+  );
+}
+
 function Links({ decision }: { decision: CardDecision }) {
   if (decision.links.length === 0) return null;
   return (
@@ -1044,13 +1097,6 @@ function ItemView({
   const multi = item.source === "card" && decisions.length > 1;
   const recommendation = recommendationText(item);
   const canAccept = !closed && canAcceptRecommendation(item);
-  const openThread = () =>
-    navigate.toThread(
-      item.threadId,
-      item.messageSeq !== null && item.messageSeq >= 0
-        ? { messageSeq: item.messageSeq }
-        : undefined,
-    );
 
   const recommendationRow = recommendation && (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-3 bg-surface-raised px-4 py-3.5">
@@ -1114,20 +1160,7 @@ function ItemView({
         <header>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <KindTag kind={item.kind} large />
-            <button
-              type="button"
-              onClick={openThread}
-              title="Open thread"
-              aria-label={`Open thread: ${threadLine(item)}`}
-              className="group -my-1 inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-foreground transition-colors duration-150 hover:bg-state-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              <span className="min-w-0 truncate">{threadLine(item)}</span>
-              <Icon
-                name="ArrowUpRight"
-                className="size-3 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground"
-                aria-hidden
-              />
-            </button>
+            <ThreadLinks item={item} />
             {!closed && (
               <div className="relative -my-1 -mr-2 ml-auto flex items-center">
                 {snoozed ? (

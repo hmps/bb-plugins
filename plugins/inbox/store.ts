@@ -387,6 +387,12 @@ export function createStore(
     return require(id);
   }
 
+  /** Sets the message that the item points to in its thread. */
+  function setMessageSeq(id: string, messageSeq: number): Item {
+    db.prepare(`UPDATE items SET message_seq = ? WHERE id = ?`).run(messageSeq, id);
+    return require(id);
+  }
+
   /** Closes an item. A closed item stays as it was. */
   function close(id: string, reason: CloseReason, answer: string | null = null): Item {
     const at = now();
@@ -537,6 +543,7 @@ export function createStore(
     markRead,
     snooze,
     unsnooze,
+    setMessageSeq,
     close,
     closeThread,
     list,
