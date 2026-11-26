@@ -17,7 +17,7 @@ import {
   type Item,
 } from "./contract";
 import { createDetector as createOpenAiDetector } from "./detection";
-import { INSTRUCTIONS, TOOL_DESCRIPTION, createInboxPlugin } from "./server";
+import { INSTRUCTIONS, TOOL_DESCRIPTION, createInboxPlugin, pickMessageSeq, type MessageEventRow } from "./server";
 
 const T0 = 1_800_000_000_000;
 
@@ -237,7 +237,8 @@ describe("answers in the thread", () => {
     const item = await t.add("Which color should I use?");
     await t.emit(t.append("Use green"));
     expect(t.fetch).not.toHaveBeenCalled();
-    expect(t.calls("threads.events.list")).toHaveLength(0);
+    // The only history read is the item's message lookup, not an answer scan.
+    expect(t.calls("threads.events.list").filter(([args]) => args!.afterSeq !== undefined)).toHaveLength(0);
     expect(await t.list()).toEqual([item]);
   });
 });
@@ -480,6 +481,59 @@ describe("inbox_ask", () => {
     await t.harness.behavior.callAgentTool(TOOL_NAME, { kind: "do", question: "Rotate the key" }, { threadId: "thr_a" });
     await t.harness.behavior.emitThreadEvent("thread.archived", { thread: t.thread("thr_a") });
     expect(await t.list()).toHaveLength(0);
+  });
+});
+
+describe("source message", () => {
+  const message = (seq: number, createdAt: number, extra: Record<string, unknown> = {}): MessageEventRow => ({
+    seq, createdAt, type: "item/completed", data: { item: { type: "agentMessage" }, ...extra },
+  });
+  const turn = (seq: number, createdAt: number): MessageEventRow => ({ seq, createdAt, type: "turn/started", data: {} });
+  const tool = (seq: number, createdAt: number): MessageEventRow => ({
+    seq, createdAt, type: "item/completed", data: { item: { type: "toolCall" } },
+  });
+  /** Rows oldest first in the test, newest first as events.list returns them. */
+  const pick = (rows: MessageEventRow[], at: number) => pickMessageSeq([...rows].reverse(), at);
+
+  it("picks the agent's last message before the ask in its turn", () => {
+    expect(pick([message(5, 50), turn(10, 100), message(12, 120), tool(14, 140), message(20, 200)], 130)).toBe(12);
+  });
+
+  it("picks the agent's first message after the ask when none comes before it in the turn", () => {
+    expect(pick([message(5, 50), turn(10, 100), message(20, 200), message(25, 250), turn(30, 300), message(32, 320)], 130))
+      .toBe(20);
+    expect(pick([message(5, 50), turn(10, 100)], 130)).toBeNull();
+  });
+
+  it("skips a sub-agent's message", () => {
+    expect(pick([turn(10, 100), message(12, 120), message(13, 125, { parentToolCallId: "t1" })], 130)).toBe(12);
+  });
+
+  it("points a tool ask at its turn's message when the thread goes idle", async () => {
+    const t = await setup();
+    const rows: MessageEventRow[] = [turn(10, T0 - 100)];
+    t.harness.sdk.stub("threads.events.list", async () => [...rows].reverse() as never);
+    await t.harness.behavior.callAgentTool(TOOL_NAME, { kind: "do", question: "Rotate the key" }, { threadId: "thr_a" });
+    expect((await t.list())[0]!.messageSeq).toBeNull();
+
+    rows.push(message(14, T0 + 10));
+    await t.idle("thr_a", "Please rotate the key.");
+    expect((await t.list())[0]!.messageSeq).toBe(14);
+  });
+
+  it("points a detected item at the final reply", async () => {
+    const t = await setup({ settings: { openaiApiKey: "sk-test-key" } });
+    t.harness.sdk.stub("threads.events.list", async () => [message(22, T0 - 10), turn(10, T0 - 100)] as never);
+    t.detect.mockResolvedValueOnce(result({
+      outcome: "asks",
+      passTwoRan: true,
+      asks: [{
+        kind: "approve", question: "May I merge?", options: null,
+        recommendation: null, context: null, excerpt: null, repeatOfItemId: null,
+      }],
+    }));
+    await t.idle("thr_a", "May I merge?");
+    expect((await t.list())[0]).toMatchObject({ source: "detected", messageSeq: 22 });
   });
 });
 
