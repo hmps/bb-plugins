@@ -494,13 +494,14 @@ describe("source message", () => {
   /** Rows oldest first in the test, newest first as events.list returns them. */
   const pick = (rows: MessageEventRow[], at: number) => pickMessageSeq([...rows].reverse(), at);
 
-  it("picks the agent's last message before the ask in its turn", () => {
-    expect(pick([message(5, 50), turn(10, 100), message(12, 120), tool(14, 140), message(20, 200)], 130)).toBe(12);
+  it("picks the agent's last message in the ask's turn, which bb can reveal", () => {
+    expect(pick([message(5, 50), turn(10, 100), message(12, 120), tool(14, 140), message(20, 200)], 130)).toBe(20);
+    expect(pick([message(5, 50), turn(10, 100), message(20, 200), message(25, 250), turn(30, 300), message(32, 320)], 130))
+      .toBe(25);
   });
 
-  it("picks the agent's first message after the ask when none comes before it in the turn", () => {
-    expect(pick([message(5, 50), turn(10, 100), message(20, 200), message(25, 250), turn(30, 300), message(32, 320)], 130))
-      .toBe(20);
+  it("picks the message before the ask when the turn ends with the ask", () => {
+    expect(pick([message(5, 50), turn(10, 100), message(12, 120), tool(14, 140)], 130)).toBe(12);
     expect(pick([message(5, 50), turn(10, 100)], 130)).toBeNull();
   });
 
