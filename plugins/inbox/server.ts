@@ -63,8 +63,10 @@ const DISCOVERY_PAGE = 100;
 const NO_KEY_REASON = "no OpenAI API key set";
 const NUDGE_DATE_KEY = "nudge-date";
 const ANSWER_EVENT_PAGE = 100;
-/** Events read back from an ask to find the message it belongs to. */
-const MESSAGE_EVENT_PAGE = 200;
+/** Events per read when finding an ask's message; the server allows 100. */
+const MESSAGE_EVENT_PAGE = 100;
+/** Pages read back at most when finding an ask's message. */
+const MESSAGE_EVENT_PAGES = 5;
 
 const KIND_LABEL: Record<ItemKind, string> = {
   decide: "Decide",
@@ -401,16 +403,29 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
       }
     }
 
-    /** The newest message and turn events of a thread, or null on failure. */
-    async function messageEvents(threadId: string): Promise<MessageEventRow[] | null> {
+    /**
+     * The newest message and turn events of a thread, newest first, back to a
+     * turn start before `oldestAt` or at most MESSAGE_EVENT_PAGES pages. Null
+     * on failure.
+     */
+    async function messageEvents(threadId: string, oldestAt: number): Promise<MessageEventRow[] | null> {
+      const rows: MessageEventRow[] = [];
       try {
-        return await bb.sdk.threads.events.list({
-          threadId,
-          types: ["item/completed", "turn/started"],
-          order: "desc",
-          limit: String(MESSAGE_EVENT_PAGE),
-          signal: lifetime.signal,
-        });
+        for (let page = 0; page < MESSAGE_EVENT_PAGES; page++) {
+          const last = rows.at(-1);
+          const next = await bb.sdk.threads.events.list({
+            threadId,
+            types: ["item/completed", "turn/started"],
+            order: "desc",
+            limit: String(MESSAGE_EVENT_PAGE),
+            ...(last ? { beforeSeq: String(last.seq) } : {}),
+            signal: lifetime.signal,
+          });
+          rows.push(...next);
+          if (next.length < MESSAGE_EVENT_PAGE) break;
+          if (next.some((row) => row.createdAt < oldestAt && isTurnStart(row))) break;
+        }
+        return rows;
       } catch (error) {
         bb.log.warn(`message lookup: ${threadId}: ${errorMessage(error)}`);
         return null;
@@ -425,7 +440,7 @@ export function createInboxPlugin(deps: InboxDeps = {}) {
      */
     async function attachMessages(items: Item[], at: (item: Item) => number): Promise<void> {
       if (items.length === 0) return;
-      const rows = await messageEvents(items[0]!.threadId);
+      const rows = await messageEvents(items[0]!.threadId, Math.min(...items.map(at)));
       if (rows === null) return;
       let changed = false;
       for (const item of items) {
