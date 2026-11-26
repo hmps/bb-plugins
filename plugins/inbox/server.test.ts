@@ -511,7 +511,11 @@ describe("source message", () => {
   it("points a tool ask at its turn's message when the thread goes idle", async () => {
     const t = await setup();
     const rows: MessageEventRow[] = [turn(10, T0 - 100)];
-    t.harness.sdk.stub("threads.events.list", async () => [...rows].reverse() as never);
+    t.harness.sdk.stub("threads.events.list", async ({ limit }) => {
+      // The bb server refuses a limit over 100.
+      if (Number(limit) > 100) throw new Error("Thread event limit cannot exceed 100");
+      return [...rows].reverse() as never;
+    });
     await t.harness.behavior.callAgentTool(TOOL_NAME, { kind: "do", question: "Rotate the key" }, { threadId: "thr_a" });
     expect((await t.list())[0]!.messageSeq).toBeNull();
 
@@ -548,6 +552,20 @@ describe("source message", () => {
     });
     await t.idle("thr_a", "May I merge?");
     expect((await t.list())[0]).toMatchObject({ source: "detected", messageSeq: 22 });
+  });
+
+  it("reads older pages until it reaches the ask's turn", async () => {
+    const t = await setup();
+    // Oldest first: the ask's turn, the agent's message, then 150 tool results.
+    const rows: MessageEventRow[] = [turn(1, T0 - 100), message(2, T0 - 50)];
+    for (let seq = 3; seq < 153; seq++) rows.push(tool(seq, T0 + seq));
+    t.harness.sdk.stub("threads.events.list", async ({ limit, beforeSeq }) =>
+      rows.filter((row) => beforeSeq === undefined || row.seq < Number(beforeSeq))
+        .reverse().slice(0, Number(limit)) as never);
+    await t.harness.behavior.callAgentTool(TOOL_NAME, { kind: "do", question: "Rotate the key" }, { threadId: "thr_a" });
+    await t.idle("thr_a", null);
+    expect((await t.list())[0]!.messageSeq).toBe(2);
+    expect(t.calls("threads.events.list")).toHaveLength(2);
   });
 
   it("does not guess when the events do not reach back to the ask", () => {
