@@ -62,6 +62,86 @@ function setup(reply: string, openItems: DetectionOpenItem[] = [], timeoutMs?: n
 }
 
 describe("inbox detection", () => {
+  it("drops a SITREP reminder even when the referenced cards are in another thread", async () => {
+    const reminder = "the Growth Stripe price fix (inbox) and the card for Swedish letters (å, ä, ö) in LinkedIn URLs.";
+    const { detect, fetch, input } = setup(`**Blocked on you:** ${reminder}`);
+    fetch
+      .mockResolvedValueOnce(Response.json({ answers: [predicate("ask", 0.9)] }))
+      .mockResolvedValueOnce(extraction([{
+        ...ask,
+        kind: "do",
+        question: "Can you handle the card about Swedish letters (å, ä, ö) in LinkedIn URLs?",
+        context: "The reply says this card is blocked on you.",
+        options: null,
+        recommendation: null,
+        excerpt: "the card for Swedish letters (å, ä, ö) in LinkedIn URLs.",
+      }]));
+
+    expect(await detect(input)).toMatchObject({ outcome: "no-ask", asks: [] });
+  });
+
+  it("keeps a new decision next to an existing-card reminder", async () => {
+    const reminder = "Blocked on you: the rollout decision card.";
+    const decision = "Which region should we use for the new search index?";
+    const { detect, fetch, input } = setup(reminder + "\n\n" + decision);
+    fetch
+      .mockResolvedValueOnce(Response.json({ answers: [predicate("ask", 0.9)] }))
+      .mockResolvedValueOnce(extraction([
+        { ...ask, question: "Can you handle the rollout card?", excerpt: "the rollout decision card." },
+        { ...ask, question: decision, excerpt: decision },
+      ]));
+
+    expect((await detect(input)).asks.map(({ question }) => question)).toEqual([decision]);
+  });
+
+  it.each(["numbered", "bulleted"])("keeps a %s iPhone test checklist in one item", async (format) => {
+    const steps = [
+      "Connect your iPhone to Silicon Knight with a cable, or use the same Wi-Fi.",
+      "In Xcode, pick your **iPhone** as the run destination at the top of the window, not a simulator.",
+      "Press Run (⌘R). If Xcode asks, select your team for the app and for the 4 extensions.",
+      "On the iPhone, open **Settings → General → VPN & Device Management** and trust your developer profile, if iOS asks.",
+      "Make sure the App ID has **Sign in with Apple** and **Push Notifications**.",
+    ].map((step, index) => `${format === "numbered" ? `${index + 1}.` : "-"} ${step}`);
+    const intro = "To finish the inbox task:";
+    const report = "When Teed opens on the phone, tell me. If Xcode shows a signing or entitlement error, paste the text here.";
+    const checklist = `${intro}\n\n${steps.join(format === "numbered" ? "\n" : "\n\n")}\n\n${report}`;
+    const { detect, fetch, input } = setup(
+      "Yes, Teed runs, and the welcome screen looks right. But this is the **Simulator** " +
+      '(the Mac window with "iOS 27.0" at the top), not your iPhone. The simulator needs no signing, ' +
+      "so it does not create the profiles that I need to install on your phone.\n\n" + checklist,
+    );
+    fetch
+      .mockResolvedValueOnce(Response.json({ answers: [predicate("ask", 0.9)] }))
+      .mockResolvedValueOnce(extraction([...steps, report].map((step) => ({
+        ...ask,
+        kind: "do",
+        question: step,
+        context: null,
+        options: null,
+        recommendation: null,
+        excerpt: step,
+      }))));
+
+    const result = await detect(input);
+    expect(result.outcome).toBe("asks");
+    expect(result.asks).toHaveLength(1);
+    expect(result.asks[0].context).toBe(checklist);
+  });
+
+  it("drops a new ask when extraction cannot supply context", async () => {
+    const { detect, fetch, input } = setup("Can you handle this?");
+    fetch
+      .mockResolvedValueOnce(Response.json({ answers: [predicate("ask", 0.9)] }))
+      .mockResolvedValueOnce(extraction([{
+        ...ask,
+        question: input.reply,
+        context: null,
+        excerpt: input.reply,
+      }]));
+
+    expect(await detect(input)).toMatchObject({ outcome: "no-ask", asks: [] });
+  });
+
   it("skips extraction below the ask threshold", async () => {
     const { detect, fetch, input } = setup("The build passed.");
     fetch.mockResolvedValueOnce(Response.json({ answers: [predicate("ask", 0.59)] }));
