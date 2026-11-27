@@ -205,11 +205,12 @@ function reminderLines(reply: string) {
 // An optional tip: the user may do it, nothing waits on it.
 const optionalTip = /\b(?:while you wait|in the meantime|meanwhile|you can|you could|if you (?:want|like|wish|prefer)|you (?:may|might) want to|feel free|optional(?:ly)?|try)\b/i;
 // Words that say work waits on the user, or that ask for a report back.
-const blockingWords = /\b(?:blocked on you|needs? you|I need|waiting (?:for|on) you|approv\w*|only you can|you (?:must|need to|have to)|tell me|let me know|report back|paste|send me)\b/i;
+const blockingWords = /\b(?:blocked on you|needs? you|I need|waiting (?:for|on) your?|(?<!\bno )approv\w*|only you can|you(?:'ll| will)? (?:must|need to|have to)|tell me|let me know|report back|paste|send me)\b/i;
 
 /** The sentences of the reply that the span [start, end) touches. */
 function sentencesAround(reply: string, start: number, end: number): string {
-  const sentences = [...reply.matchAll(/[^.!?\r\n]+[.!?]*/g)]
+  // A stop inside a word, as in a domain name, does not end the sentence.
+  const sentences = [...reply.matchAll(/(?:[^.!?\r\n]|[.!?](?=[^\s.!?]))+[.!?]*/g)]
     .filter(({ index, 0: text }) => index < end && index + text.length > start);
   return sentences.map(({ 0: text }) => text.trim()).join(" ");
 }
@@ -278,10 +279,10 @@ function parseResponsesResponse(
     const list = kind === "do" && quote && lists.find(({ start, end }) =>
       quote.index < end && quote.index + quote[0].length > start);
     if (quote) {
-      // A tip is judged on the sentence that holds it, or on the intro of its checklist.
+      // A tip is found in the sentence that holds it, or in the intro of its checklist.
+      // Any blocking word in the reply keeps the ask: a missed item costs more there.
       const lead = list ? list.intro : sentencesAround(reply, quote.index, quote.index + quote[0].length);
-      const passage = list ? `${list.intro}\n${list.steps}` : lead;
-      if (optionalTip.test(lead) && !blockingWords.test(passage)) continue;
+      if (optionalTip.test(lead) && !blockingWords.test(reply)) continue;
     }
     const trimmedOptions = options?.map((option) => option.trim().slice(0, LIMITS.option).trimEnd())
       .filter(Boolean).slice(0, LIMITS.options);

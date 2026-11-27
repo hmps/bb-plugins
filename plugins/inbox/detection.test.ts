@@ -165,6 +165,8 @@ describe("inbox detection", () => {
     ["The fix is on main.", "You may want to reload the page to see it."],
     ["The deploy runs.", "In the meantime, you could read the release notes."],
     ["The build is installed on Ethereal-Titan.", "Try opening the inbox and pressing j to move down."],
+    ["A Crew investigates the missing Fia email.", "While you wait, open mail.example.com and check your spam folder."],
+    ["No approval is required.", "Try opening the inbox."],
   ])("makes no item for an optional tip: %s %s", async (status, tip) => {
     const { detect, fetch, input } = setup(`${status} ${tip}`);
     fetch
@@ -177,6 +179,8 @@ describe("inbox detection", () => {
   it.each([
     ["The Stripe key expired.", "I need you to paste the new key in the plugin settings."],
     ["The PR is ready.", "If you want it live today, approve the deploy of inbox 0.1.9."],
+    ["I am waiting for your test result before I can ship.", "Please try signing in on your iPhone."],
+    ["The import is paused.", "Meanwhile, you will need to renew your session before I can finish it."],
   ])("keeps a real ask: %s %s", async (status, request) => {
     const { detect, fetch, input } = setup(`${status} ${request}`);
     fetch
@@ -189,6 +193,7 @@ describe("inbox detection", () => {
   it.each([
     ["makes no item for", "", 0],
     ["keeps one item for", "\n\nWhen you have tried them, tell me what you see.", 1],
+    ["keeps one item for", "\n\nPlease tell me what appears.", 1],
   ])("%s a Try these: list after an install", async (_, report, count) => {
     const steps = ["- Open the inbox.", "- Press j to move down.", "- Press Enter to open an item."];
     const { detect, fetch, input } = setup(`Inbox 0.1.9 is installed. Try these:\n\n${steps.join("\n")}${report}`);
