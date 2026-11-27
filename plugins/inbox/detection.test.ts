@@ -149,6 +149,56 @@ describe("inbox detection", () => {
     expect(result.asks[0].context).toBe(checklist);
   });
 
+  const doAsk = (excerpt: string): DetectedAsk => ({
+    ...ask,
+    kind: "do",
+    question: excerpt,
+    options: null,
+    recommendation: null,
+    context: "A task for the user.",
+    excerpt,
+  });
+
+  it.each([
+    ["A Crew investigates the missing Fia email now.", "While you wait, check your spam folder for a Fia email."],
+    ["I restarted the worker.", "If you want, you can clear the browser cache too."],
+    ["The fix is on main.", "You may want to reload the page to see it."],
+    ["The deploy runs.", "In the meantime, you could read the release notes."],
+    ["The build is installed on Ethereal-Titan.", "Try opening the inbox and pressing j to move down."],
+  ])("makes no item for an optional tip: %s %s", async (status, tip) => {
+    const { detect, fetch, input } = setup(`${status} ${tip}`);
+    fetch
+      .mockResolvedValueOnce(Response.json({ answers: [predicate("ask", 0.9)] }))
+      .mockResolvedValueOnce(extraction([doAsk(tip.replace(/^.*?, /, ""))]));
+
+    expect(await detect(input)).toMatchObject({ outcome: "no-ask", asks: [] });
+  });
+
+  it.each([
+    ["The Stripe key expired.", "I need you to paste the new key in the plugin settings."],
+    ["The PR is ready.", "If you want it live today, approve the deploy of inbox 0.1.9."],
+  ])("keeps a real ask: %s %s", async (status, request) => {
+    const { detect, fetch, input } = setup(`${status} ${request}`);
+    fetch
+      .mockResolvedValueOnce(Response.json({ answers: [predicate("ask", 0.9)] }))
+      .mockResolvedValueOnce(extraction([doAsk(request)]));
+
+    expect((await detect(input)).asks.map(({ question }) => question)).toEqual([request]);
+  });
+
+  it.each([
+    ["makes no item for", "", 0],
+    ["keeps one item for", "\n\nWhen you have tried them, tell me what you see.", 1],
+  ])("%s a Try these: list after an install", async (_, report, count) => {
+    const steps = ["- Open the inbox.", "- Press j to move down.", "- Press Enter to open an item."];
+    const { detect, fetch, input } = setup(`Inbox 0.1.9 is installed. Try these:\n\n${steps.join("\n")}${report}`);
+    fetch
+      .mockResolvedValueOnce(Response.json({ answers: [predicate("ask", 0.9)] }))
+      .mockResolvedValueOnce(extraction(steps.map((step) => doAsk(step.slice(2)))));
+
+    expect((await detect(input)).asks).toHaveLength(count);
+  });
+
   it("drops a new ask when extraction cannot supply context", async () => {
     const { detect, fetch, input } = setup("Can you handle this?");
     fetch

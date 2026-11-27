@@ -17,7 +17,13 @@ const askInstructions =
   "An ask is a decision, approval, or action the reply needs from the user. " +
   "Ignore status reports, FYIs, rhetorical questions, and questions the agent will answer itself. " +
   "A summary that points to an existing inbox item or decision card is a reminder, even if the item " +
-  "is in another thread and absent from openItems. Do not treat that reference as an ask.";
+  "is in another thread and absent from openItems. Do not treat that reference as an ask. " +
+  "An ask exists only when work cannot continue until the user acts or decides, or the reply says the " +
+  "user must do it. Optional tips and suggestions (\"while you wait\", \"you can\", \"if you want\", " +
+  "\"try\", \"you may want to\"), steps the user may take while an agent already works on the problem, and " +
+  "test hints that only help are not asks. A \"Try these:\" list is an ask only when the reply asks the user " +
+  "to report back or approve. When in doubt and the reply has no blocking words, such as \"blocked on you\", " +
+  "\"needs you\", \"I need\", \"waiting for your\", \"approve\", or \"only you can\", it is not an ask.";
 
 const noveltyChoices = [
   { value: "new", description: "At least one ask needs a new inbox item." },
@@ -196,6 +202,18 @@ function reminderLines(reply: string) {
   return reminders;
 }
 
+// An optional tip: the user may do it, nothing waits on it.
+const optionalTip = /\b(?:while you wait|in the meantime|meanwhile|you can|you could|if you (?:want|like|wish|prefer)|you (?:may|might) want to|feel free|optional(?:ly)?|try)\b/i;
+// Words that say work waits on the user, or that ask for a report back.
+const blockingWords = /\b(?:blocked on you|needs? you|I need|waiting (?:for|on) you|approv\w*|only you can|you (?:must|need to|have to)|tell me|let me know|report back|paste|send me)\b/i;
+
+/** The sentences of the reply that the span [start, end) touches. */
+function sentencesAround(reply: string, start: number, end: number): string {
+  const sentences = [...reply.matchAll(/[^.!?\r\n]+[.!?]*/g)]
+    .filter(({ index, 0: text }) => index < end && index + text.length > start);
+  return sentences.map(({ 0: text }) => text.trim()).join(" ");
+}
+
 // Keep blank lines and indented continuation lines within the same Markdown list.
 const listItem = /^ {0,3}(?:\d+[.)]|[-+*])[ \t]+\S.*$/gm;
 const listContinuation = /^(?:[ \t]*|[ \t]+[^\r\n]*)$/;
@@ -259,6 +277,12 @@ function parseResponsesResponse(
     const repeatId = repeatOfItemId !== null && openIds.has(repeatOfItemId) ? repeatOfItemId : null;
     const list = kind === "do" && quote && lists.find(({ start, end }) =>
       quote.index < end && quote.index + quote[0].length > start);
+    if (quote) {
+      // A tip is judged on the sentence that holds it, or on the intro of its checklist.
+      const lead = list ? list.intro : sentencesAround(reply, quote.index, quote.index + quote[0].length);
+      const passage = list ? `${list.intro}\n${list.steps}` : lead;
+      if (optionalTip.test(lead) && !blockingWords.test(passage)) continue;
+    }
     const trimmedOptions = options?.map((option) => option.trim().slice(0, LIMITS.option).trimEnd())
       .filter(Boolean).slice(0, LIMITS.options);
     const found: DetectedAsk = {
