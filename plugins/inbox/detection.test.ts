@@ -178,6 +178,7 @@ describe("inbox detection", () => {
 
   it.each([
     ["The Stripe key expired.", "I need you to paste the new key in the plugin settings."],
+    ["The banner says “Try refreshing the page.”", "Which region should we use for the backup, EU or US?"],
     ["The PR is ready.", "If you want it live today, approve the deploy of inbox 0.1.9."],
     ["I am waiting for your test result before I can ship.", "Please try signing in on your iPhone."],
     ["The import is paused.", "Meanwhile, you will need to renew your session before I can finish it."],
@@ -201,7 +202,9 @@ describe("inbox detection", () => {
       .mockResolvedValueOnce(Response.json({ answers: [predicate("ask", 0.9)] }))
       .mockResolvedValueOnce(extraction(steps.map((step) => doAsk(step.slice(2)))));
 
-    expect((await detect(input)).asks).toHaveLength(count);
+    const { asks } = await detect(input);
+    expect(asks).toHaveLength(count);
+    if (report) expect(asks[0].context).toContain(report.trim());
   });
 
   it("drops a new ask when extraction cannot supply context", async () => {
