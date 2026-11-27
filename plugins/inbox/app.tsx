@@ -1226,11 +1226,17 @@ function ItemView({
     >
       <article className="mx-auto w-full max-w-2xl" aria-busy={busy}>
         <header>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <KindTag kind={item.kind} large />
-            <ThreadLinks item={item} />
+          {/* One line from md up: a long thread title truncates, so the
+              actions keep their place from item to item. */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 md:flex-nowrap">
+            <div className="flex min-w-0 flex-1 items-center gap-3">
+              <span className="shrink-0">
+                <KindTag kind={item.kind} large />
+              </span>
+              <ThreadLinks item={item} />
+            </div>
             {!closed && (
-              <div className="relative -my-1 -mr-2 ml-auto flex items-center">
+              <div className="relative -my-1 -mr-2 ml-auto flex shrink-0 items-center">
                 {snoozed ? (
                   <Button
                     size="sm"
