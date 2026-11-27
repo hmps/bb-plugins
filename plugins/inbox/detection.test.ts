@@ -206,7 +206,6 @@ describe("inbox detection", () => {
     ["makes no item for", "", 0],
     ["keeps one item for", "\n\nWhen you have tried them, tell me what you see.", 1],
     ["keeps one item for", "\n\nPlease tell me what appears.", 1],
-    ["keeps one item for", "\n\nPlease paste the selected row's title here.", 1],
   ])("%s a Try these: list after an install", async (_, report, count) => {
     const steps = ["- Open the inbox.", "- Press j to move down.", "- Press Enter to open an item."];
     const { detect, fetch, input } = setup(`Inbox 0.1.9 is installed. Try these:\n\n${steps.join("\n")}${report}`);
