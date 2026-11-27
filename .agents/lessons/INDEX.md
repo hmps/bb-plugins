@@ -12,3 +12,4 @@ Read the records whose scope matches your change. Legacy notes stay in
 | [plugin-rollback-copy-path](plugin-rollback-copy-path.md) | Rollback copy before a git plugin update on Ethereal-Titan | Copy `~/.bb/plugins/cache/git/github.com/hmps/bb-plugins/<sha>`; the plugin data dir holds no source. |
 | [bb-message-link-mid-turn](bb-message-link-mid-turn.md) | Opening a thread at a message (`messageSeq`, `#msg=`) | Link to the agent's last message of the turn; bb shows "Message not found" for a mid-turn one. |
 | [sdk-fake-skips-server-limits](sdk-fake-skips-server-limits.md) | Server tests with `bb.sdk` stubs | Make each stub refuse what the server refuses, such as an events limit over 100. |
+| [inbox-live-dismiss-advances](inbox-live-dismiss-advances.md) | Live browser checks of inbox actions | Make test items read and adjacent; check the title before each action; undo read marks after. |
