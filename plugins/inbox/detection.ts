@@ -218,7 +218,7 @@ function sentencesAround(reply: string, start: number, end: number): string {
 // Keep blank lines and indented continuation lines within the same Markdown list.
 const listItem = /^ {0,3}(?:\d+[.)]|[-+*])[ \t]+\S.*$/gm;
 const listContinuation = /^(?:[ \t]*|[ \t]+[^\r\n]*)$/;
-const reportResult = /^(?:(?:when|once|after|if)\b.*?\b(?:tell me|let me know|report|paste|send|share)|please\b.*?\b(?:tell me|let me know|report))\b/is;
+const reportResult = /^(?:(?:when|once|after|if)\b.*?\b(?:tell me|let me know|report|paste|send|share)|please\b.*?\b(?:tell me|let me know|report|paste))\b/is;
 
 function checklists(reply: string) {
   const lists: { start: number; lastStep: number; end: number; intro: string }[] = [];
