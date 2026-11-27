@@ -348,6 +348,12 @@ describe("page", () => {
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "e" });
     fireEvent.keyDown(document.body, { key: "e", metaKey: true });
     fireEvent.keyDown(document.body, { key: "e", ctrlKey: true });
+    fireEvent.keyDown(document.body, { key: "e", shiftKey: true });
+    // An open Snooze menu takes the key.
+    fireEvent.click(screen.getByRole("button", { name: "Snooze" }));
+    fireEvent.keyDown(screen.getByRole("menuitem", { name: /Tomorrow/ }), { key: "e" });
+    fireEvent.click(screen.getByRole("button", { name: "Snooze" }));
+    expect(screen.queryByRole("menu")).toBeNull();
     expect(callsTo(slot, "items_dismiss")).toEqual([]);
 
     fireEvent.keyDown(document.body, { key: "e" });
@@ -357,5 +363,26 @@ describe("page", () => {
     // The confirmation floats over the page, out of the layout flow.
     const toast = await screen.findByText("Dismissed");
     expect(toast.closest("[role=status]")!.className).toContain("absolute");
+  });
+
+  it("sends e to the item page the user last used when two are open", async () => {
+    const first = item({ id: "inb_0000000001", readAt: NOW, question: "First?" });
+    const second = item({ id: "inb_0000000002", readAt: NOW, question: "Second?" });
+    const dismiss = (input: unknown) => ({
+      ...(idOf(input) === first.id ? first : second),
+      status: "closed",
+      closeReason: "dismissed",
+    });
+    const rpc = { ...rpcFor([first, second]), items_dismiss: dismiss };
+    const one = renderSlot(panel, { subPath: first.id }, { rpc });
+    const two = renderSlot(panel, { subPath: second.id }, { rpc });
+    const heading = await screen.findByRole("heading", { name: "Second?" });
+
+    fireEvent.pointerDown(heading);
+    fireEvent.keyDown(document.body, { key: "e" });
+    await waitFor(() =>
+      expect(callsTo(two, "items_dismiss")).toEqual([{ id: second.id }]),
+    );
+    expect(callsTo(one, "items_dismiss")).toEqual([]);
   });
 });

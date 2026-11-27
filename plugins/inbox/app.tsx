@@ -992,6 +992,25 @@ function SnoozeMenu({
   );
 }
 
+/**
+ * The item page the user last clicked or focused. With two inbox pages in a
+ * split, a key pressed outside both goes to this one.
+ */
+let activePane: HTMLElement | null = null;
+
+function markActivePane(event: { currentTarget: HTMLElement }) {
+  activePane = event.currentTarget;
+}
+
+/** True when a key on `target` is for this item page and no other. */
+function ownsKey(pane: HTMLElement, target: EventTarget | null): boolean {
+  if (target instanceof Node && pane.contains(target)) return true;
+  if (target instanceof Element && target.closest("[data-inbox-pane]")) {
+    return false;
+  }
+  return !activePane?.isConnected || activePane === pane;
+}
+
 /** The item ids in list order: open first, then snoozed. */
 function listOrder(items: readonly Item[], now: number): string[] {
   const { open, snoozed } = groupItems(items, now);
@@ -1090,14 +1109,24 @@ function ItemView({
   dismissRef.current = dismiss;
 
   // e dismisses the open item, as "archive" does in a mail app.
+  const paneRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
+      if (
+        event.defaultPrevented ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey
+      ) {
         return;
       }
       if (event.key !== "e" || event.repeat) return;
       if (isEditable(event.target)) return;
-      // A second page in a split sees the event as handled and skips it.
+      const pane = paneRef.current;
+      if (!pane || !ownsKey(pane, event.target)) return;
+      // An open menu (Snooze) takes the keys, not the page.
+      if (pane.querySelector('[role="menu"]')) return;
       event.preventDefault();
       dismissRef.current();
     };
@@ -1188,7 +1217,13 @@ function ItemView({
       : (item.options?.length ?? 0) > 0;
 
   return (
-    <div className="h-full overflow-y-auto px-4 py-5 md:px-8 md:py-8">
+    <div
+      ref={paneRef}
+      data-inbox-pane=""
+      onPointerDown={markActivePane}
+      onFocus={markActivePane}
+      className="h-full overflow-y-auto px-4 py-5 md:px-8 md:py-8"
+    >
       <article className="mx-auto w-full max-w-2xl" aria-busy={busy}>
         <header>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
