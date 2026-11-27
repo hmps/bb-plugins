@@ -48,6 +48,10 @@ An item also closes when its thread is archived or deleted, when its card
 settles outside the inbox, or when detection sees a later reply that
 resolves it (tool and detected items only).
 
+Keys on the inbox page (not while you type, not with a modifier): `j` and
+`k` go to the next and previous item, and `e` dismisses the open item. The
+confirmation floats over the bottom of the page, so the buttons do not move.
+
 ## Pings
 
 One push notification per new item, any source: title `Inbox · Decide` (or
