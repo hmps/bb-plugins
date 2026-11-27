@@ -176,6 +176,17 @@ describe("inbox detection", () => {
     expect(await detect(input)).toMatchObject({ outcome: "no-ask", asks: [] });
   });
 
+  it("reads the whole sentence around an e.g. for an optional tip", async () => {
+    const { detect, fetch, input } = setup(
+      "The build is installed. While you wait, you can do a quick local check, e.g., open the inbox and press j.",
+    );
+    fetch
+      .mockResolvedValueOnce(Response.json({ answers: [predicate("ask", 0.9)] }))
+      .mockResolvedValueOnce(extraction([doAsk("open the inbox and press j.")]));
+
+    expect(await detect(input)).toMatchObject({ outcome: "no-ask", asks: [] });
+  });
+
   it.each([
     ["The Stripe key expired.", "I need you to paste the new key in the plugin settings."],
     ["The banner says “Try refreshing the page.”", "Which region should we use for the backup, EU or US?"],
