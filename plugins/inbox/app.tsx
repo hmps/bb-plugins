@@ -8,7 +8,7 @@
 //     answer, finish, snooze, dismiss, or hand it on.
 // The three share one store (hooks/use-inbox.ts). This file talks to the
 // server only through the RPC contract, and imports its types only.
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   Markdown,
@@ -339,16 +339,26 @@ function DetectionStatus() {
   );
 }
 
-function Flash({ text }: { text: string | null }) {
-  if (!text) return null;
+/**
+ * The confirmation after an action. It floats over the bottom of the page,
+ * out of the layout flow, so nothing moves when it shows or goes away.
+ */
+function Flash({ text, count }: { text: string | null; count: number }) {
   return (
-    <p
+    <div
       role="status"
-      className="flex items-center gap-2 rounded-lg bg-surface-recessed px-3 py-2 text-[13px] text-foreground motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1 motion-safe:duration-200"
+      className="pointer-events-none absolute inset-x-0 bottom-5 z-10 flex justify-center px-4"
     >
-      <CheckGlyph className="size-3.5 shrink-0 text-success" strokeWidth={2.5} />
-      {text}
-    </p>
+      {text && (
+        <p
+          key={count}
+          className="flex items-center gap-2 rounded-lg border border-border bg-surface-raised px-3 py-2 text-[13px] text-foreground shadow-lg motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-safe:duration-200"
+        >
+          <CheckGlyph className="size-3.5 shrink-0 text-success" strokeWidth={2.5} />
+          {text}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -366,7 +376,7 @@ function TrayEmblem({ cleared }: { cleared: boolean }) {
   );
 }
 
-function InboxHome({ flash }: { flash: string | null }) {
+function InboxHome() {
   const { items, loaded, error } = useInbox();
   const now = useNow();
   const compact = useIsCompactViewport();
@@ -381,9 +391,6 @@ function InboxHome({ flash }: { flash: string | null }) {
 
   return (
     <div className="flex h-full flex-col overflow-y-auto p-4 md:p-6">
-      <div className="mx-auto w-full max-w-2xl">
-        <Flash text={flash} />
-      </div>
       {showList ? (
         <div className="mx-auto w-full max-w-2xl flex-1 pt-2">
           <ItemList selectedId={null} />
@@ -985,6 +992,25 @@ function SnoozeMenu({
   );
 }
 
+/**
+ * The item page the user last clicked or focused. With two inbox pages in a
+ * split, a key pressed outside both goes to this one.
+ */
+let activePane: HTMLElement | null = null;
+
+function markActivePane(event: { currentTarget: HTMLElement }) {
+  activePane = event.currentTarget;
+}
+
+/** True when a key on `target` is for this item page and no other. */
+function ownsKey(pane: HTMLElement, target: EventTarget | null): boolean {
+  if (target instanceof Node && pane.contains(target)) return true;
+  if (target instanceof Element && target.closest("[data-inbox-pane]")) {
+    return false;
+  }
+  return !activePane?.isConnected || activePane === pane;
+}
+
 /** The item ids in list order: open first, then snoozed. */
 function listOrder(items: readonly Item[], now: number): string[] {
   const { open, snoozed } = groupItems(items, now);
@@ -1072,6 +1098,42 @@ function ItemView({
     }
   };
 
+  const dismiss = () => {
+    if (!item || busy || item.status === "closed") return;
+    void run("Dismissed", () =>
+      rpc.call("items_dismiss", { id: item.id }),
+      "header",
+    );
+  };
+  const dismissRef = useRef(dismiss);
+  dismissRef.current = dismiss;
+
+  // e dismisses the open item, as "archive" does in a mail app.
+  const paneRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey
+      ) {
+        return;
+      }
+      if (event.key !== "e" || event.repeat) return;
+      if (isEditable(event.target)) return;
+      const pane = paneRef.current;
+      if (!pane || !ownsKey(pane, event.target)) return;
+      // An open menu (Snooze) takes the keys, not the page.
+      if (pane.querySelector('[role="menu"]')) return;
+      event.preventDefault();
+      dismissRef.current();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
   if (!item) {
     return (
       <div className="h-full overflow-y-auto p-4 md:p-5">
@@ -1155,7 +1217,13 @@ function ItemView({
       : (item.options?.length ?? 0) > 0;
 
   return (
-    <div className="h-full overflow-y-auto px-4 py-5 md:px-8 md:py-8">
+    <div
+      ref={paneRef}
+      data-inbox-pane=""
+      onPointerDown={markActivePane}
+      onFocus={markActivePane}
+      className="h-full overflow-y-auto px-4 py-5 md:px-8 md:py-8"
+    >
       <article className="mx-auto w-full max-w-2xl" aria-busy={busy}>
         <header>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -1200,14 +1268,13 @@ function ItemView({
                   variant="ghost"
                   disabled={busy}
                   className="text-muted-foreground"
-                  onClick={() =>
-                    void run("Dismissed", () =>
-                      rpc.call("items_dismiss", { id: item.id }),
-                      "header",
-                    )
-                  }
+                  aria-keyshortcuts="E"
+                  onClick={dismiss}
                 >
                   Dismiss
+                  <span aria-hidden className="contents">
+                    <Kbd>E</Kbd>
+                  </span>
                 </Button>
               </div>
             )}
@@ -1332,7 +1399,15 @@ function InboxPage({ subPath }: PluginNavPanelProps) {
   const { items } = useInbox();
   const now = useNow();
   const navigate = useBbNavigate();
-  const [flash, setFlash] = useState<string | null>(null);
+  // The count restarts the timer when the same text shows twice in a row.
+  const [flash, setFlash] = useState<{ text: string; count: number } | null>(
+    null,
+  );
+  const showFlash = useCallback(
+    (text: string) =>
+      setFlash((last) => ({ text, count: (last?.count ?? 0) + 1 })),
+    [],
+  );
 
   useEffect(() => {
     if (!flash) return;
@@ -1369,17 +1444,14 @@ function InboxPage({ subPath }: PluginNavPanelProps) {
     return () => document.removeEventListener("keydown", onKey);
   }, [navigate, selectedId]);
 
-  if (!selectedId) return <InboxHome flash={flash} />;
   return (
-    <div className="flex h-full flex-col">
-      {flash && (
-        <div className="mx-auto w-full max-w-2xl px-4 pt-4 md:px-0 md:pt-6">
-          <Flash text={flash} />
-        </div>
+    <div className="relative h-full">
+      {selectedId ? (
+        <ItemView key={selectedId} id={selectedId} onFlash={showFlash} />
+      ) : (
+        <InboxHome />
       )}
-      <div className="min-h-0 flex-1">
-        <ItemView key={selectedId} id={selectedId} onFlash={setFlash} />
-      </div>
+      <Flash text={flash?.text ?? null} count={flash?.count ?? 0} />
     </div>
   );
 }
